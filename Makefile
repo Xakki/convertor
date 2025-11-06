@@ -12,3 +12,5 @@ push-library:
 	docker push ${HOST}/library/libreoffice:latest
 	docker push xakki/libreoffice:latest
 
+test:
+	pytest

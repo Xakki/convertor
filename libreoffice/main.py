@@ -1,13 +1,35 @@
 
 from aiohttp import web
+import io
+import json
 import os
 import signal
 import subprocess
-import io
 import sys
 import tempfile
-import re
-import json
+from typing import List
+
+
+SOFFICE_TIMEOUT = 120
+
+
+def _build_soffice_command(input_path: str, output_dir: str, convert_to: str) -> List[str]:
+    """Build a command for invoking LibreOffice without shell interpolation."""
+    return [
+        "soffice",
+        "--headless",
+        "--convert-to",
+        convert_to,
+        "--outdir",
+        output_dir,
+        input_path,
+    ]
+
+
+def _content_type_for_extension(ext: str) -> str:
+    if ext == "docx":
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return "text/plain"
 
 #https://pythonexamples.org/run.php
 
@@ -26,101 +48,150 @@ async def doc2text_handle(request):
 
 
 async def baseHandleSync(request, convertTo, ext):
-    with tempfile.NamedTemporaryFile(delete=False) as output:
-        reader = await request.multipart()
-        docx = await reader.next()
+    reader = await request.multipart()
+    if reader is None:
+        return web.Response(
+            text="Missing multipart data",
+            status=400,
+            reason="Bad request",
+            content_type="text/plain",
+            charset="utf-8",
+        )
 
+    field = await reader.next()
+    if field is None:
+        return web.Response(
+            text="Missing file field",
+            status=400,
+            reason="Bad request",
+            content_type="text/plain",
+            charset="utf-8",
+        )
+
+    output_path = None
+    with tempfile.NamedTemporaryFile(delete=False) as output:
+        input_path = output.name
         while True:
-            chunk = await docx.read_chunk()
+            chunk = await field.read_chunk()
             if not chunk:
                 break
             output.write(chunk)
 
-        try:
-            output.close()
-            os.chmod(output.name, 0o666)
+        output.flush()
 
-            #print ("Input file: ", os.path.abspath(output.name))
-            proc = subprocess.Popen(
-                'soffice --headless --convert-to "'+convertTo+'" --outdir "' +
-                os.path.abspath(os.path.dirname(output.name)) + '" "' +
-                os.path.abspath(output.name) + '"'
-            , shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            ## > /dev/null
-            ##print ("Command: ", proc.args)
+    try:
+        command = _build_soffice_command(input_path, os.path.dirname(input_path), convertTo)
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=SOFFICE_TIMEOUT,
+        )
 
-            code = proc.wait(120)
-            ##print ("Exec code: ", code)
-            outs, errs = proc.communicate(timeout=120)
-            print (outs , file=sys.stderr)
-            if errs:
-                raise Exception(errs)
+        if completed.stdout:
+            print(completed.stdout, file=sys.stderr)
 
-            path = "{}." + ext
-            path = path.format(output.name)
-            #print ("Output file: ", path)
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr or "LibreOffice conversion failed")
 
-            response = web.StreamResponse(
-                status=200,
-                reason="OK",
-            )
-            response.content_type = 'text/plain'
-            await response.prepare(request)
+        output_path = f"{input_path}.{ext}"
+        if not os.path.exists(output_path):
+            raise FileNotFoundError("Converted file not found")
 
-            with io.open(path, mode='rb') as f:
-                ##response.content_length = len(data)
-                await response.write(f.read())
+        response = web.StreamResponse(
+            status=200,
+            reason="OK",
+        )
+        content_type = _content_type_for_extension(ext)
+        response.content_type = content_type
+        if content_type == "text/plain":
+            response.charset = "utf-8"
+        await response.prepare(request)
 
-            await response.write_eof()
+        with io.open(output_path, mode="rb") as f:
+            await response.write(f.read())
 
-        except Exception as e:
-            print("Exception: ", e, file=sys.stderr)
-            response = web.Response(
-                body=str(e),
-                status=400,
-                reason="Bad request",
-                content_type='text/text',
-            )
+        await response.write_eof()
+    except subprocess.TimeoutExpired:
+        response = web.Response(
+            text="Conversion timed out",
+            status=504,
+            reason="Gateway Timeout",
+            content_type="text/plain",
+            charset="utf-8",
+        )
+    except Exception as e:
+        print("Exception: ", e, file=sys.stderr)
+        response = web.Response(
+            text=str(e),
+            status=400,
+            reason="Bad request",
+            content_type="text/plain",
+            charset="utf-8",
+        )
+    finally:
+        if output_path and os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+        if os.path.exists(input_path):
+            try:
+                os.unlink(input_path)
+            except OSError:
+                pass
 
-        os.unlink(path)
-        os.unlink(output.name)
-
-        return response
+    return response
 
 
 async def baseHandle(request, convertTo, ext):
     data = await request.post()
+    file_path = data.get("file")
     code = 1
-    outs = ''
-    errs = ''
+    outs = ""
+    errs = ""
+
     try:
-        #print ("Input file: ", data['file'], file=sys.stderr)
-        if not os.path.isfile(data['file']):
-            raise Exception('File not available')
-        ### TODO: check ext (doc,docx,rtf,odt,pdf)
-        ## match = re.search(r'\.([a-z]{3,4})$', r'test.txt')
-        ## print(match[0] if match else 'Not found')
+        if not file_path:
+            raise ValueError("Missing 'file' parameter")
 
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError("File not available")
+
+        command = _build_soffice_command(
+            os.path.abspath(file_path),
+            os.path.abspath(os.path.dirname(file_path)),
+            convertTo,
+        )
+
+        preexec_fn = os.setsid if hasattr(os, "setsid") else None
         proc = subprocess.Popen(
-            'soffice --headless --convert-to "' + convertTo + '" --outdir "' +
-            os.path.abspath(os.path.dirname(data['file'])) + '" "' +
-            os.path.abspath(data['file']) + '"'
-        , shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-
-        print ("Command: ", proc.args, file=sys.stderr)
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=preexec_fn,
+        )
 
         try:
-            #code = proc.wait(120)
-            #print ("Exec code: ", code, file=sys.stderr)
-            outs, errs = proc.communicate(timeout=120)
-            #print ("Outs: ", outs , file=sys.stderr)
-        except Exception as e:
-            ##proc.kill()
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            raise e
+            outs, errs = proc.communicate(timeout=SOFFICE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            if preexec_fn is not None and hasattr(os, "killpg"):
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            else:
+                proc.kill()
+            outs, errs = proc.communicate()
+            raise TimeoutError("Conversion timed out")
 
-        path = re.sub(r'([\w\d]+\.)([a-z]{3,4})$', r'\1'+ext, data['file'])
-        os.chmod(path, 0o666)
+        code = proc.returncode
+        if code != 0:
+            raise RuntimeError(errs or "LibreOffice conversion failed")
+
+        base, _ = os.path.splitext(file_path)
+        path = f"{base}.{ext}"
+        if not os.path.exists(path):
+            raise FileNotFoundError("Converted file not found")
 
         response = web.Response(
             body=json.dumps({'code': code, 'outs': outs, 'error': errs}).encode('utf-8'),
@@ -129,6 +200,14 @@ async def baseHandle(request, convertTo, ext):
             content_type='application/json',
         )
 
+    except TimeoutError as e:
+        print("Exception: ", e, file=sys.stderr)
+        response = web.Response(
+            body=json.dumps({'code': code, 'outs': outs, 'error': errs, 'exception': str(e)}).encode('utf-8'),
+            status=504,
+            reason="Gateway Timeout",
+            content_type='application/json',
+        )
     except Exception as e:
         print("Exception: ", e, file=sys.stderr)
         response = web.Response(
