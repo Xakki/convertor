@@ -1,0 +1,36 @@
+x-logging: &_logging
+    logging:
+        driver: syslog
+        options:
+            syslog-address: ${SYSLOG_ADDR:-udp://localhost:514}
+            syslog-format: "rfc5424micro"
+            env: ${APP_ENV:-local}
+            labels: ${APP_ENV:-local}
+            tag: "{{.ImageName}}|{{.Name}}|{{.ID}}|${APP_ENV:-local}"
+
+services:
+    mariadb:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "2G"
+
+    nginx:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "128M"
+
+    libreoffice:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus:   "2"
+                    memory: "1G"

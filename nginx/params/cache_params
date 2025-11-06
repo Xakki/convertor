@@ -1,0 +1,7 @@
+## настройки кеширования
+proxy_cache_path /var/cache/nginx/proxy levels=1:2 keys_zone=pcache:30m inactive=60m max_size=5g;
+proxy_temp_path /var/cache/nginx/proxy_temp 1 2;
+proxy_buffering            off;
+#proxy_buffer_size          8k;
+#proxy_buffers              32 8k;  # до 132K + ядерные буфера
+proxy_max_temp_file_size   0;

@@ -1,0 +1,44 @@
+[mysqld]
+port = 3306
+bind-address = 0
+skip-host-cache
+skip-name-resolve
+skip-external-locking
+
+
+query_cache_size            = 200M
+tmp_table_size              = 200M
+max_heap_table_size         = 200M
+max_binlog_size             = 200M
+
+max_connections             = 1000
+max_allowed_packet          = 64M
+key_buffer_size             = 16M
+innodb_buffer_pool_size     = 2G
+innodb_log_file_size        = 500M
+innodb_log_buffer_size      = 32M
+innodb_file_per_table       = ON
+innodb_flush_method         = O_DSYNC
+innodb_flush_log_at_trx_commit  = 2
+innodb_stats_on_metadata = OFF
+
+table-open-cache = 100
+thread_cache_size = 100
+
+default_time_zone = 'SYSTEM'
+sql_mode = STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_UNSIGNED_SUBTRACTION,PAD_CHAR_TO_FULL_LENGTH,NO_AUTO_CREATE_USER
+
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+log_output=TABLE
+slow_query_log=1
+long_query_time=2.0
+log_slow_rate_limit=10
+log_slow_verbosity=query_plan
+log-queries-not-using-indexes = 1
+expire_logs_days            = 7
+log_error = /var/log/mysql-log.err
+
+[client]
+default-character-set=utf8mb4

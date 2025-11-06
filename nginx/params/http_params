@@ -1,0 +1,30 @@
+# Директива разрешает или запрещает использовать sendfile()
+sendfile        on;
+# Директива разрешает или запрещает использовать опции TCP_NOPUSH во FreeBSD
+# Подробнее http://sysoev.ru/nginx/docs/http/ngx_http_core_module.html#keepalive_timeout
+tcp_nopush     on;
+tcp_nodelay        on;
+client_max_body_size 2k;
+client_body_buffer_size    128K;
+directio 10m; #больше 10 мб, минуя операционный кеш,
+
+keepalive_timeout  65;
+
+gzip on;
+gzip_min_length 1100;
+gzip_buffers 64 8k;
+gzip_comp_level 6;
+gzip_http_version 1.1;
+gzip_proxied any;
+gzip_types text/plain text/css application/json application/x-javascript application/javascript text/xml application/xml application/xml+rss text/javascript;
+gzip_disable "MSIE [1-6].(?!.*SV1)";
+
+proxy_set_header Range "";#Запретить nginx проксировать опасный заголовокvv
+# Не отдавать версию nginx в заголовке ответа
+server_tokens off;
+
+types_hash_max_size 2048;
+# server_names_hash_bucket_size 64;
+# server_name_in_redirect off;
+resolver 8.8.8.8;
+
