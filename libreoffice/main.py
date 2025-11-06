@@ -11,14 +11,21 @@ import json
 
 #https://pythonexamples.org/run.php
 
-async def doc2docxOld_handle(request):
-    return await baseHandleOld(request, 'docx', 'docx')
+async def doc2docx_handleSync(request):
+    return await baseHandleSync(request, 'docx', 'docx')
 
-async def doc2textOld_handle(request):
-    return await baseHandleOld(request, 'txt:Text (encoded):UTF8', 'txt')
+async def doc2text_handleSync(request):
+    return await baseHandleSync(request, 'txt:Text (encoded):UTF8', 'txt')
 
 
-async def baseHandleOld(request, convertTo, ext):
+async def doc2docx_handle(request):
+    return await baseHandle(request, 'docx', 'docx')
+
+async def doc2text_handle(request):
+    return await baseHandle(request, 'txt:Text (encoded):UTF8', 'txt')
+
+
+async def baseHandleSync(request, convertTo, ext):
     with tempfile.NamedTemporaryFile(delete=False) as output:
         reader = await request.multipart()
         docx = await reader.next()
@@ -81,13 +88,6 @@ async def baseHandleOld(request, convertTo, ext):
         return response
 
 
-async def doc2docx_handle(request):
-    return await baseHandle(request, 'docx', 'docx')
-
-async def doc2text_handle(request):
-    return await baseHandle(request, 'txt:Text (encoded):UTF8', 'txt')
-
-
 async def baseHandle(request, convertTo, ext):
     data = await request.post()
     code = 1
@@ -142,8 +142,8 @@ async def baseHandle(request, convertTo, ext):
 
 if __name__ == '__main__':
     app = web.Application()
-    app.router.add_post('/doc2textOld', doc2textOld_handle)
-    app.router.add_post('/doc2docxOld', doc2docxOld_handle)
+    app.router.add_post('/doc2textSync', doc2text_handleSync)
+    app.router.add_post('/doc2docxSync', doc2docx_handleSync)
     app.router.add_post('/doc2text', doc2text_handle)
     app.router.add_post('/doc2docx', doc2docx_handle)
 
