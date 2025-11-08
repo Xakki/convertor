@@ -5,12 +5,23 @@ SHELL = /bin/bash
 include .env
 export
 
-build-library:
-	docker build -t ${HOST}/library/libreoffice:latest -t xakki/libreoffice:latest libreoffice/
+libreoffice :=
 
-push-library:
-	docker push ${HOST}/library/libreoffice:latest
+
+login:
+	docker login ${DOCKER_HOST} -u ${DOCKER_USER} -p ${DOCKER_PASS}
+
+build-libreoffice:
+	#docker pull linuxserver/libreoffice:latest
+	docker build -t xakki/libreoffice:latest libreoffice/
+
+push-libreoffice:
 	docker push xakki/libreoffice:latest
 
 test:
 	pytest
+
+my-test:
+	./libreoffice/test.sh
+
+

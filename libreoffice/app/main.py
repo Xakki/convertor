@@ -8,9 +8,10 @@ import subprocess
 import sys
 import tempfile
 from typing import List
-
+import uuid
 
 SOFFICE_TIMEOUT = 120
+SHARE_PATH = "/shared-files/"
 
 
 def _build_soffice_command(input_path: str, output_dir: str, convert_to: str) -> List[str]:
@@ -33,21 +34,25 @@ def _content_type_for_extension(ext: str) -> str:
 
 #https://pythonexamples.org/run.php
 
-async def doc2docx_handleSync(request):
-    return await baseHandleSync(request, 'docx', 'docx')
-
-async def doc2text_handleSync(request):
-    return await baseHandleSync(request, 'txt:Text (encoded):UTF8', 'txt')
+async def hello(request):
+    return web.Response(text="HELLO")
 
 
-async def doc2docx_handle(request):
-    return await baseHandle(request, 'docx', 'docx')
+async def doc2docx_multipartFile(request):
+    return await convertMultipartFileHandle(request, 'docx', 'docx')
 
-async def doc2text_handle(request):
-    return await baseHandle(request, 'txt:Text (encoded):UTF8', 'txt')
+async def doc2text_multipartFile(request):
+    return await convertMultipartFileHandle(request, 'txt:Text (encoded):UTF8', 'txt')
 
 
-async def baseHandleSync(request, convertTo, ext):
+async def doc2docx_SharedFile(request):
+    return await convertSharedFileHandle(request, 'docx', 'docx')
+
+async def doc2text_SharedFile(request):
+    return await convertSharedFileHandle(request, 'txt:Text (encoded):UTF8', 'txt')
+
+
+async def convertMultipartFileHandle(request, convertTo, ext):
     reader = await request.multipart()
     if reader is None:
         return web.Response(
@@ -68,7 +73,23 @@ async def baseHandleSync(request, convertTo, ext):
             charset="utf-8",
         )
 
-    output_path = None
+    unique_id = uuid.uuid4()
+    origin_filename = field.filename or "noname.txt"
+    out_filename = os.path.splitext(origin_filename)[0]
+    out_filename = f"{out_filename}.{ext}"
+    output_dir = os.path.join(SHARE_PATH, str(unique_id))
+
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+    except OSError as e:
+        return web.Response(
+            text=f"Failed to create directory: {e}",
+            status=500,
+            reason="Internal Server Error",
+            content_type="text/plain",
+            charset="utf-8",
+        )
+
     with tempfile.NamedTemporaryFile(delete=False) as output:
         input_path = output.name
         while True:
@@ -80,7 +101,7 @@ async def baseHandleSync(request, convertTo, ext):
         output.flush()
 
     try:
-        command = _build_soffice_command(input_path, os.path.dirname(input_path), convertTo)
+        command = _build_soffice_command(input_path, output_dir, convertTo)
         completed = subprocess.run(
             command,
             stdout=subprocess.PIPE,
@@ -103,6 +124,7 @@ async def baseHandleSync(request, convertTo, ext):
             status=200,
             reason="OK",
         )
+        response.headers['Content-Disposition'] = f'attachment; filename="{out_filename}"'
         content_type = _content_type_for_extension(ext)
         response.content_type = content_type
         if content_type == "text/plain":
@@ -145,17 +167,19 @@ async def baseHandleSync(request, convertTo, ext):
     return response
 
 
-async def baseHandle(request, convertTo, ext):
+async def convertSharedFileHandle(request, convertTo, ext):
     data = await request.post()
-    file_path = data.get("file")
     code = 1
     outs = ""
     errs = ""
 
     try:
+
+        file_path = data.get("file")
         if not file_path:
             raise ValueError("Missing 'file' parameter")
-
+        file_path = SHARE_PATH + file_path.replace('..', '')
+        #TODO: if file_path is dir, need convert all files in dir
         if not os.path.isfile(file_path):
             raise FileNotFoundError("File not available")
 
@@ -194,7 +218,7 @@ async def baseHandle(request, convertTo, ext):
             raise FileNotFoundError("Converted file not found")
 
         response = web.Response(
-            body=json.dumps({'code': code, 'outs': outs, 'error': errs}).encode('utf-8'),
+            body=json.dumps({'path': path, 'code': code, 'outs': outs, 'error': errs}).encode('utf-8'),
             status=200,
             reason="OK",
             content_type='application/json',
@@ -220,10 +244,4 @@ async def baseHandle(request, convertTo, ext):
     return response
 
 if __name__ == '__main__':
-    app = web.Application()
-    app.router.add_post('/doc2textSync', doc2text_handleSync)
-    app.router.add_post('/doc2docxSync', doc2docx_handleSync)
-    app.router.add_post('/doc2text', doc2text_handle)
-    app.router.add_post('/doc2docx', doc2docx_handle)
-
-    web.run_app(app, port=int(os.getenv('PORT', "80")))
+    app = web.App

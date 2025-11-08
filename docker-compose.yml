@@ -15,7 +15,7 @@ services:
             - "${EXT_LIBRE_PORT}:80"
         networks:
             - default
-
+        # --shm-size="1gb"
     nginx:
         image: ${DOCKER_IMAGE_NGINX}
         container_name: "${COMPOSE_PROJECT_NAME}-nginx"
