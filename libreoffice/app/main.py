@@ -1,314 +1,247 @@
-# app.py
-from __future__ import annotations
+"""Headless LibreOffice + pandoc HTTP proxy.
+
+Endpoints:
+  GET  /health                    liveness probe
+  POST /doc2docxOld               multipart upload -> .docx body
+  POST /doc2textOld               multipart upload -> .txt  body
+  POST /doc2mdOld                 multipart upload -> .md   body  (GitHub-flavoured)
+  POST /doc2docx                  form 'file=<path under SHARE_DIR>' -> JSON
+  POST /doc2text                  form 'file=<path under SHARE_DIR>' -> JSON
+  POST /doc2md                    form 'file=<path under SHARE_DIR>' -> JSON
+
+Pipeline:
+  txt:    PDF -> pdftotext            other -> soffice
+  docx:                                          soffice
+  md:     PDF -> pdftotext -> wrap     docx/odt/html -> pandoc
+                                       other -> soffice -> docx -> pandoc
+
+soffice runs in a private UserInstallation per-request so concurrent
+conversions don't fight over ~/.config/libreoffice.
+"""
 
 import asyncio
-import json
-import logging
 import os
-import signal
+import sys
 import tempfile
-from http import HTTPStatus
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 from aiohttp import web
 
-# ----------------------------
-# Конфигурация
-# ----------------------------
+PORT = int(os.getenv("PORT", "6000"))
+SHARE_DIR = Path(os.getenv("SHARE_DIR", "/share")).resolve()
+SOFFICE_TIMEOUT = int(os.getenv("SOFFICE_TIMEOUT", "180"))
+MAX_UPLOAD = int(os.getenv("MAX_UPLOAD", str(256 * 1024 * 1024)))
 
-SOFFICE_TIMEOUT_S = int(os.getenv("SOFFICE_TIMEOUT", "120"))
-MAX_PARALLEL = int(os.getenv("MAX_PARALLEL", "2"))
-CLIENT_MAX_SIZE = int(os.getenv("CLIENT_MAX_SIZE_MB", "25")) * 1024 * 1024
-SHARE_ROOT = Path(os.getenv("SHARE_PATH", "/shared-files")).resolve()
-
-# Разрешённые типы конверсий.
-# Ключ — публичное имя, значения — (фильтр LibreOffice, расширение, content-type)
-CONVERSIONS: Dict[str, Tuple[str, str, str]] = {
-    "docx": (
-        "docx",
-        "docx",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ),
-    "txt": ("txt:Text (encoded):UTF8", "txt", "text/plain; charset=utf-8"),
+SOFFICE_FILTER = {
+    "docx": "docx",
+    "txt":  "txt:Text (encoded):UTF8",
 }
 
-LOG = logging.getLogger("app")
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+PANDOC_NATIVE = {".docx", ".odt", ".html", ".htm", ".epub"}
 
 
-# ----------------------------
-# Утилиты
-# ----------------------------
-
-def _safe_join(root: Path, relative: str) -> Path:
-    """
-    Безопасно соединяет root и относительный путь.
-    Бросает ValueError, если путь указывает вне root.
-    """
-    # Запрещаем абсолютные пути сразу
-    rel = Path(relative.lstrip("/"))
-    candidate = (root / rel).resolve()
-    if not str(candidate).startswith(str(root)):
-        raise ValueError("Path escapes shared root")
-    return candidate
-
-
-def _build_soffice_cmd(input_path: Path, output_dir: Path, filter_name: str) -> Tuple[str, ...]:
-    """
-    Строим команду без shell-интерполяции.
-    """
-    return (
-        "soffice",
-        "--headless",
-        "--convert-to",
-        filter_name,
-        "--outdir",
-        str(output_dir),
-        str(input_path),
+async def _run(argv: list[str], timeout: int = SOFFICE_TIMEOUT) -> tuple[str, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
+    try:
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    out = out_b.decode("utf-8", "replace")
+    err = err_b.decode("utf-8", "replace")
+    if proc.returncode != 0:
+        raise RuntimeError(err.strip() or out.strip() or f"{argv[0]} exit {proc.returncode}")
+    return out, err
 
 
-def _disposition_filename(filename: str) -> str:
-    """
-    Формирует безопасный Content-Disposition.
-    Упрощённо: экранируем кавычки и добавляем filename* (RFC 5987).
-    """
-    from urllib.parse import quote
-
-    safe = filename.replace('"', "'")
-    return f'attachment; filename="{safe}"; filename*=UTF-8\'\'{quote(filename)}'
-
-
-# ----------------------------
-# Сервис конвертации
-# ----------------------------
-
-class LibreOfficeConverter:
-    """
-    Фасад над вызовом LibreOffice. Неблокирующее выполнение, таймаут,
-    ограничение параллельности, аккуратное завершение процесса.
-    """
-
-    def __init__(self, timeout_s: int, max_parallel: int) -> None:
-        self._timeout_s = timeout_s
-        self._sem = asyncio.Semaphore(max_parallel)
-
-    async def convert(
-        self,
-        input_path: Path,
-        output_dir: Path,
-        filter_name: str,
-        dest_ext: str,
-    ) -> Path:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        cmd = _build_soffice_cmd(input_path, output_dir, filter_name)
-
-        # Для POSIX — стартуем в новой сессии, чтобы убивать процесс-группу.
-        preexec_fn = os.setsid if hasattr(os, "setsid") else None
-
-        # Для Windows можно добавить creationflags=CREATE_NEW_PROCESS_GROUP (опущено для краткости).
-
-        async with self._sem:
-            LOG.info("Run: %s", " ".join(cmd))
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                preexec_fn=preexec_fn,  # type: ignore[arg-type]
-            )
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=self._timeout_s
-                )
-            except asyncio.TimeoutError:
-                LOG.error("Conversion timed out (pid=%s)", proc.pid)
-                # Пытаемся корректно завершить всю группу
-                if preexec_fn and hasattr(os, "killpg"):
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                    except Exception:  # noqa: BLE001
-                        pass
-                else:
-                    proc.kill()
-                raise TimeoutError("Conversion timed out") from None
-
-            if stdout:
-                LOG.debug("LibreOffice stdout: %s", stdout.decode(errors="ignore"))
-            if proc.returncode != 0:
-                err_text = stderr.decode(errors="ignore")
-                LOG.warning("LibreOffice failed: rc=%s, stderr=%s", proc.returncode, err_text)
-                raise RuntimeError("LibreOffice conversion failed")
-
-        # LibreOffice кладёт результат в output_dir с тем же base name.
-        base = input_path.stem
-        # На некоторых системах расширение может отличаться регистром — ищем case-insensitive.
-        candidates = list(output_dir.glob(f"{base}.*"))
-        result: Optional[Path] = None
-        for c in candidates:
-            if c.suffix.lower().lstrip(".") == dest_ext.lower():
-                result = c
-                break
-
-        if not result or not result.exists():
-            raise FileNotFoundError("Converted file not found")
-
-        return result
+async def run_soffice(src: Path, out_dir: Path, convert_to: str) -> tuple[str, str]:
+    with tempfile.TemporaryDirectory(prefix="lo-profile-") as profile:
+        return await _run([
+            "soffice",
+            f"-env:UserInstallation={Path(profile).as_uri()}",
+            "--headless", "--norestore", "--nologo", "--nofirststartwizard",
+            "--convert-to", convert_to,
+            "--outdir", str(out_dir),
+            str(src),
+        ])
 
 
-# ----------------------------
-# HTTP-обработчики
-# ----------------------------
-
-async def hello(_: web.Request) -> web.Response:
-    return web.Response(text="HELLO")
+async def run_pdftotext(src: Path, out_path: Path) -> tuple[str, str]:
+    return await _run(["pdftotext", "-layout", "-enc", "UTF-8", str(src), str(out_path)])
 
 
-def multipart_convert_handler(conv_key: str):
-    """
-    Фабрика обработчиков для multipart загрузки.
-    """
-    filter_name, dest_ext, content_type = CONVERSIONS[conv_key]
-
-    async def handler(request: web.Request) -> web.StreamResponse:
-        converter: LibreOfficeConverter = request.app["converter"]  # DI
-        # Читаем multipart поток
-        reader = await request.multipart()
-        if not reader:
-            raise web.HTTPBadRequest(text="Missing multipart data")
-
-        # Находим первое файловое поле (по имени 'file' или любой Part c filename)
-        field = None
-        async for part in reader:
-            if part.filename:
-                field = part
-                break
-        if field is None:
-            raise web.HTTPBadRequest(text="Missing file field")
-
-        original_name = field.filename or "upload"
-        # Временный каталог для входа/выхода
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir_p = Path(tmpdir)
-            # Сохраняем входной файл по чанкам
-            suffix = Path(original_name).suffix or ".bin"
-            input_path = tmpdir_p / f"in{suffix}"
-            with input_path.open("wb") as f:
-                while True:
-                    chunk = await field.read_chunk()  # aiohttp сам ограничит размер чанка
-                    if not chunk:
-                        break
-                    f.write(chunk)
-
-            try:
-                result_path = await converter.convert(
-                    input_path=input_path,
-                    output_dir=tmpdir_p,
-                    filter_name=filter_name,
-                    dest_ext=dest_ext,
-                )
-            except TimeoutError:
-                raise web.HTTPGatewayTimeout(text="Conversion timed out") from None
-            except FileNotFoundError:
-                raise web.HTTPInternalServerError(text="Converted file not found") from None
-            except RuntimeError as e:
-                raise web.HTTPBadRequest(text=str(e)) from None
-
-            # Формируем безопасное имя для скачивания
-            safe_base = Path(original_name).stem or "output"
-            out_name = f"{safe_base}.{dest_ext}"
-
-            headers = {
-                "Content-Disposition": _disposition_filename(out_name),
-                "X-Content-Type-Options": "nosniff",
-            }
-            # Отдаём файл напрямую, aiohttp сам буферизует по чанкам
-            return web.FileResponse(
-                path=result_path,
-                status=HTTPStatus.OK,
-                headers=headers,
-                content_type=content_type,
-            )
-
-    return handler
+async def run_pandoc(src: Path, out_path: Path, media_dir: Path) -> tuple[str, str]:
+    return await _run([
+        "pandoc",
+        "--from", _pandoc_format(src),
+        "--to", "gfm",
+        "--wrap=none",
+        f"--extract-media={media_dir}",
+        "-o", str(out_path),
+        str(src),
+    ])
 
 
-def shared_convert_handler(conv_key: str):
-    """
-    Фабрика обработчиков для файлов из общего каталога (relative path).
-    Возвращает JSON с путём результата относительно SHARE_ROOT.
-    """
-    filter_name, dest_ext, _ = CONVERSIONS[conv_key]
+def _pandoc_format(src: Path) -> str:
+    return {
+        ".docx": "docx", ".odt": "odt",
+        ".html": "html", ".htm": "html", ".epub": "epub",
+    }.get(src.suffix.lower(), "docx")
 
-    async def handler(request: web.Request) -> web.Response:
-        converter: LibreOfficeConverter = request.app["converter"]
-        data = await request.post()
-        rel = (data.get("file") or "").strip()
-        if not rel:
-            raise web.HTTPBadRequest(text="Missing 'file' parameter")
+
+async def convert(src: Path, target: str, work_dir: Path) -> Path:
+    """Produce <work_dir>/<stem>.<target> from src. Returns the output path."""
+    stem = src.stem
+    suffix = src.suffix.lower()
+
+    # PDF: LibreOffice opens PDFs as Draw documents and can't export them to
+    # Writer targets, so use poppler's pdftotext and chain through soffice for docx.
+    if suffix == ".pdf":
+        with tempfile.TemporaryDirectory(prefix="pdf-tmp-") as tmp:
+            tmp_dir = Path(tmp)
+            txt_path = tmp_dir / f"{stem}.txt"
+            await run_pdftotext(src, txt_path)
+            out = work_dir / f"{stem}.{target}"
+            if target == "txt" or target == "md":
+                out.write_bytes(txt_path.read_bytes())
+                return out
+            if target == "docx":
+                await run_soffice(txt_path, work_dir, SOFFICE_FILTER["docx"])
+                return out
+            raise ValueError(f"unsupported target: {target}")
+
+    if target == "txt":
+        await run_soffice(src, work_dir, SOFFICE_FILTER["txt"])
+        return work_dir / f"{stem}.txt"
+
+    if target == "docx":
+        await run_soffice(src, work_dir, SOFFICE_FILTER["docx"])
+        return work_dir / f"{stem}.docx"
+
+    if target == "md":
+        out = work_dir / f"{stem}.md"
+        media = work_dir / "media"
+        if suffix in PANDOC_NATIVE:
+            await run_pandoc(src, out, media)
+            return out
+        # Convert to .docx in a private tempdir to avoid leaving intermediates
+        # in the caller's share directory, then pandoc -> md.
+        with tempfile.TemporaryDirectory(prefix="md-tmp-") as tmp:
+            tmp_dir = Path(tmp)
+            await run_soffice(src, tmp_dir, SOFFICE_FILTER["docx"])
+            await run_pandoc(tmp_dir / f"{stem}.docx", out, media)
+            return out
+
+    raise ValueError(f"unsupported target: {target}")
+
+
+def safe_share_path(raw: str) -> Path:
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = SHARE_DIR / candidate
+    resolved = candidate.resolve()
+    if resolved != SHARE_DIR and SHARE_DIR not in resolved.parents:
+        raise ValueError(f"path escapes {SHARE_DIR}: {raw}")
+    return resolved
+
+
+CONTENT_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "txt":  "text/plain",
+    "md":   "text/markdown",
+}
+CONTENT_CHARSETS = {"txt": "utf-8", "md": "utf-8"}
+
+
+async def upload_handle(request: web.Request, target: str) -> web.Response:
+    reader = await request.multipart()
+    field = await reader.next()
+    if field is None:
+        return web.json_response({"error": "no multipart part"}, status=400)
+
+    with tempfile.TemporaryDirectory(prefix="lo-in-") as work:
+        work_dir = Path(work)
+        safe_name = os.path.basename(field.filename or "input") or "input"
+        in_path = work_dir / safe_name
+        with in_path.open("wb") as f:
+            while True:
+                chunk = await field.read_chunk()
+                if not chunk:
+                    break
+                f.write(chunk)
 
         try:
-            src_path = _safe_join(SHARE_ROOT, rel)
-        except ValueError:
-            raise web.HTTPBadRequest(text="Invalid file path") from None
-
-        if not src_path.is_file():
-            raise web.HTTPNotFound(text="File not available")
-
-        try:
-            result_path = await converter.convert(
-                input_path=src_path,
-                output_dir=src_path.parent,
-                filter_name=filter_name,
-                dest_ext=dest_ext,
-            )
-        except TimeoutError:
-            raise web.HTTPGatewayTimeout(text="Conversion timed out") from None
+            out_path = await convert(in_path, target, work_dir)
+        except asyncio.TimeoutError:
+            return web.json_response({"error": "conversion timeout"}, status=504)
         except RuntimeError as e:
-            raise web.HTTPBadRequest(text=str(e)) from None
+            return web.json_response({"error": str(e)}, status=400)
 
-        # Возвращаем путь относительно SHARE_ROOT, без утечки абсолютных путей
-        rel_result = result_path.resolve().relative_to(SHARE_ROOT)
-        payload = {"path": f"/{rel_result.as_posix()}", "code": 0}
-        return web.json_response(payload, status=HTTPStatus.OK)
+        if not out_path.exists():
+            return web.json_response(
+                {"error": "conversion produced no output"}, status=500)
 
-    return handler
+        return web.Response(
+            body=out_path.read_bytes(),
+            content_type=CONTENT_TYPES[target],
+            charset=CONTENT_CHARSETS.get(target),
+            headers={"Content-Disposition": f'attachment; filename="{out_path.name}"'},
+        )
 
 
-# ----------------------------
-# Приложение и маршруты
-# ----------------------------
+async def shared_handle(request: web.Request, target: str) -> web.Response:
+    data = await request.post()
+    raw = data.get("file")
+    if not raw:
+        return web.json_response({"error": "missing 'file' field"}, status=400)
 
-def create_app() -> web.Application:
-    app = web.Application(client_max_size=CLIENT_MAX_SIZE)
+    try:
+        src = safe_share_path(str(raw))
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
 
-    # DI: единый сервис конвертации
-    app["converter"] = LibreOfficeConverter(
-        timeout_s=SOFFICE_TIMEOUT_S, max_parallel=MAX_PARALLEL
-    )
+    if not src.is_file():
+        return web.json_response({"error": "file not found"}, status=404)
 
-    async def on_startup(_: web.Application) -> None:
-        SHARE_ROOT.mkdir(parents=True, exist_ok=True)
-        LOG.info("Share root: %s", SHARE_ROOT)
+    try:
+        out_path = await convert(src, target, src.parent)
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "conversion timeout"}, status=504)
+    except RuntimeError as e:
+        return web.json_response({"code": 1, "outs": "", "error": str(e)}, status=400)
 
-    app.on_startup.append(on_startup)
+    return web.json_response({"code": 0, "outs": f"-> {out_path}", "error": ""})
 
-    app.router.add_get("/hello", hello)
 
-    # multipart → файл в ответ
-    app.router.add_post("/convert/multipart/docx", multipart_convert_handler("docx"))
-    app.router.add_post("/convert/multipart/txt", multipart_convert_handler("txt"))
+async def doc2docxOld(r): return await upload_handle(r, "docx")
+async def doc2textOld(r): return await upload_handle(r, "txt")
+async def doc2mdOld(r):   return await upload_handle(r, "md")
+async def doc2docx(r):    return await shared_handle(r, "docx")
+async def doc2text(r):    return await shared_handle(r, "txt")
+async def doc2md(r):      return await shared_handle(r, "md")
 
-    # shared → json с путём результата внутри SHARE_ROOT
-    app.router.add_post("/convert/shared/docx", shared_convert_handler("docx"))
-    app.router.add_post("/convert/shared/txt", shared_convert_handler("txt"))
 
+async def health(_request):
+    return web.Response(text="ok\n")
+
+
+def make_app() -> web.Application:
+    app = web.Application(client_max_size=MAX_UPLOAD)
+    app.router.add_get("/health", health)
+    app.router.add_post("/doc2docxOld", doc2docxOld)
+    app.router.add_post("/doc2textOld", doc2textOld)
+    app.router.add_post("/doc2mdOld",   doc2mdOld)
+    app.router.add_post("/doc2docx",    doc2docx)
+    app.router.add_post("/doc2text",    doc2text)
+    app.router.add_post("/doc2md",      doc2md)
     return app
 
 
 if __name__ == "__main__":
-    # Порт задаётся через PORT, по умолчанию 8080
-    web.run_app(create_app(), port=int(os.getenv("PORT", "80")))
+    print(f"Listening on :{PORT}, SHARE_DIR={SHARE_DIR}", file=sys.stderr)
+    web.run_app(make_app(), port=PORT, print=None)

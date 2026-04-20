@@ -1,0 +1,30 @@
+parameters:
+
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/DependencyInjection/'
+            - '../src/Entity/'
+            - '../src/Kernel.php'
+
+    App\MessageHandler\ConversionMessageHandler:
+        arguments:
+            $workerLibreofficeUrl: '%env(WORKER_LIBREOFFICE_URL)%'
+            $workerFfmpegUrl: '%env(WORKER_FFMPEG_URL)%'
+            $workerImageUrl: '%env(WORKER_IMAGE_URL)%'
+            $workerAiUrl: '%env(WORKER_AI_URL)%'
+            $workerDataUrl: '%env(WORKER_DATA_URL)%'
+            $shareDir: '%env(SHARE_DIR)%'
+
+    App\Service\Auth\TelegramAuthService:
+        arguments:
+            $telegramBotToken: '%env(TELEGRAM_BOT_TOKEN)%'
+
+    App\Service\Conversion\ConversionManager:
+        arguments:
+            $shareDir: '%env(SHARE_DIR)%'

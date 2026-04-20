@@ -1,211 +1,266 @@
-import asyncio
+"""Integration tests for the libreoffice conversion service.
+
+Iterates every file in libreoffice/test_source/ and runs each through all
+six endpoints, validating that the output preserves the test markers
+(Cyrillic header, table, code samples) common to every source file.
+
+Usage:
+    python3 test_convert.py [BASE_URL]
+
+Environment:
+    LIBREOFFICE_URL   override base URL (default http://127.0.0.1:6000)
+    TEST_SOURCE       host directory holding source files (default ../test_source)
+    HOST_SHARE        host path mapped to /share inside container; required
+                      for path-based tests, otherwise they're skipped
+
+Stdlib only — no pytest, no requests.
+"""
+
+import json
+import mimetypes
 import os
-import subprocess
 import sys
-from contextlib import asynccontextmanager
+import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
 from pathlib import Path
 
-from aiohttp import FormData, web
-from aiohttp.test_utils import TestClient, TestServer
+ROOT = Path(__file__).resolve().parent.parent
+BASE_URL = os.getenv("LIBREOFFICE_URL", "http://127.0.0.1:6000")
+SOURCE_DIR = Path(os.getenv("TEST_SOURCE", str(ROOT / "test_source"))).resolve()
+DIST_DIR = Path(os.getenv("TEST_DIST", str(ROOT / "test_dist"))).resolve()
+HOST_SHARE = Path(os.getenv("HOST_SHARE")).resolve() if os.getenv("HOST_SHARE") else None
+CONTAINER_SHARE = os.getenv("CONTAINER_SHARE", "/share")
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Markers present in every source file (verified by manual extraction of Test.odt).
+# We intentionally avoid Cyrillic markers in the universal set because PDF text
+# extraction can mangle them depending on font embedding; Cyrillic is checked
+# separately for non-PDF inputs.
+COMMON_MARKERS = ["TABLE1", "POST", "/contact", "Yiisoft"]
+CYRILLIC_MARKER = "Тестовый заголовок"
 
-import libreoffice.main as main
+
+def _multipart(file_path: Path) -> tuple[bytes, str]:
+    boundary = uuid.uuid4().hex
+    name = file_path.name
+    mime, _ = mimetypes.guess_type(name)
+    mime = mime or "application/octet-stream"
+    parts = [
+        f"--{boundary}\r\n".encode(),
+        f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'.encode(),
+        f"Content-Type: {mime}\r\n\r\n".encode(),
+        file_path.read_bytes(),
+        f"\r\n--{boundary}--\r\n".encode(),
+    ]
+    return b"".join(parts), boundary
 
 
-@asynccontextmanager
-async def create_client(*routes):
-    app = web.Application()
-    for path, handler in routes:
-        app.router.add_post(path, handler)
-    server = TestServer(app)
-    await server.start_server()
-    client = TestClient(server)
-    await client.start_server()
+def post_upload(url: str, file_path: Path, timeout: int = 240):
+    body, boundary = _multipart(file_path)
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
     try:
-        yield client
-    finally:
-        await client.close()
-        await server.close()
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
 
 
-def test_doc2text_sync_success(monkeypatch):
-    async def scenario():
-        def fake_run(command, stdout=None, stderr=None, text=None, timeout=None):
-            input_path = command[-1]
-            output_path = f"{input_path}.txt"
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write("converted text")
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-        monkeypatch.setattr(subprocess, "run", fake_run)
-
-        async with create_client(("/doc2textSync", main.doc2text_handleSync)) as client:
-            form = FormData()
-            form.add_field("file", b"hello", filename="test.doc")
-            resp = await client.post("/doc2textSync", data=form)
-            assert resp.status == 200
-            assert resp.headers["Content-Type"] == "text/plain; charset=utf-8"
-            assert await resp.text() == "converted text"
-
-    asyncio.run(scenario())
+def post_form(url: str, fields: dict, timeout: int = 240):
+    body = urllib.parse.urlencode(fields).encode()
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
 
 
-def test_doc2text_sync_timeout(monkeypatch):
-    async def scenario():
-        def fake_run(command, stdout=None, stderr=None, text=None, timeout=None):
-            raise subprocess.TimeoutExpired(cmd=command, timeout=timeout)
-
-        monkeypatch.setattr(subprocess, "run", fake_run)
-
-        async with create_client(("/doc2textSync", main.doc2text_handleSync)) as client:
-            form = FormData()
-            form.add_field("file", b"hello", filename="test.doc")
-            resp = await client.post("/doc2textSync", data=form)
-            assert resp.status == 504
-            assert "Conversion timed out" in await resp.text()
-
-    asyncio.run(scenario())
+def gather_sources() -> list[Path]:
+    return sorted(p for p in SOURCE_DIR.iterdir()
+                  if p.is_file() and not p.name.startswith("."))
 
 
-def test_doc2text_sync_missing_output(monkeypatch):
-    async def scenario():
-        def fake_run(command, stdout=None, stderr=None, text=None, timeout=None):
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-        monkeypatch.setattr(subprocess, "run", fake_run)
-
-        async with create_client(("/doc2textSync", main.doc2text_handleSync)) as client:
-            form = FormData()
-            form.add_field("file", b"hello", filename="test.doc")
-            resp = await client.post("/doc2textSync", data=form)
-            assert resp.status == 400
-            assert "Converted file not found" in await resp.text()
-
-    asyncio.run(scenario())
+def reset_dist_dir() -> None:
+    """Wipe + recreate DIST_DIR so each run starts fresh."""
+    if DIST_DIR.exists():
+        for entry in DIST_DIR.iterdir():
+            if entry.is_file() or entry.is_symlink():
+                entry.unlink()
+            else:
+                import shutil
+                shutil.rmtree(entry)
+    else:
+        DIST_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def test_doc2text_async_success(monkeypatch, tmp_path):
-    async def scenario():
-        def fake_popen(command, stdout=None, stderr=None, text=None, preexec_fn=None):
-            class FakeProcess:
-                def __init__(self):
-                    self.command = command
-                    self.returncode = 0
-                    self.pid = 12345
-
-                def communicate(self, timeout=None):
-                    base, _ = os.path.splitext(self.command[-1])
-                    output_path = f"{base}.txt"
-                    with open(output_path, "w", encoding="utf-8") as f:
-                        f.write("converted text")
-                    return ("process stdout", "")
-
-                def kill(self):
-                    pass
-
-            return FakeProcess()
-
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
-
-        input_file = tmp_path / "sample.doc"
-        input_file.write_text("dummy")
-
-        async with create_client(("/doc2text", main.doc2text_handle)) as client:
-            resp = await client.post("/doc2text", data={"file": str(input_file)})
-            assert resp.status == 200
-            payload = await resp.json()
-            assert payload == {"code": 0, "outs": "process stdout", "error": ""}
-
-    asyncio.run(scenario())
+def dist_path(src: Path, endpoint: str, ext: str) -> Path:
+    """Unique output path: <stem>.<src-ext>.<endpoint>.<out-ext>"""
+    return DIST_DIR / f"{src.stem}{src.suffix}.{endpoint}.{ext}"
 
 
-def test_doc2text_async_missing_parameter():
-    async def scenario():
-        async with create_client(("/doc2text", main.doc2text_handle)) as client:
-            resp = await client.post("/doc2text", data={})
-            assert resp.status == 400
-            payload = await resp.json()
-            assert payload["exception"] == "Missing 'file' parameter"
-
-    asyncio.run(scenario())
+def save_dist(src: Path, endpoint: str, ext: str, body: bytes) -> Path:
+    out = dist_path(src, endpoint, ext)
+    out.write_bytes(body)
+    return out
 
 
-def test_doc2text_async_missing_file(tmp_path):
-    async def scenario():
-        missing = tmp_path / "missing.doc"
-        async with create_client(("/doc2text", main.doc2text_handle)) as client:
-            resp = await client.post("/doc2text", data={"file": str(missing)})
-            assert resp.status == 400
-            payload = await resp.json()
-            assert payload["exception"] == "File not available"
-
-    asyncio.run(scenario())
+class HealthTest(unittest.TestCase):
+    def test_health(self):
+        with urllib.request.urlopen(f"{BASE_URL}/health", timeout=10) as r:
+            self.assertEqual(r.status, 200)
+            self.assertIn(b"ok", r.read())
 
 
-def test_doc2text_async_timeout(monkeypatch, tmp_path):
-    async def scenario():
-        class FakeProcess:
-            def __init__(self, command):
-                self.command = command
-                self.returncode = 0
-                self.pid = 12345
+class UploadConversionTest(unittest.TestCase):
+    """POST file as multipart, expect converted body back."""
 
-            def communicate(self, timeout=None):
-                if timeout is not None:
-                    raise subprocess.TimeoutExpired(cmd=self.command, timeout=timeout)
-                return ("", "")
+    @classmethod
+    def setUpClass(cls):
+        cls.sources = gather_sources()
+        if not cls.sources:
+            raise unittest.SkipTest(f"no sources in {SOURCE_DIR}")
 
-            def kill(self):
-                pass
+    def _check_text(self, body: bytes, src: Path, kind: str):
+        text = body.decode("utf-8", "replace")
+        missing = [m for m in COMMON_MARKERS if m not in text]
+        if missing:
+            self.fail(
+                f"{src.name} ({src.stat().st_size} bytes) -> {kind} "
+                f"({len(text)} chars): missing markers {missing}\n"
+                f"--- output preview (first 600) ---\n{text[:600]}\n---\n"
+                f"Hint: the source file may be structurally damaged or hit a parser "
+                f"limitation. Try re-exporting it from a known-good source."
+            )
+        # Cyrillic only for non-PDF inputs (PDF text extraction depends on font embedding)
+        if src.suffix.lower() != ".pdf":
+            self.assertIn(CYRILLIC_MARKER, text,
+                f"{src.name} -> {kind}: missing Cyrillic marker '{CYRILLIC_MARKER}'")
 
-        def fake_popen(command, stdout=None, stderr=None, text=None, preexec_fn=None):
-            return FakeProcess(command)
+    def test_doc2docxOld(self):
+        for src in self.sources:
+            with self.subTest(src=src.name):
+                status, body = post_upload(f"{BASE_URL}/doc2docxOld", src)
+                if status == 200:
+                    save_dist(src, "doc2docxOld", "docx", body)
+                self.assertEqual(status, 200, body[:300])
+                self.assertEqual(body[:2], b"PK",
+                    f"{src.name} -> docx: not a ZIP (first bytes={body[:8]!r})")
+                self.assertGreater(len(body), 1000,
+                    f"{src.name} -> docx: too small ({len(body)} bytes)")
 
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
-        if hasattr(os, "killpg"):
-            monkeypatch.setattr(os, "killpg", lambda pgid, sig: None)
-        if hasattr(os, "getpgid"):
-            monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+    def test_doc2textOld(self):
+        for src in self.sources:
+            with self.subTest(src=src.name):
+                status, body = post_upload(f"{BASE_URL}/doc2textOld", src)
+                if status == 200:
+                    save_dist(src, "doc2textOld", "txt", body)
+                self.assertEqual(status, 200, body[:300])
+                self._check_text(body, src, "txt")
 
-        input_file = tmp_path / "sample.doc"
-        input_file.write_text("dummy")
+    def test_doc2mdOld(self):
+        for src in self.sources:
+            with self.subTest(src=src.name):
+                status, body = post_upload(f"{BASE_URL}/doc2mdOld", src)
+                if status == 200:
+                    save_dist(src, "doc2mdOld", "md", body)
+                self.assertEqual(status, 200, body[:300])
+                self._check_text(body, src, "md")
+                if src.suffix.lower() != ".pdf":
+                    # GFM table syntax — pdf path bypasses pandoc, so skip table check there.
+                    text = body.decode("utf-8", "replace")
+                    self.assertIn("|", text,
+                        f"{src.name} -> md: no table separator (pandoc gfm)")
 
-        async with create_client(("/doc2text", main.doc2text_handle)) as client:
-            resp = await client.post("/doc2text", data={"file": str(input_file)})
-            assert resp.status == 504
-            payload = await resp.json()
-            assert payload["exception"] == "Conversion timed out"
 
-    asyncio.run(scenario())
+class SharedPathConversionTest(unittest.TestCase):
+    """POST 'file=/share/<name>', expect JSON + output file written next to source."""
+
+    @classmethod
+    def setUpClass(cls):
+        if HOST_SHARE is None:
+            raise unittest.SkipTest("HOST_SHARE not set; skipping path-based tests")
+        cls.sources = gather_sources()
+        if not cls.sources:
+            raise unittest.SkipTest(f"no sources in {SOURCE_DIR}")
+
+    def _post_and_check(self, src: Path, endpoint: str, ext: str):
+        container_path = f"{CONTAINER_SHARE.rstrip('/')}/{src.name}"
+        status, body = post_form(f"{BASE_URL}{endpoint}", {"file": container_path})
+        self.assertEqual(status, 200,
+            f"{endpoint} {src.name}: HTTP {status} body={body[:300]!r}")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            self.fail(f"{endpoint} {src.name}: not JSON: {body[:200]!r}")
+        self.assertEqual(payload.get("code"), 0,
+            f"{endpoint} {src.name}: code != 0, payload={payload}")
+        out_host = HOST_SHARE / f"{src.stem}.{ext}"
+        self.assertTrue(out_host.exists(),
+            f"{endpoint} {src.name}: expected output {out_host} not found")
+        self.assertGreater(out_host.stat().st_size, 0,
+            f"{endpoint} {src.name}: output {out_host} is empty")
+        # Mirror the produced file into DIST_DIR so all conversion outputs
+        # (upload + path-based) land in one inspectable place.
+        save_dist(src, endpoint.lstrip("/"), ext, out_host.read_bytes())
+        return out_host
+
+    def test_doc2docx(self):
+        for src in self.sources:
+            if src.suffix.lower() == ".docx":
+                continue  # don't convert into self
+            with self.subTest(src=src.name):
+                out = self._post_and_check(src, "/doc2docx", "docx")
+                self.assertEqual(out.read_bytes()[:2], b"PK")
+
+    def test_doc2text(self):
+        for src in self.sources:
+            with self.subTest(src=src.name):
+                out = self._post_and_check(src, "/doc2text", "txt")
+                text = out.read_text(encoding="utf-8", errors="replace")
+                for marker in COMMON_MARKERS:
+                    self.assertIn(marker, text)
+
+    def test_doc2md(self):
+        for src in self.sources:
+            with self.subTest(src=src.name):
+                out = self._post_and_check(src, "/doc2md", "md")
+                text = out.read_text(encoding="utf-8", errors="replace")
+                for marker in COMMON_MARKERS:
+                    self.assertIn(marker, text)
 
 
-def test_doc2text_async_failure(monkeypatch, tmp_path):
-    async def scenario():
-        class FakeProcess:
-            def __init__(self, command):
-                self.command = command
-                self.returncode = 1
-                self.pid = 12345
+class SecurityTest(unittest.TestCase):
+    def test_path_traversal_rejected(self):
+        for endpoint in ("/doc2docx", "/doc2text", "/doc2md"):
+            with self.subTest(endpoint=endpoint):
+                status, body = post_form(f"{BASE_URL}{endpoint}", {"file": "/etc/passwd"})
+                self.assertEqual(status, 400,
+                    f"{endpoint}: expected 400 for /etc/passwd, got {status} body={body[:200]!r}")
 
-            def communicate(self, timeout=None):
-                return ("", "boom")
 
-            def kill(self):
-                pass
-
-        def fake_popen(command, stdout=None, stderr=None, text=None, preexec_fn=None):
-            return FakeProcess(command)
-
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
-
-        input_file = tmp_path / "sample.doc"
-        input_file.write_text("dummy")
-
-        async with create_client(("/doc2text", main.doc2text_handle)) as client:
-            resp = await client.post("/doc2text", data={"file": str(input_file)})
-            assert resp.status == 400
-            payload = await resp.json()
-            assert payload["exception"] == "boom"
-
-    asyncio.run(scenario())
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1].startswith("http"):
+        BASE_URL = sys.argv.pop(1)
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    reset_dist_dir()
+    print(f"BASE_URL    = {BASE_URL}")
+    print(f"SOURCE_DIR  = {SOURCE_DIR}")
+    print(f"DIST_DIR    = {DIST_DIR} (cleaned)")
+    print(f"HOST_SHARE  = {HOST_SHARE} (path-based tests {'enabled' if HOST_SHARE else 'skipped'})")
+    print(f"sources     = {[p.name for p in gather_sources()]}")
+    print()
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__]))
+    produced = sorted(DIST_DIR.iterdir()) if DIST_DIR.exists() else []
+    print(f"\n=== Produced {len(produced)} files in {DIST_DIR} ===")
+    for p in produced:
+        print(f"  {p.stat().st_size:>10} B  {p.name}")
+    sys.exit(0 if result.wasSuccessful() else 1)

@@ -1,2 +1,10 @@
 .idea
+.env
 .env.*
+/.claude/worktrees/
+/shared-files/*
+!/shared-files/.gitkeep
+app/vendor/
+app/var/
+app/.env.local
+*.log

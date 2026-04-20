@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1.7
+# LibreOffice worker — extends existing libreoffice HTTP-API image with queue logic
+FROM harbor.xakki.ru/library/libreoffice
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip \
+    && pip3 install --no-cache-dir --break-system-packages \
+        redis \
+        aiohttp \
+        structlog \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy shared worker utilities
+COPY workers/common/ /app/workers/common/
+# Copy libreoffice-specific worker
+COPY workers/libreoffice/ /app/workers/libreoffice/
+
+WORKDIR /app
+
+USER app
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT:-6000}/health" || exit 1
+
+CMD ["python3", "-m", "workers.libreoffice.worker"]

@@ -9,15 +9,6 @@ x-logging: &_logging
             tag: "{{.ImageName}}|{{.Name}}|{{.ID}}|${APP_ENV:-local}"
 
 services:
-    mariadb:
-        <<: [ *_logging ]
-        deploy:
-            mode: global
-            resources:
-                limits:
-                    cpus: "2"
-                    memory: "2G"
-
     nginx:
         <<: [ *_logging ]
         deploy:
@@ -27,10 +18,83 @@ services:
                     cpus: "2"
                     memory: "128M"
 
-    libreoffice:
+    php-fpm:
+        <<: [ *_logging ]
         deploy:
             mode: global
             resources:
                 limits:
-                    cpus:   "2"
+                    cpus: "2"
+                    memory: "512M"
+
+    mariadb:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "2G"
+
+    keydb:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "1"
+                    memory: "512M"
+
+    libreoffice:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
                     memory: "1G"
+
+    worker-libreoffice:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "1G"
+
+    worker-ffmpeg:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "1G"
+
+    worker-image:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "1G"
+
+    worker-ai:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "4"
+                    memory: "4G"
+
+    worker-data:
+        <<: [ *_logging ]
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "1"
+                    memory: "512M"

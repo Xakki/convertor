@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Конвертируй файлы любых форматов — документы, видео, аудио, изображения. Быстро, безопасно, бесплатно.">
+  <title>Convertor — Конвертация файлов онлайн</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2'><path d='M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10'/></svg>">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            slate: { 900: '#0f172a' },
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- HTMX -->
+  <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <!-- App scripts (loaded before Alpine init) -->
+  <script src="/js/app.js"></script>
+  <script src="/js/auth.js"></script>
+  <script src="/js/upload.js"></script>
+
+  <style>
+    [x-cloak] { display: none !important; }
+    .drop-zone-active { border-color: #6366f1 !important; background-color: rgba(99, 102, 241, 0.05) !important; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-900 text-white antialiased" x-data>
+
+  <!-- Header -->
+  <div
+    hx-get="/components/header.html"
+    hx-trigger="load"
+    hx-swap="outerHTML">
+    <!-- Fallback while loading -->
+    <header class="sticky top-0 z-40 h-16 w-full border-b border-zinc-800 bg-slate-900/95"></header>
+  </div>
+
+  <!-- Login Modal Container -->
+  <div id="login-modal-container"
+    hx-get="/components/login-modal.html"
+    hx-trigger="load"
+    hx-swap="outerHTML">
+  </div>
+
+  <main>
+    <!-- Hero Section -->
+    <section class="relative overflow-hidden py-20 sm:py-28" aria-labelledby="hero-heading">
+      <!-- Background gradient -->
+      <div class="pointer-events-none absolute inset-0" aria-hidden="true">
+        <div class="absolute left-1/2 top-0 -translate-x-1/2 h-[600px] w-[800px] rounded-full bg-indigo-600/10 blur-3xl"></div>
+      </div>
+
+      <div class="relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
+        <div class="mb-4 inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-4 py-1.5 text-sm text-indigo-400">
+          <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+          Бесплатно · Без регистрации · Мгновенно
+        </div>
+
+        <h1 id="hero-heading" class="text-4xl font-extrabold tracking-tight text-white sm:text-5xl lg:text-6xl">
+          Конвертируй
+          <span class="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">любые файлы</span>
+        </h1>
+        <p class="mx-auto mt-6 max-w-2xl text-lg text-zinc-400">
+          Документы, изображения, видео, аудио, данные — поддерживаем 50+ форматов.
+          Загрузи файл и получи результат за секунды.
+        </p>
+      </div>
+    </section>
+
+    <!-- Converter Section -->
+    <section class="pb-24" aria-label="Конвертер файлов">
+      <div class="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
+
+        <!-- Alpine.js Converter Component -->
+        <div
+          x-data="converter()"
+          x-init="init()"
+          class="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl sm:p-8">
+
+          <!-- Step 1: Drop Zone (shown when no file selected) -->
+          <div x-show="!file">
+            <div
+              @dragover="onDragOver($event)"
+              @dragleave="onDragLeave($event)"
+              @drop="onDrop($event)"
+              :class="dragOver ? 'drop-zone-active' : ''"
+              class="relative flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 py-16 transition-all duration-200 hover:border-indigo-500 hover:bg-indigo-500/5"
+              @click="$refs.fileInput.click()"
+              role="button"
+              tabindex="0"
+              @keydown.enter="$refs.fileInput.click()"
+              @keydown.space.prevent="$refs.fileInput.click()"
+              aria-label="Зона загрузки файла. Нажмите или перетащите файл">
+
+              <!-- Upload icon -->
+              <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-400">
+                <svg class="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+                </svg>
+              </div>
+
+              <p class="mt-4 text-base font-medium text-white">Перетащи файл или нажми</p>
+              <p class="mt-1 text-sm text-zinc-500">Любой формат · до 50 MB (бесплатно)</p>
+
+              <!-- Supported format badges -->
+              <div class="mt-6 flex flex-wrap justify-center gap-1.5" aria-label="Поддерживаемые форматы">
+                <template x-for="fmt in ['PDF', 'DOCX', 'MP4', 'MP3', 'PNG', 'JPG', 'CSV', 'JSON', 'ZIP']" :key="fmt">
+                  <span class="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-400" x-text="fmt"></span>
+                </template>
+                <span class="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-400">и другие...</span>
+              </div>
+            </div>
+
+            <!-- Hidden file input -->
+            <input
+              type="file"
+              id="file-input"
+              x-ref="fileInput"
+              @change="onFileInput($event)"
+              class="hidden"
+              aria-label="Выбор файла для конвертации">
+          </div>
+
+          <!-- Step 2: File selected + format options -->
+          <div x-show="file && status === 'idle'" x-cloak>
+            <!-- File info card -->
+            <div class="flex items-center gap-4 rounded-xl bg-zinc-800 px-4 py-3">
+              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-400">
+                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium text-white" x-text="file?.name" :title="file?.name"></p>
+                <p class="text-xs text-zinc-500" x-text="formatFileSize(file?.size || 0)"></p>
+              </div>
+              <button
+                @click="reset()"
+                class="shrink-0 rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-700 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                aria-label="Удалить выбранный файл">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Format selectors -->
+            <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3 sm:items-end">
+              <!-- From format -->
+              <div>
+                <label for="from-format" class="block text-sm font-medium text-zinc-400">Из формата</label>
+                <select
+                  id="from-format"
+                  x-model="fromFormat"
+                  @change="toFormat = toFormats[0] || ''"
+                  class="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  aria-label="Исходный формат файла">
+                  <template x-for="fmt in Object.keys(availableFormats).length ? Object.keys(availableFormats) : Object.keys({'doc':'','docx':'','odt':'','pdf':'','jpg':'','png':'','mp4':'','mp3':'','csv':'','json':'','zip':''})" :key="fmt">
+                    <option :value="fmt" :selected="fmt === fromFormat" x-text="fmt.toUpperCase()"></option>
+                  </template>
+                </select>
+              </div>
+
+              <!-- Arrow -->
+              <div class="flex justify-center">
+                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-800 text-indigo-400" aria-hidden="true">
+                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+                  </svg>
+                </div>
+              </div>
+
+              <!-- To format -->
+              <div>
+                <label for="to-format" class="block text-sm font-medium text-zinc-400">В формат</label>
+                <select
+                  id="to-format"
+                  x-model="toFormat"
+                  class="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  aria-label="Целевой формат конвертации"
+                  :disabled="!toFormats.length">
+                  <template x-if="!toFormats.length">
+                    <option value="">Нет доступных форматов</option>
+                  </template>
+                  <template x-for="fmt in toFormats" :key="fmt">
+                    <option :value="fmt" x-text="fmt.toUpperCase()"></option>
+                  </template>
+                </select>
+              </div>
+            </div>
+
+            <!-- Convert button -->
+            <button
+              @click="submitConversion()"
+              :disabled="!canConvert"
+              class="mt-6 w-full rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white shadow-lg hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-zinc-900"
+              aria-label="Начать конвертацию файла">
+              Конвертировать
+              <span class="ml-1 text-indigo-300" x-show="fromFormat && toFormat" x-text="`${fromFormat.toUpperCase()} → ${toFormat.toUpperCase()}`"></span>
+            </button>
+          </div>
+
+          <!-- Step 3: Loading states -->
+          <div x-show="isLoading" x-cloak>
+            <!-- Uploading -->
+            <div x-show="status === 'uploading'" class="py-4">
+              <div class="flex items-center gap-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-5 py-4">
+                <svg class="h-6 w-6 shrink-0 animate-spin text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                <div>
+                  <p class="font-medium text-white">Загрузка файла...</p>
+                  <p class="text-sm text-zinc-500" x-text="file?.name"></p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pending -->
+            <div x-show="status === 'pending'" class="py-4">
+              <!-- HTMX polling for status updates -->
+              <div
+                id="status-poll"
+                hx-get=""
+                :hx-get="conversionId ? `/api/v1/convert/${conversionId}/status` : ''"
+                hx-trigger="load, every 2s"
+                hx-target="#status-display"
+                hx-swap="innerHTML">
+              </div>
+              <div id="status-display" class="flex items-center gap-4 rounded-xl border border-yellow-500/20 bg-yellow-500/5 px-5 py-4" role="status" aria-live="polite" aria-label="Задача в очереди">
+                <svg class="h-6 w-6 shrink-0 text-yellow-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2"/>
+                </svg>
+                <div>
+                  <p class="font-medium text-white">В очереди на обработку</p>
+                  <p class="text-sm text-zinc-500">Ожидание свободного воркера...</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Processing -->
+            <div x-show="status === 'processing'" class="py-4">
+              <div class="flex items-center gap-4 rounded-xl border border-blue-500/20 bg-blue-500/5 px-5 py-4" role="status" aria-live="polite" aria-label="Идёт обработка файла">
+                <svg class="h-6 w-6 shrink-0 animate-spin text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                <div>
+                  <p class="font-medium text-white">Конвертация...</p>
+                  <p class="text-sm text-zinc-500" x-text="`${(fromFormat||'').toUpperCase()} → ${(toFormat||'').toUpperCase()}`"></p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 4: Done -->
+          <div x-show="status === 'done'" x-cloak class="py-4">
+            <div class="rounded-xl border border-green-500/20 bg-green-500/5 px-5 py-5" role="status" aria-label="Конвертация завершена">
+              <div class="flex items-center gap-4">
+                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-green-500/20">
+                  <svg class="h-6 w-6 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                  </svg>
+                </div>
+                <div>
+                  <p class="font-semibold text-white">Готово!</p>
+                  <p class="text-sm text-zinc-400">Файл успешно сконвертирован</p>
+                </div>
+              </div>
+              <div class="mt-4 flex gap-3">
+                <button
+                  @click="downloadResult(conversionId)"
+                  class="flex-1 rounded-xl bg-green-600 py-3 text-sm font-semibold text-white hover:bg-green-500 transition-colors focus:outline-none focus:ring-2 focus:ring-green-500"
+                  aria-label="Скачать конвертированный файл">
+                  <svg class="mr-2 inline-block h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                  </svg>
+                  Скачать файл
+                </button>
+                <button
+                  @click="reset()"
+                  class="rounded-xl border border-zinc-700 px-4 py-3 text-sm font-medium text-zinc-300 hover:border-zinc-600 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  aria-label="Конвертировать ещё один файл">
+                  Ещё
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 5: Error -->
+          <div x-show="status === 'error'" x-cloak class="py-4">
+            <div class="rounded-xl border border-red-500/20 bg-red-500/5 px-5 py-5" role="alert" aria-label="Ошибка конвертации">
+              <div class="flex items-center gap-4">
+                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-red-500/20">
+                  <svg class="h-6 w-6 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01"/>
+                  </svg>
+                </div>
+                <div>
+                  <p class="font-semibold text-white">Ошибка конвертации</p>
+                  <p class="text-sm text-red-400" x-text="error"></p>
+                </div>
+              </div>
+              <button
+                @click="reset()"
+                class="mt-4 w-full rounded-xl border border-zinc-700 py-2.5 text-sm font-medium text-zinc-300 hover:border-zinc-600 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                aria-label="Попробовать снова">
+                Попробовать снова
+              </button>
+            </div>
+          </div>
+
+        </div><!-- /converter component -->
+
+        <!-- Auth promo (if not authenticated) -->
+        <div x-show="!$store.auth.isAuthenticated" x-cloak class="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/50 px-5 py-4 text-center">
+          <p class="text-sm text-zinc-500">
+            <svg class="mr-1 inline-block h-4 w-4 text-zinc-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+            </svg>
+            Без авторизации: 2 конвертации в день ·
+            <button @click="$dispatch('open-login')" class="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">Войти</button>
+            для 10/мес бесплатно
+          </p>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="border-t border-zinc-800 bg-zinc-900/50 py-20" aria-labelledby="features-heading">
+      <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <h2 id="features-heading" class="text-center text-2xl font-bold text-white sm:text-3xl">
+          Всё что нужно для конвертации
+        </h2>
+
+        <div class="mt-12 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          <!-- Feature cards -->
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+            </div>
+            <h3 class="mt-4 font-semibold text-white">Документы</h3>
+            <p class="mt-2 text-sm text-zinc-500">PDF, DOCX, ODT, RTF, EPUB, HTML и другие форматы.</p>
+          </div>
+
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-500/10 text-purple-400">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+              </svg>
+            </div>
+            <h3 class="mt-4 font-semibold text-white">Видео и Аудио</h3>
+            <p class="mt-2 text-sm text-zinc-500">MP4, MKV, AVI, MP3, WAV, FLAC — конвертация через FFmpeg.</p>
+          </div>
+
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-green-500/10 text-green-400">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 15l-5-5L5 21"/>
+              </svg>
+            </div>
+            <h3 class="mt-4 font-semibold text-white">Изображения</h3>
+            <p class="mt-2 text-sm text-zinc-500">JPG, PNG, WebP, AVIF, TIFF, GIF и другие форматы.</p>
+          </div>
+
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-yellow-500/10 text-yellow-400">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M9 11h6m-6 4h4M7 7h10"/>
+              </svg>
+            </div>
+            <h3 class="mt-4 font-semibold text-white">Данные</h3>
+            <p class="mt-2 text-sm text-zinc-500">CSV, JSON, XML, YAML — быстрая трансформация структур.</p>
+          </div>
+
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-pink-500/10 text-pink-400">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+              </svg>
+            </div>
+            <h3 class="mt-4 font-semibold text-white">AI конвертации</h3>
+            <p class="mt-2 text-sm text-zinc-500">OCR, Speech-to-Text (Whisper), Text-to-Speech (TTS).</p>
+          </div>
+
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/10 text-blue-400">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+              </svg>
+            </div>
+            <h3 class="mt-4 font-semibold text-white">Безопасность</h3>
+            <p class="mt-2 text-sm text-zinc-500">Файлы удаляются через 24ч. Изолированные воркеры.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="py-20" aria-labelledby="cta-heading">
+      <div class="mx-auto max-w-2xl px-4 text-center sm:px-6 lg:px-8">
+        <h2 id="cta-heading" class="text-2xl font-bold text-white sm:text-3xl">
+          Нужно больше конвертаций?
+        </h2>
+        <p class="mt-4 text-zinc-400">
+          Перейдите на платный тариф и снимите ограничения.
+        </p>
+        <a
+          href="/pricing.html"
+          class="mt-8 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-8 py-3.5 text-base font-semibold text-white hover:bg-indigo-500 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900">
+          Посмотреть тарифы
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <div
+    hx-get="/components/footer.html"
+    hx-trigger="load"
+    hx-swap="outerHTML">
+  </div>
+
+</body>
+</html>

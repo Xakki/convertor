@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Тарифные планы Convertor. Выберите подходящий план: Free, Basic или Pro.">
+  <title>Тарифы — Convertor</title>
+
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2'><path d='M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10'/></svg>">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+  <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/auth.js"></script>
+
+  <style>[x-cloak] { display: none !important; }</style>
+</head>
+<body class="min-h-screen bg-slate-900 text-white antialiased" x-data>
+
+  <!-- Header -->
+  <div hx-get="/components/header.html" hx-trigger="load" hx-swap="outerHTML">
+    <header class="sticky top-0 z-40 h-16 w-full border-b border-zinc-800 bg-slate-900/95"></header>
+  </div>
+
+  <!-- Login Modal -->
+  <div id="login-modal-container" hx-get="/components/login-modal.html" hx-trigger="load" hx-swap="outerHTML"></div>
+
+  <main>
+    <!-- Hero -->
+    <section class="py-16 text-center" aria-labelledby="pricing-heading">
+      <div class="mx-auto max-w-2xl px-4">
+        <h1 id="pricing-heading" class="text-4xl font-extrabold text-white sm:text-5xl">Простые тарифы</h1>
+        <p class="mt-4 text-lg text-zinc-400">Начни бесплатно, перейди на платный когда нужно.</p>
+
+        <!-- Billing toggle (monthly by default) -->
+        <div class="mt-8 inline-flex items-center gap-3 rounded-full border border-zinc-700 bg-zinc-800 p-1" x-data="{ annual: false }" role="group" aria-label="Переключатель периода оплаты">
+          <button
+            @click="annual = false"
+            :class="!annual ? 'bg-zinc-700 text-white shadow' : 'text-zinc-400 hover:text-white'"
+            class="rounded-full px-5 py-2 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            Ежемесячно
+          </button>
+          <button
+            @click="annual = true"
+            :class="annual ? 'bg-zinc-700 text-white shadow' : 'text-zinc-400 hover:text-white'"
+            class="rounded-full px-5 py-2 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            Ежегодно
+            <span class="ml-1.5 rounded-full bg-green-500/20 px-2 py-0.5 text-xs text-green-400">−20%</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pricing Cards -->
+    <section class="pb-24" x-data="pricingPage()">
+      <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+
+          <!-- Free Plan -->
+          <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-8 flex flex-col">
+            <div>
+              <h2 class="text-lg font-bold text-white">Free</h2>
+              <p class="mt-1 text-sm text-zinc-500">Для знакомства с сервисом</p>
+            </div>
+
+            <div class="mt-6">
+              <div class="flex items-baseline gap-1">
+                <span class="text-4xl font-extrabold text-white">$0</span>
+                <span class="text-zinc-500">/мес</span>
+              </div>
+              <p class="mt-1 text-xs text-zinc-600">Бесплатно навсегда</p>
+            </div>
+
+            <!-- Features -->
+            <ul class="mt-8 space-y-3 flex-1" role="list" aria-label="Возможности тарифа Free">
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-400"><strong class="text-white">10</strong> конвертаций в месяц</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-400"><strong class="text-white">3</strong> AI конвертации (OCR, STT, TTS)</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-400">Файлы до <strong class="text-white">50 MB</strong></span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-400">Все форматы файлов</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                <span class="text-sm text-zinc-600">История конвертаций</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                <span class="text-sm text-zinc-600">Приоритет в очереди</span>
+              </li>
+            </ul>
+
+            <!-- CTA -->
+            <div class="mt-8">
+              <template x-if="$store.auth.user?.plan === 'free' || !$store.auth.user">
+                <button
+                  disabled
+                  class="w-full rounded-xl border border-zinc-700 py-3 text-sm font-semibold text-zinc-400 cursor-default"
+                  aria-label="Текущий тариф Free">
+                  Текущий план
+                </button>
+              </template>
+              <template x-if="$store.auth.user?.plan && $store.auth.user.plan !== 'free'">
+                <button
+                  disabled
+                  class="w-full rounded-xl border border-zinc-700 py-3 text-sm font-semibold text-zinc-500 cursor-default"
+                  aria-label="Доступный тариф">
+                  Доступно
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <!-- Basic Plan (highlighted) -->
+          <div class="relative rounded-2xl border-2 border-indigo-500 bg-zinc-900 p-8 flex flex-col shadow-lg shadow-indigo-500/10">
+            <!-- Popular badge -->
+            <div class="absolute -top-3.5 left-1/2 -translate-x-1/2">
+              <span class="rounded-full bg-indigo-600 px-4 py-1 text-xs font-bold uppercase tracking-wide text-white">
+                Популярный
+              </span>
+            </div>
+
+            <div>
+              <h2 class="text-lg font-bold text-white">Basic</h2>
+              <p class="mt-1 text-sm text-zinc-500">Для регулярного использования</p>
+            </div>
+
+            <div class="mt-6">
+              <div class="flex items-baseline gap-1">
+                <span class="text-4xl font-extrabold text-white">$3</span>
+                <span class="text-zinc-500">/мес</span>
+              </div>
+              <p class="mt-1 text-xs text-zinc-500">или 150 Telegram Stars</p>
+            </div>
+
+            <!-- Features -->
+            <ul class="mt-8 space-y-3 flex-1" role="list" aria-label="Возможности тарифа Basic">
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300"><strong class="text-white">100</strong> конвертаций в месяц</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300"><strong class="text-white">30</strong> AI конвертаций</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300">Файлы до <strong class="text-white">200 MB</strong></span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300">История конвертаций</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300">Приоритет в очереди</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                <span class="text-sm text-zinc-600">API доступ</span>
+              </li>
+            </ul>
+
+            <!-- CTA -->
+            <div class="mt-8 space-y-3">
+              <template x-if="$store.auth.user?.plan === 'basic'">
+                <button disabled class="w-full rounded-xl border border-indigo-700 bg-indigo-900/50 py-3 text-sm font-semibold text-indigo-400 cursor-default">
+                  Текущий план
+                </button>
+              </template>
+              <template x-if="$store.auth.user?.plan !== 'basic'">
+                <div class="space-y-3">
+                  <button
+                    @click="payStripe('basic')"
+                    :disabled="loading === 'basic-stripe'"
+                    class="w-full rounded-xl bg-indigo-600 py-3 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    aria-label="Оплатить тариф Basic через Stripe">
+                    <span x-show="loading !== 'basic-stripe'">Оплатить через Stripe — $3</span>
+                    <span x-show="loading === 'basic-stripe'" class="flex items-center justify-center gap-2">
+                      <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path d="M4 12a8 8 0 018-8"/>
+                      </svg>
+                      Перенаправление...
+                    </span>
+                  </button>
+                  <button
+                    @click="payTelegramStars('basic', 150)"
+                    class="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 py-3 text-sm font-semibold text-zinc-300 hover:border-zinc-600 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    aria-label="Оплатить тариф Basic через Telegram Stars">
+                    <svg class="h-4 w-4 text-yellow-400" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                    </svg>
+                    Telegram Stars — 150 ⭐
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Pro Plan -->
+          <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-8 flex flex-col">
+            <div>
+              <h2 class="text-lg font-bold text-white">Pro</h2>
+              <p class="mt-1 text-sm text-zinc-500">Для профессиональных задач</p>
+            </div>
+
+            <div class="mt-6">
+              <div class="flex items-baseline gap-1">
+                <span class="text-4xl font-extrabold text-white">$10</span>
+                <span class="text-zinc-500">/мес</span>
+              </div>
+              <p class="mt-1 text-xs text-zinc-500">или 500 Telegram Stars</p>
+            </div>
+
+            <!-- Features -->
+            <ul class="mt-8 space-y-3 flex-1" role="list" aria-label="Возможности тарифа Pro">
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300"><strong class="text-white">∞</strong> конвертаций в месяц</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300"><strong class="text-white">100</strong> AI конвертаций</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300">Файлы до <strong class="text-white">500 MB</strong></span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300">История конвертаций</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300">Высший приоритет очереди</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <svg class="mt-0.5 h-5 w-5 shrink-0 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm text-zinc-300">API доступ</span>
+              </li>
+            </ul>
+
+            <!-- CTA -->
+            <div class="mt-8 space-y-3">
+              <template x-if="$store.auth.user?.plan === 'pro'">
+                <button disabled class="w-full rounded-xl border border-zinc-700 py-3 text-sm font-semibold text-zinc-400 cursor-default">
+                  Текущий план
+                </button>
+              </template>
+              <template x-if="$store.auth.user?.plan !== 'pro'">
+                <div class="space-y-3">
+                  <button
+                    @click="payStripe('pro')"
+                    :disabled="loading === 'pro-stripe'"
+                    class="w-full rounded-xl bg-purple-600 py-3 text-sm font-semibold text-white hover:bg-purple-500 disabled:opacity-50 transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    aria-label="Оплатить тариф Pro через Stripe">
+                    <span x-show="loading !== 'pro-stripe'">Оплатить через Stripe — $10</span>
+                    <span x-show="loading === 'pro-stripe'" class="flex items-center justify-center gap-2">
+                      <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path d="M4 12a8 8 0 018-8"/>
+                      </svg>
+                      Перенаправление...
+                    </span>
+                  </button>
+                  <button
+                    @click="payTelegramStars('pro', 500)"
+                    class="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 py-3 text-sm font-semibold text-zinc-300 hover:border-zinc-600 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    aria-label="Оплатить тариф Pro через Telegram Stars">
+                    <svg class="h-4 w-4 text-yellow-400" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                    </svg>
+                    Telegram Stars — 500 ⭐
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Error notification -->
+        <div
+          x-show="error"
+          x-transition
+          class="mt-6 rounded-xl border border-red-500/20 bg-red-500/5 px-5 py-4 text-sm text-red-400"
+          role="alert">
+          <span x-text="error"></span>
+        </div>
+
+        <!-- Pay-per-use note -->
+        <div class="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-6 text-center">
+          <h3 class="font-semibold text-white">Pay-per-use</h3>
+          <p class="mt-2 text-sm text-zinc-500">
+            Нужна разовая конвертация?
+            <strong class="text-zinc-300">$0.05</strong> за обычную ·
+            <strong class="text-zinc-300">$0.15</strong> за AI.
+            Файлы до 500 MB.
+          </p>
+          <p class="mt-2 text-xs text-zinc-600">Скоро — оплата через Cryptomus (крипта)</p>
+        </div>
+
+        <!-- Comparison table -->
+        <div class="mt-12">
+          <h2 class="text-xl font-bold text-white text-center">Сравнение тарифов</h2>
+          <div class="mt-6 overflow-x-auto rounded-xl border border-zinc-800">
+            <table class="w-full" role="table" aria-label="Сравнительная таблица тарифов">
+              <thead>
+                <tr class="border-b border-zinc-800">
+                  <th class="px-6 py-4 text-left text-sm font-semibold text-zinc-400" scope="col">Функция</th>
+                  <th class="px-6 py-4 text-center text-sm font-semibold text-zinc-400" scope="col">Free</th>
+                  <th class="px-6 py-4 text-center text-sm font-semibold text-indigo-400" scope="col">Basic</th>
+                  <th class="px-6 py-4 text-center text-sm font-semibold text-purple-400" scope="col">Pro</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-zinc-800">
+                <tr class="hover:bg-zinc-800/30 transition-colors">
+                  <td class="px-6 py-4 text-sm text-zinc-300">Конвертации/мес</td>
+                  <td class="px-6 py-4 text-center text-sm text-zinc-400">10</td>
+                  <td class="px-6 py-4 text-center text-sm font-medium text-white">100</td>
+                  <td class="px-6 py-4 text-center text-sm font-medium text-white">∞</td>
+                </tr>
+                <tr class="hover:bg-zinc-800/30 transition-colors">
+                  <td class="px-6 py-4 text-sm text-zinc-300">AI конвертации</td>
+                  <td class="px-6 py-4 text-center text-sm text-zinc-400">3</td>
+                  <td class="px-6 py-4 text-center text-sm font-medium text-white">30</td>
+                  <td class="px-6 py-4 text-center text-sm font-medium text-white">100</td>
+                </tr>
+                <tr class="hover:bg-zinc-800/30 transition-colors">
+                  <td class="px-6 py-4 text-sm text-zinc-300">Макс. размер файла</td>
+                  <td class="px-6 py-4 text-center text-sm text-zinc-400">50 MB</td>
+                  <td class="px-6 py-4 text-center text-sm font-medium text-white">200 MB</td>
+                  <td class="px-6 py-4 text-center text-sm font-medium text-white">500 MB</td>
+                </tr>
+                <tr class="hover:bg-zinc-800/30 transition-colors">
+                  <td class="px-6 py-4 text-sm text-zinc-300">История конвертаций</td>
+                  <td class="px-6 py-4 text-center">
+                    <svg class="mx-auto h-4 w-4 text-zinc-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Недоступно"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </td>
+                  <td class="px-6 py-4 text-center">
+                    <svg class="mx-auto h-4 w-4 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Доступно"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                  </td>
+                  <td class="px-6 py-4 text-center">
+                    <svg class="mx-auto h-4 w-4 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Доступно"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                  </td>
+                </tr>
+                <tr class="hover:bg-zinc-800/30 transition-colors">
+                  <td class="px-6 py-4 text-sm text-zinc-300">Приоритет очереди</td>
+                  <td class="px-6 py-4 text-center">
+                    <svg class="mx-auto h-4 w-4 text-zinc-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Недоступно"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </td>
+                  <td class="px-6 py-4 text-center">
+                    <svg class="mx-auto h-4 w-4 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Доступно"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                  </td>
+                  <td class="px-6 py-4 text-center text-purple-400 font-medium text-sm">Высший</td>
+                </tr>
+                <tr class="hover:bg-zinc-800/30 transition-colors">
+                  <td class="px-6 py-4 text-sm text-zinc-300">API доступ</td>
+                  <td class="px-6 py-4 text-center">
+                    <svg class="mx-auto h-4 w-4 text-zinc-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Недоступно"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </td>
+                  <td class="px-6 py-4 text-center">
+                    <svg class="mx-auto h-4 w-4 text-zinc-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Недоступно"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </td>
+                  <td class="px-6 py-4 text-center">
+                    <svg class="mx-auto h-4 w-4 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Доступно"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="px-6 py-4 text-sm font-semibold text-zinc-300">Цена</td>
+                  <td class="px-6 py-4 text-center text-sm font-bold text-white">$0</td>
+                  <td class="px-6 py-4 text-center text-sm font-bold text-indigo-400">$3/мес</td>
+                  <td class="px-6 py-4 text-center text-sm font-bold text-purple-400">$10/мес</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function pricingPage() {
+      return {
+        loading: null,
+        error: '',
+
+        async payStripe(plan) {
+          if (!Alpine.store('auth').isAuthenticated) {
+            document.dispatchEvent(new Event('open-login'));
+            return;
+          }
+          this.loading = `${plan}-stripe`;
+          this.error = '';
+          try {
+            const response = await apiFetch('/api/v1/payment/stripe', {
+              method: 'POST',
+              body: JSON.stringify({ plan }),
+            });
+            if (!response.ok) {
+              const err = await response.json().catch(() => ({}));
+              throw new Error(err.message || 'Ошибка оплаты');
+            }
+            const data = await response.json();
+            if (data.checkout_url) {
+              window.location.href = data.checkout_url;
+            }
+          } catch (err) {
+            this.error = err.message;
+          } finally {
+            this.loading = null;
+          }
+        },
+
+        payTelegramStars(plan, stars) {
+          if (!Alpine.store('auth').isAuthenticated) {
+            document.dispatchEvent(new Event('open-login'));
+            return;
+          }
+          const botUsername = 'YOUR_BOT_USERNAME';
+          const url = `https://t.me/${botUsername}?start=pay_${plan}`;
+          window.open(url, '_blank', 'noopener,noreferrer');
+        },
+      };
+    }
+  </script>
+
+  <!-- Footer -->
+  <div hx-get="/components/footer.html" hx-trigger="load" hx-swap="outerHTML"></div>
+
+</body>
+</html>

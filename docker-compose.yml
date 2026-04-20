@@ -1,48 +1,94 @@
 
 services:
 
-    libreoffice:
-        image: ${DOCKER_IMAGE_LIBRE}
-        container_name: "${COMPOSE_PROJECT_NAME}-libreoffice"
-        restart: unless-stopped
-        stop_grace_period: 5s
-        stop_signal: SIGTERM
-        environment:
-            APP_ENV: ${APP_ENV}
-            TZ: ${TZ}
-            CONTAINER_NAME: ${COMPOSE_PROJECT_NAME}-nginx
-        ports:
-            - "${EXT_LIBRE_PORT}:80"
-        networks:
-            - default
-        # --shm-size="1gb"
     nginx:
         image: ${DOCKER_IMAGE_NGINX}
         container_name: "${COMPOSE_PROJECT_NAME}-nginx"
         restart: unless-stopped
         stop_grace_period: 5s
         stop_signal: SIGTERM
-        working_dir: /app
         volumes:
-            - ./public:/app
-            - ./nginx/params:/etc/nginx/params
-            - ./nginx/${DOCKER_ENV}/conf.d:/etc/nginx/conf.d
-            - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-            - sock:/run/sock
+            - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+            - ./nginx/conf.d:/etc/nginx/conf.d:ro
+            - ./nginx/params:/etc/nginx/params:ro
+            - php-socket:/var/run/php:ro
+            - shared-files:/var/www/frontend:ro
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
             CONTAINER_NAME: ${COMPOSE_PROJECT_NAME}-nginx
         ports:
             - "${EXT_NGINX_PORT}:80"
+        depends_on:
+            php-fpm:
+                condition: service_healthy
         healthcheck:
             test: ["CMD", "curl", "-f", "http://localhost/ping"]
-            interval: 15s # Interval between health checks.
-            timeout: 3s # Timeout for each health checking.
-            retries: 3 # Hou many times retries.
-            start_period: 2s # Estimated time to boot.
+            interval: 15s
+            timeout: 3s
+            retries: 3
+            start_period: 5s
         networks:
             - default
+            - backend
+
+    php-fpm:
+        build:
+            context: .
+            dockerfile: docker/php/Dockerfile
+        image: ${COMPOSE_PROJECT_NAME}/php-fpm:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-php-fpm"
+        restart: unless-stopped
+        stop_grace_period: 10s
+        stop_signal: SIGTERM
+        working_dir: /var/www/app
+        volumes:
+            - ./app:/var/www/app
+            - ./docker/php/php.ini:/usr/local/etc/php/conf.d/99-custom.ini:ro
+            - ./docker/php/php-fpm.conf:/usr/local/etc/php-fpm.d/www.conf:ro
+            - php-socket:/var/run/php
+            - shared-files:/shared-files
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            SYMFONY_ENV: ${SYMFONY_ENV:-dev}
+            DB_HOST: ${DB_HOST}
+            DB_USERNAME: ${DB_USERNAME}
+            DB_DATABASE: ${DB_DATABASE}
+            DB_PASSWORD: ${DB_PASSWORD}
+            REDIS_HOST: ${REDIS_HOST:-keydb}
+            REDIS_USERNAME: ${REDIS_USERNAME:-default}
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+            REDIS_CACHE_DB: ${REDIS_CACHE_DB:-0}
+            REDIS_SESSION_DB: ${REDIS_SESSION_DB:-1}
+            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+            JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+            TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+            TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME}
+            STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+            STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+            CRYPTOMUS_MERCHANT_ID: ${CRYPTOMUS_MERCHANT_ID}
+            CRYPTOMUS_API_KEY: ${CRYPTOMUS_API_KEY}
+            SHARE_DIR: ${SHARE_DIR:-/shared-files}
+            WORKER_LIBREOFFICE_URL: ${WORKER_LIBREOFFICE_URL:-http://worker-libreoffice:6001}
+            WORKER_FFMPEG_URL: ${WORKER_FFMPEG_URL:-http://worker-ffmpeg:6001}
+            WORKER_IMAGE_URL: ${WORKER_IMAGE_URL:-http://worker-image:6001}
+            WORKER_AI_URL: ${WORKER_AI_URL:-http://worker-ai:6001}
+            WORKER_DATA_URL: ${WORKER_DATA_URL:-http://worker-data:6001}
+        depends_on:
+            mariadb:
+                condition: service_healthy
+            keydb:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "php-fpm", "-t"]
+            interval: 15s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        networks:
+            - backend
 
     mariadb:
         image: ${DOCKER_IMAGE_MARIADB}
@@ -53,10 +99,10 @@ services:
         working_dir: /backup
         volumes:
             - ./logs:/var/log
-            - mydb:/var/lib/mysql
+            - mariadb-data:/var/lib/mysql
             - ./mariadb/backup:/backup
-            - ./mariadb/${DOCKER_ENV}/mariadb.cnf:/etc/mysql/conf.d/mariadb.cnf
-            - ./mariadb/${DOCKER_ENV}/init:/docker-entrypoint-initdb.d
+            - ./mariadb/${DOCKER_ENV}/mariadb.cnf:/etc/mysql/conf.d/mariadb.cnf:ro
+            - ./mariadb/${DOCKER_ENV}/init:/docker-entrypoint-initdb.d:ro
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
@@ -68,19 +114,239 @@ services:
         ports:
             - "${EXT_MYSQL_PORT}:3306"
         healthcheck:
-            test: [ "CMD", "healthcheck.sh", "--su-mysql", "--connect", "--innodb_initialized" ]
-            interval: 15s # Interval between health checks.
-            timeout: 3s # Timeout for each health checking.
-            retries: 20 # Hou many times retries.
-            start_period: 5s # Estimated time to boot.
+            test: ["CMD", "healthcheck.sh", "--su-mysql", "--connect", "--innodb_initialized"]
+            interval: 15s
+            timeout: 3s
+            retries: 20
+            start_period: 5s
         networks:
-            - default
+            - backend
+
+    keydb:
+        image: eqalpha/keydb:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-keydb"
+        restart: unless-stopped
+        stop_grace_period: 10s
+        stop_signal: SIGTERM
+        command: >
+            keydb-server
+            --requirepass ${REDIS_PASSWORD}
+            --databases 16
+            --appendonly yes
+        volumes:
+            - keydb-data:/data
+        environment:
+            TZ: ${TZ}
+        healthcheck:
+            test: ["CMD", "keydb-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+            interval: 10s
+            timeout: 3s
+            retries: 5
+            start_period: 5s
+        networks:
+            - backend
+
+    libreoffice:
+        image: ${DOCKER_IMAGE_LIBRE}
+        container_name: "${COMPOSE_PROJECT_NAME}-libreoffice"
+        restart: unless-stopped
+        stop_grace_period: 5s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            CONTAINER_NAME: ${COMPOSE_PROJECT_NAME}-libreoffice
+            PORT: 6000
+            SHARE_DIR: /shared-files
+        volumes:
+            - shared-files:/shared-files
+        ports:
+            - "${EXT_LIBRE_PORT}:6000"
+        healthcheck:
+            test: ["CMD", "curl", "-fsS", "http://127.0.0.1:6000/health"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 20s
+        networks:
+            - backend
+
+    worker-libreoffice:
+        build:
+            context: .
+            dockerfile: docker/workers/Dockerfile.libreoffice
+        image: ${COMPOSE_PROJECT_NAME}/worker-libreoffice:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-libreoffice"
+        restart: unless-stopped
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        volumes:
+            - shared-files:/shared-files
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            REDIS_HOST: ${REDIS_HOST:-keydb}
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            SHARE_DIR: ${SHARE_DIR:-/shared-files}
+            LIBREOFFICE_URL: http://libreoffice:6000
+        depends_on:
+            keydb:
+                condition: service_healthy
+            libreoffice:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "python3", "-c", "import redis; r=redis.Redis(host='keydb', password='${REDIS_PASSWORD}', db=2); r.ping()"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 15s
+        networks:
+            - backend
+
+    worker-ffmpeg:
+        build:
+            context: .
+            dockerfile: docker/workers/Dockerfile.ffmpeg
+        image: ${COMPOSE_PROJECT_NAME}/worker-ffmpeg:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg"
+        restart: unless-stopped
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        volumes:
+            - shared-files:/shared-files
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            REDIS_HOST: ${REDIS_HOST:-keydb}
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            SHARE_DIR: ${SHARE_DIR:-/shared-files}
+            WORKER_MODULE: workers.ffmpeg.worker
+        depends_on:
+            keydb:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "ffmpeg", "-version"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        networks:
+            - backend
+
+    worker-image:
+        build:
+            context: .
+            dockerfile: docker/workers/Dockerfile.image
+        image: ${COMPOSE_PROJECT_NAME}/worker-image:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-image"
+        restart: unless-stopped
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        volumes:
+            - shared-files:/shared-files
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            REDIS_HOST: ${REDIS_HOST:-keydb}
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            SHARE_DIR: ${SHARE_DIR:-/shared-files}
+            WORKER_MODULE: workers.image.worker
+        depends_on:
+            keydb:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "convert", "-version"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        networks:
+            - backend
+
+    worker-ai:
+        build:
+            context: .
+            dockerfile: docker/workers/Dockerfile.ai
+        image: ${COMPOSE_PROJECT_NAME}/worker-ai:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
+        restart: unless-stopped
+        stop_grace_period: 60s
+        stop_signal: SIGTERM
+        volumes:
+            - shared-files:/shared-files
+            - whisper-models:/root/.cache/huggingface
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            REDIS_HOST: ${REDIS_HOST:-keydb}
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            SHARE_DIR: ${SHARE_DIR:-/shared-files}
+            WORKER_MODULE: workers.ai.worker
+            WHISPER_MODEL: ${WHISPER_MODEL:-base}
+        depends_on:
+            keydb:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "python3", "-c", "import faster_whisper; print('ok')"]
+            interval: 60s
+            timeout: 15s
+            retries: 3
+            start_period: 30s
+        networks:
+            - backend
+
+    worker-data:
+        build:
+            context: .
+            dockerfile: docker/workers/Dockerfile.data
+        image: ${COMPOSE_PROJECT_NAME}/worker-data:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-data"
+        restart: unless-stopped
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        volumes:
+            - shared-files:/shared-files
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            REDIS_HOST: ${REDIS_HOST:-keydb}
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            SHARE_DIR: ${SHARE_DIR:-/shared-files}
+            WORKER_MODULE: workers.data.worker
+        depends_on:
+            keydb:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "python3", "-c", "import pandas, yaml, lxml; print('ok')"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 10s
+        networks:
+            - backend
 
 networks:
     default:
         driver: bridge
         name: "${COMPOSE_PROJECT_NAME}-network"
+    backend:
+        driver: bridge
+        name: "${COMPOSE_PROJECT_NAME}-backend"
+        internal: true
 
 volumes:
-    mydb:
-        name: "${COMPOSE_PROJECT_NAME}-mydb"
+    mariadb-data:
+        name: "${COMPOSE_PROJECT_NAME}-mariadb-data"
+    keydb-data:
+        name: "${COMPOSE_PROJECT_NAME}-keydb-data"
+    shared-files:
+        name: "${COMPOSE_PROJECT_NAME}-shared-files"
+    php-socket:
+        name: "${COMPOSE_PROJECT_NAME}-php-socket"
+    whisper-models:
+        name: "${COMPOSE_PROJECT_NAME}-whisper-models"

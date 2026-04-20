@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 — Страница не найдена | Convertor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+</head>
+<body class="flex min-h-screen items-center justify-center bg-slate-900 text-white antialiased">
+  <div class="text-center px-4">
+    <!-- Large 404 -->
+    <div class="text-9xl font-extrabold text-zinc-800 select-none" aria-hidden="true">404</div>
+
+    <div class="mt-4">
+      <h1 class="text-2xl font-bold text-white">Страница не найдена</h1>
+      <p class="mt-2 text-zinc-500">
+        Страница, которую вы ищете, не существует или была перемещена.
+      </p>
+    </div>
+
+    <div class="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+      <a
+        href="/"
+        class="rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900">
+        На главную
+      </a>
+      <a
+        href="javascript:history.back()"
+        class="rounded-xl border border-zinc-700 px-6 py-3 text-sm font-medium text-zinc-300 hover:border-zinc-600 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        Назад
+      </a>
+    </div>
+
+    <!-- Icon -->
+    <div class="mt-12 flex justify-center">
+      <svg class="h-16 w-16 text-zinc-800" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>
