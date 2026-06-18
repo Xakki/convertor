@@ -1,11 +1,15 @@
 SHELL = /bin/bash
 ### https://makefiletutorial.com/
 
+HOST_NAME := $(shell hostname)
+HOST_IP  := $(shell hostname -I 2>/dev/null | awk '{print $$1}' || echo unknown)
+MYSQL_SLOWLOG_PATH := $(CURDIR)/docker/logs
+JSON_LOG_PATH := $(CURDIR)/docker/logs
 include .env
+-include .env.local
 export
 
 DC         = docker compose
-DC_RES     = docker compose -f docker-compose.yml -f docker-compose.resources.yml
 PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php-fpm
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
 

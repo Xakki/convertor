@@ -57,7 +57,7 @@ SaaS-сервис конвертации файлов всех форматов.
 - Max size: 50MB free, 500MB paid (Nginx limit_req + PHP проверка)
 
 ## Docker
-- docker-compose.yml — основной, docker-compose.resources.yml — лимиты для прода
+- docker-compose.yml — основной, docker/limits.yml — лимиты для прода
 - Каждый воркер — отдельный контейнер
 - Shared volume: /shared-files/ монтируется во все сервисы
 - KeyDB — единственный instance, несколько баз (0: cache, 1: sessions, 2: queues)
