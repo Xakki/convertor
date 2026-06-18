@@ -4,6 +4,10 @@
 x-app-env: &_app_env
     APP_ENV: ${APP_ENV}
     TZ: ${TZ}
+    # Remap www-data to the host user so composer deploy can write the
+    # bind-mounted /app-symfony (vendor/, var/, config/jwt/). Host-specific.
+    PUID: ${PUID:-0}
+    PGID: ${PGID:-0}
     SYMFONY_ENV: ${SYMFONY_ENV:-dev}
     DB_HOST: ${DB_HOST}
     DB_USERNAME: ${DB_USERNAME}
@@ -15,8 +19,9 @@ x-app-env: &_app_env
     REDIS_CACHE_DB: ${REDIS_CACHE_DB:-0}
     REDIS_SESSION_DB: ${REDIS_SESSION_DB:-1}
     REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
-    JWT_SECRET_KEY: ${JWT_SECRET_KEY}
-    JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+    # JWT keys are file paths defined in app-symfony/.env (config/jwt/*.pem).
+    # Do NOT pass JWT_SECRET_KEY/JWT_PUBLIC_KEY here: an empty compose value would
+    # override the correct PEM paths (Symfony Dotenv won't override a set env var).
     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
     TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME}
     STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
@@ -49,20 +54,26 @@ x-app-base: &_app_base
     depends_on:
         mariadb:
             condition: service_healthy
-        redis:
+        keydb:
             condition: service_healthy
 
 services:
     php:
         <<: *_app_base
+        container_name: "${COMPOSE_PROJECT_NAME}-php"
         hostname: ${COMPOSE_PROJECT_NAME}-php
+        # Override anchor's [default]: php also joins backend to reach the
+        # libreoffice HTTP worker (WORKER_LIBREOFFICE_URL) + keydb/workers there.
+        networks:
+            - default
+            - backend
 
         volumes:
             - ./app-symfony:/app-symfony
             - ./docker/php/${DOCKER_ENV}/php-fpm.ini:/usr/local/etc/php/conf.d/app.ini:ro
             - ./docker/php/${DOCKER_ENV}/zz-docker.conf:/usr/local/etc/php-fpm.d/zz-docker.conf:ro
-            - ./docker/php/supervisor.laravel.ini:/etc/supervisor.d/supervisor.laravel.ini:ro
-            - sock:/run/sock
+            - ./docker/php/supervisor.app.ini:/etc/supervisor.d/supervisor.app.ini:ro
+            - php-socket:/run/sock
         command: "composer deploy"
         environment:
             <<: *_app_env
@@ -82,11 +93,12 @@ services:
 
     cron:
         <<: *_app_base
+        container_name: "${COMPOSE_PROJECT_NAME}-cron"
         hostname: ${COMPOSE_PROJECT_NAME}-cron
         volumes:
             - ./app-symfony:/app-symfony
             - ./docker/php/${DOCKER_ENV}/php-cron.ini:/usr/local/etc/php/conf.d/app.ini:ro
-            - ./docker/php/supervisor.laravel.ini:/etc/supervisor.d/supervisor.laravel.ini:ro
+            - ./docker/php/supervisor.app.ini:/etc/supervisor.d/supervisor.app.ini:ro
         environment:
             <<: *_app_env
             ENABLED_SUPERVISORD: "1"
@@ -139,16 +151,17 @@ services:
         mem_limit: "3G"
         cpus: "2"
 
-    redis:
+    keydb:
         image: ${DOCKER_IMAGE_KEYDB}
+        container_name: "${COMPOSE_PROJECT_NAME}-keydb"
         restart: unless-stopped
         stop_signal: SIGTERM
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
-            CONTAINER_NAME: ${COMPOSE_PROJECT_NAME}-redis
+            CONTAINER_NAME: ${COMPOSE_PROJECT_NAME}-keydb
         volumes:
-            - redis-data:/data
+            - keydb-data:/data
             - ./docker/redis/keydb.conf:/etc/keydb/keydb.conf:ro
         ports:
             - "${EXT_REDIS_PORT}:6379"
@@ -158,8 +171,11 @@ services:
             timeout: 3s
             retries: 3
             start_period: 4s
+        # On both: queue producer (php/cron) reach it via default; the 5 workers
+        # live on the internal backend net and reach it there.
         networks:
             - default
+            - backend
 
     nginx:
         image: ${DOCKER_IMAGE_NGINX}
@@ -168,9 +184,8 @@ services:
         stop_signal: SIGTERM
         working_dir: /public
         volumes:
-            - sock:/run/sock
-            - ./app-back/public:/app-back/public:ro
-            - ./app-back/storage:/app-back/storage:ro
+            - php-socket:/run/sock
+            - ./app-symfony/public:/app-symfony/public:ro
             - ./docker/nginx/params:/etc/nginx/params:ro
             - ./docker/nginx/${DOCKER_ENV}/conf.d:/etc/nginx/conf.d:ro
             - ./docker/nginx/${DOCKER_ENV}/nginx.conf:/etc/nginx/nginx.conf:ro

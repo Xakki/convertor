@@ -19,7 +19,7 @@ location ~*^.+\.(svg|jpg|jpeg|gif|png|ico|css|zip|tgz|gz|rar|bz2|doc|xls|exe|pdf
 
 location ~ ^/apple-touch-icon(.*)\.png$ {
     default_type image/png;
-    alias /app-back/public/favicon.png;
+    alias /app-symfony/public/favicon.png;
 }
 
 # deny access to .htaccess files, if Apache's document root

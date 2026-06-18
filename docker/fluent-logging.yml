@@ -46,7 +46,7 @@ services:
         depends_on:
             fluent-bit:
                 condition: service_started
-    redis:
+    keydb:
         <<: *_logging
         labels:
             tier: "cache"

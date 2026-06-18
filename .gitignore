@@ -4,8 +4,10 @@
 /.claude/worktrees/
 /shared-files/*
 !/shared-files/.gitkeep
-app/vendor/
-app/var/
-app/.env.local
+/app-symfony/.env
+app-symfony/vendor/
+app-symfony/var/
+app-symfony/.env.local
+app-symfony/config/jwt/
 *.log
 docker/mysqld_exporter.cnf

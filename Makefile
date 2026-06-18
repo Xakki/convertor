@@ -10,7 +10,7 @@ include .env
 export
 
 DC         = docker compose
-PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php-fpm
+PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
 
 # Colours
@@ -67,7 +67,7 @@ logs: ## Tail logs for all services
 	$(DC) logs -f
 
 .PHONY: logs-%
-logs-%: ## Tail logs for a specific service (make logs-php-fpm)
+logs-%: ## Tail logs for a specific service (make logs-php)
 	$(DC) logs -f $*
 
 .PHONY: worker-logs
@@ -145,32 +145,31 @@ login: ## Login to Docker registry
 .PHONY: build-libreoffice
 build-libreoffice: ## Build worker-libreoffice image
 	docker build -t $(COMPOSE_PROJECT_NAME)/worker-libreoffice:latest \
-	    -f docker/workers/Dockerfile.libreoffice .
+	    -f docker/workers/libreoffice.Dockerfile .
 
 .PHONY: build-ffmpeg
 build-ffmpeg: ## Build worker-ffmpeg image
 	docker build -t $(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest \
-	    -f docker/workers/Dockerfile.ffmpeg .
+	    -f docker/workers/ffmpeg.Dockerfile .
 
 .PHONY: build-image
 build-image: ## Build worker-image image
 	docker build -t $(COMPOSE_PROJECT_NAME)/worker-image:latest \
-	    -f docker/workers/Dockerfile.image .
+	    -f docker/workers/image.Dockerfile .
 
 .PHONY: build-ai
 build-ai: ## Build worker-ai image
 	docker build -t $(COMPOSE_PROJECT_NAME)/worker-ai:latest \
-	    -f docker/workers/Dockerfile.ai .
+	    -f docker/workers/ai.Dockerfile .
 
 .PHONY: build-data
 build-data: ## Build worker-data image
 	docker build -t $(COMPOSE_PROJECT_NAME)/worker-data:latest \
-	    -f docker/workers/Dockerfile.data .
+	    -f docker/workers/data.Dockerfile .
 
 .PHONY: build-php
-build-php: ## Build php-fpm image
-	docker build -t $(COMPOSE_PROJECT_NAME)/php-fpm:latest \
-	    -f docker/php/Dockerfile .
+build-php: ## PHP image is pulled from harbor (DOCKER_IMAGE_PHP), not built here
+	@echo "php image is pulled from harbor: $(DOCKER_IMAGE_PHP) — run 'make pull'. No local docker/php/Dockerfile."
 
 .PHONY: build-workers
 build-workers: build-libreoffice build-ffmpeg build-image build-ai build-data ## Build all worker images
