@@ -43,4 +43,18 @@ Fix the confirmed compose/Makefile defects, reconcile `.env` against `.env_dist`
 - **Ports → leave as-is.** `172.17.0.1:10090` (docker0 bridge) for nginx is treated as intentional (shared reverse-proxy reach); other services stay on `127.0.0.1`. Revisit only if access problems surface.
 
 **Blocker / needs user input:**
-- Real/test values for: `TELEGRAM_BOT_TOKEN` (login auth), `DOCKER_USER`, `DOCKER_PASS` (harbor pull). Config edits proceed without them; full boot acceptance is gated on them. Payment secrets dropped (payments frozen).
+- `TELEGRAM_BOT_TOKEN` (login auth) — supplied by user before the runtime boot/smoke-run. `DOCKER_USER`/`DOCKER_PASS` not needed (host already logged into harbor). Payment secrets dropped (payments frozen).
+
+**Execution Log:**
+- Implemented by config-fixer; reviewed by reviewer (verdict: changes requested → resolved).
+- Done: redis→keydb (compose service/volume/healthcheck/container_name, fluent-logging.yml, php/cron depends_on, REDIS_DSN); app-back→app-symfony (compose mount + 3 nginx confs + common_locations + xdebug path; dropped Laravel-style storage mount); `composer deploy` script (install→cache:clear→jwt keygen --skip-if-exists→migrate -n), php `command` unchanged (harbor entrypoint execs php-fpm after one-shot); sock→php-socket volume; Makefile (PHP_CONT, worker `<name>.Dockerfile`, build-php neutralized); .env/.env_dist (MACHINE_NAME, DB dev creds, PUID/PGID=1000, fluent vars documented); networks (php+keydb on [default,backend], libreoffice+workers on backend internal, nginx/cron/mariadb on default); .gitignore app/→app-symfony/ + config/jwt/.
+- Review blocker B1 fixed: `COMPOSE_FILE` no longer includes `docker/fluent-logging.yml` (missing FluentLog submodule) — re-add via [[fluent-logging-setup]].
+- Security fix S3: `/app-symfony/.env` gitignored (held a live Telegram token).
+- Validation: PyYAML parse OK (sandbox denies `docker compose config`); grep confirms zero stale refs.
+- Committed: `c3d3f22 fix: bring docker stack config to working state`.
+
+**Out-of-scope findings spun off (not fixed here):**
+- [[fix-queue-php-worker-mismatch]] (Blocking) — PHP Messenger Streams vs worker list; conversions won't flow.
+- worker-ai Whisper egress on `internal` backend — noted in [[docs-workers-conversion-validation]].
+
+**Status — handed to `test/`:** static fixes done + reviewed. Runtime acceptance (`docker compose up` healthy, app responds, `make build-*`) **deferred to [[smoke-run-verify]]** — cannot boot here (no docker in sandbox; needs TELEGRAM_BOT_TOKEN). Note: full e2e conversion also blocked by [[fix-queue-php-worker-mismatch]].
