@@ -35,12 +35,12 @@ Fix the confirmed compose/Makefile defects, reconcile `.env` against `.env_dist`
 - `.env_dist` documents every var; `.env` has working dev values (placeholder secrets clearly marked).
 - App responds on the configured nginx port.
 
-**Open questions:**
-- nginx `app-back` mounts: rename to `app-symfony`, or is `app-back` a planned separate backend? Confirm intended path.
-- `redis` vs `keydb` service naming — audit flagged a possible service/depends_on mismatch; verify and pick one canonical name.
-- Which secrets are mandatory for a *local dev* boot vs only for prod features (Telegram/Stripe/Cryptomus)? Define a minimal dev `.env`.
-- Port binding asymmetry (`172.17.0.1:10090` for nginx vs `127.0.0.1:*` for others) — intentional or normalize to localhost?
-- Should composer install + JWT keygen run in the php entrypoint, or stay manual `make` steps?
+**Decisions (grooming resolved):**
+- **Service naming → `keydb`.** Rename service `redis:` → `keydb:` (matches image keydb, volume keydb-data, conf keydb.conf, and the 5 workers' existing `depends_on: keydb`). Update php/cron `depends_on`, the healthcheck, and Symfony `REDIS_URL` host accordingly.
+- **App path → `/app-symfony`.** nginx root/fastcgi (`docker/nginx/dev/conf.d/default.conf`, `pf.conf`, and `prod/conf.d/default.conf`) currently use `/app-back/public`; PHP mounts source at `/app-symfony`. Fix all nginx confs + the nginx compose mount to `/app-symfony` so fastcgi resolves. `app-back/` is a rudiment (no dir on disk, no rename in git history).
+- **Bootstrap → `composer deploy` script.** Add a `deploy` script to `app-symfony/composer.json` running: install → cache:clear → `lexik:jwt:generate-keypair --skip-if-exists` → `doctrine:migrations:migrate`. The php `command: "composer deploy"` then boots a working container; `make init` stays as the wrapper.
+- **Secrets → FULL set required for boot.** JWT keypair + dev DB/keydb passwords generated locally; **Telegram/Stripe/Cryptomus/Docker-registry secrets must be supplied by the user** before the boot/smoke-run gate (see Blocker below). `.env_dist` documents every var.
+- **Ports → leave as-is.** `172.17.0.1:10090` (docker0 bridge) for nginx is treated as intentional (shared reverse-proxy reach); other services stay on `127.0.0.1`. Revisit only if access problems surface.
 
-**Decisions:**
-- (to be filled during grooming)
+**Blocker / needs user input:**
+- Real or test values for: `TELEGRAM_BOT_TOKEN`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CRYPTOMUS_MERCHANT_ID`, `CRYPTOMUS_API_KEY`, `DOCKER_USER`, `DOCKER_PASS`. Config edits proceed without them; boot acceptance is gated on them.
