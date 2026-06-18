@@ -1,0 +1,86 @@
+<header class="sticky top-0 z-40 w-full border-b border-zinc-800 bg-slate-900/95 backdrop-blur-sm" x-data>
+  <div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+    <!-- Logo -->
+    <a href="/" class="flex items-center gap-2 text-xl font-bold text-white hover:text-indigo-400 transition-colors">
+      <svg class="h-8 w-8 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"/>
+      </svg>
+      <span>Convertor</span>
+    </a>
+
+    <!-- Desktop Nav -->
+    <nav class="hidden items-center gap-6 md:flex" aria-label="Основная навигация">
+      <a href="/pricing.html" class="text-sm text-zinc-400 hover:text-white transition-colors">Тарифы</a>
+      <a href="/dashboard.html" class="text-sm text-zinc-400 hover:text-white transition-colors">История</a>
+
+      <!-- Quota badge (authenticated) -->
+      <template x-if="$store.auth.isAuthenticated">
+        <div id="quota-bar"
+          hx-get="/api/v1/quota"
+          hx-trigger="load, auth:login from:document"
+          hx-headers='js:{"Authorization": "Bearer " + (localStorage.getItem("jwt_token") || "")}'
+          class="hidden items-center gap-2 rounded-full bg-zinc-800 px-3 py-1 text-xs text-zinc-300 md:flex"
+          aria-label="Квота конвертаций">
+          <span class="text-zinc-500">Квота:</span>
+          <span class="font-medium text-indigo-400" x-text="$store.auth.quota?.used || 0"></span>
+          <span class="text-zinc-500">/</span>
+          <span x-text="$store.auth.quota?.limit === -1 ? '∞' : ($store.auth.quota?.limit || 10)"></span>
+        </div>
+      </template>
+
+      <!-- Auth buttons -->
+      <template x-if="!$store.auth.isAuthenticated">
+        <button
+          @click="$dispatch('open-login')"
+          class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900"
+          aria-label="Войти в систему">
+          Войти
+        </button>
+      </template>
+
+      <template x-if="$store.auth.isAuthenticated">
+        <div class="flex items-center gap-3" x-data="{ menuOpen: false }">
+          <span class="text-sm text-zinc-300" x-text="$store.auth.user?.name || $store.auth.user?.username || 'Пользователь'"></span>
+          <div class="relative">
+            <button
+              @click="menuOpen = !menuOpen"
+              class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white hover:bg-indigo-500 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              aria-label="Меню пользователя"
+              :aria-expanded="menuOpen">
+              <span x-text="($store.auth.user?.name || 'U')[0].toUpperCase()"></span>
+            </button>
+            <div
+              x-show="menuOpen"
+              @click.outside="menuOpen = false"
+              x-transition
+              class="absolute right-0 mt-2 w-48 rounded-lg border border-zinc-700 bg-zinc-800 shadow-xl"
+              role="menu">
+              <template x-if="$store.auth.isAdmin">
+                <a href="/admin/" class="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 hover:text-white rounded-t-lg" role="menuitem">Администрирование</a>
+              </template>
+              <a href="/dashboard.html" class="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 hover:text-white" role="menuitem">История конвертаций</a>
+              <button
+                @click="$store.auth.logout(); menuOpen = false"
+                class="block w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-zinc-700 hover:text-red-300 rounded-b-lg"
+                role="menuitem">
+                Выйти
+              </button>
+            </div>
+          </div>
+        </div>
+      </template>
+    </nav>
+
+    <!-- Mobile menu button -->
+    <button
+      x-data="{ open: false }"
+      @click="open = !open"
+      class="flex items-center justify-center rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white md:hidden focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      aria-label="Открыть меню"
+      x-ref="mobileMenuBtn">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+      </svg>
+    </button>
+  </div>
+</header>

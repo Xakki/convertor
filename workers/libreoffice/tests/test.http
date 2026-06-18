@@ -1,0 +1,26 @@
+
+### GET Hello
+GET http://localhost:2080/
+Accept: text/html
+
+### Send File1
+POST http://localhost:2080/doc2textMultipart
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="example1.doc"
+Content-Type: application/msword
+
+< ../example_files/161497e507c5ea.doc
+--WebAppBoundary--
+
+### Send File2
+POST http://localhost:2080/doc2textMultipart
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="example2.pdf"
+Content-Type: application/pdf
+
+< ../example_files/292153bc9ba6ef.pdf
+--WebAppBoundary--

@@ -1,0 +1,4 @@
+3. 🟠 FileNotFoundError не пойман — хендлеры ловят только TimeoutError/RuntimeError → голый 500, который классификатор ошибок в PHP не распознает (уйдёт в CODE_NO_CATCH).
+4. 🟠 В shared_handle нет проверки out_path.exists() (в upload_handle есть, стр. 185) — если soffice вышел с кодом 0, но файла нет, сервис вернёт 200/code:0, а PHP упадёт уже у себя на file_exists($fileOut).
+5. 🟡 Предусловие — bind-mount контейнера /share обязан указывать на тот же каталог, что PHP getSharePath() (storage/app/temp). Математика путей верна, но без общего тома любой shared-вызов = 404.
+6. 🟡 Мелочи — process-group kill по таймауту (сейчас proc.kill() оставляет детей soffice); утечка /share/media в md-ветке.

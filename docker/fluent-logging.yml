@@ -1,0 +1,66 @@
+# TODO : get submodule https://github.com/Xakki/FluentLog
+include:
+    - fluent-log/docker-fluent.yml
+
+
+x-logging: &_logging
+    logging:
+        driver: fluentd
+        options:
+            fluentd-address: "${EXT_FLUENT_PORT}"
+            fluentd-async: "true"
+            # 1000ms — быстрый reconnect к fluent-bit. На 3000ms редкие stderr-сообщения
+            # (nginx [error]) попадали в окно, когда async-сокет был закрыт, и молча дропались.
+            fluentd-async-reconnect-interval: "1000ms"
+            # 8 MiB — на случай скачка трафика. С 1 MiB при busy connection пакеты dropped.
+            fluentd-buffer-limit: 8388608
+            fluentd-write-timeout: "100s"
+            # Tag = имя контейнера — только входной namespace (service.*). Per-type
+            # парсеры маршрутизируются по лейблу log_format (см. rewrite_tag → gl.<log_format>),
+            # а НЕ по имени контейнера/сервиса. Контейнеры и сервисы можно называть как угодно;
+            # важно лишь проставить log_format (дефолт = имя compose-сервиса через Copy).
+            tag: "service.{{.Name}}"
+            # Driver пробрасывает перечисленные labels в каждую запись под оригинальными
+            # именами (docker v20+, без префикса label_). fluent-bit переименует их в плоские
+            # docker_* + log_format ([FILTER] modify). env: НЕ используем — host/hostname/
+            # docker_profile fluent-bit ставит глобально из СВОЕГО env (см. ниже environment).
+            labels: "com.docker.compose.service,com.docker.compose.project,com.docker.compose.image,tier,log_format"
+
+
+services:
+    php:
+        <<: *_logging
+        labels:
+            tier: "web"
+            log_format: "php"
+    cron:
+        <<: *_logging
+        labels:
+            tier: "cron"
+            log_format: "php"
+    mariadb:
+        <<: *_logging
+        labels:
+            tier: "db"
+            log_format: "mariadb"
+        depends_on:
+            fluent-bit:
+                condition: service_started
+    redis:
+        <<: *_logging
+        labels:
+            tier: "cache"
+            log_format: "redis"
+        depends_on:
+            fluent-bit:
+                condition: service_started
+    nginx:
+        <<: *_logging
+        labels:
+            tier: "proxy"
+            log_format: "nginx"
+        depends_on:
+            php:
+                condition: service_started
+            fluent-bit:
+                condition: service_started

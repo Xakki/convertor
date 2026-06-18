@@ -8,3 +8,4 @@ app/vendor/
 app/var/
 app/.env.local
 *.log
+docker/mysqld_exporter.cnf

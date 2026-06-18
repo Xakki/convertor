@@ -1,0 +1,15 @@
+## static
+access_log off;
+
+#include proxy_params;
+
+#Кеширование дескрипторов файлов
+#open_file_cache max=1024 inactive=1200s;
+#open_file_cache_valid 3600s;
+#open_file_cache_min_uses 2;
+#open_file_cache_errors on;
+
+# limit_req   zone=static  burst=10;
+
+expires off;
+add_header Cache-Control public,max-age=0;

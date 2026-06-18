@@ -1,0 +1,56 @@
+
+services:
+    php:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "1"
+                    memory: "512M"
+
+    cron:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "1G"
+
+    node:
+        # Prometheus 7d peak (matrix_dev): mem 114M, cpu 0.026
+        mem_limit: "256M"
+        cpus: "0.5"
+
+    mariadb:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "3G"
+
+    redis:
+        # Prometheus 7d peak (matrix_dev): mem 15M, cpu 0.009
+        mem_limit: "256M"
+        cpus: "0.5"
+
+    nginx:
+        # Prometheus 7d peak (matrix_dev): mem 19M, cpu 0.004
+        mem_limit: "128M"
+        cpus: "1.0"
+
+    mysqld-exporter:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus:   "1"
+                    memory: "100M"
+
+    nginx-exporter:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus:   "1"
+                    memory: "100M"

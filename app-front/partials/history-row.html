@@ -1,0 +1,77 @@
+<!-- HTMX partial: single history table row -->
+<!-- Returned by GET /api/v1/convert/history as part of list -->
+<!-- Template variables: {{id}}, {{created_at}}, {{original_name}}, {{from_format}}, {{to_format}}, {{status}}, {{file_size}} -->
+
+<tr class="border-b border-zinc-800 hover:bg-zinc-800/50 transition-colors">
+  <!-- Date -->
+  <td class="px-4 py-3 text-sm text-zinc-400 whitespace-nowrap">
+    {{created_at}}
+  </td>
+
+  <!-- File name -->
+  <td class="px-4 py-3">
+    <div class="flex items-center gap-2 min-w-0">
+      <span class="truncate max-w-[180px] text-sm text-white font-medium" title="{{original_name}}">{{original_name}}</span>
+      <span class="shrink-0 text-xs text-zinc-500">{{file_size}}</span>
+    </div>
+  </td>
+
+  <!-- Conversion direction -->
+  <td class="px-4 py-3">
+    <div class="flex items-center gap-2">
+      <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-mono font-medium bg-zinc-700 text-zinc-300 uppercase">{{from_format}}</span>
+      <svg class="h-3 w-3 text-zinc-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+      </svg>
+      <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-mono font-medium bg-indigo-500/20 text-indigo-400 uppercase">{{to_format}}</span>
+    </div>
+  </td>
+
+  <!-- Status badge -->
+  <td class="px-4 py-3">
+    <!-- done -->
+    <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-green-500/15 text-green-400">
+      <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+      </svg>
+      Готово
+    </span>
+    <!-- pending (uncomment when needed):
+    <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-yellow-500/15 text-yellow-400">
+      <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+      </svg>
+      В очереди
+    </span>
+    -->
+    <!-- processing:
+    <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-blue-500/15 text-blue-400">
+      <svg class="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M4 12a8 8 0 018-8"/>
+      </svg>
+      Обработка
+    </span>
+    -->
+    <!-- error:
+    <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-red-500/15 text-red-400">
+      <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+        <path d="M12 8v4m0 4h.01"/><circle cx="12" cy="12" r="10"/>
+      </svg>
+      Ошибка
+    </span>
+    -->
+  </td>
+
+  <!-- Actions -->
+  <td class="px-4 py-3">
+    <a
+      href="/api/v1/convert/{{id}}/download"
+      class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-indigo-500 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      aria-label="Скачать конвертированный файл {{original_name}}">
+      <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+      </svg>
+      Скачать
+    </a>
+  </td>
+</tr>

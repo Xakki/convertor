@@ -1,0 +1,30 @@
+
+location ~ ^/ping$ {
+    keepalive_timeout 0;
+    access_log off;
+    default_type "text/html";
+    return 200 "pong\n";
+}
+
+location /sq_nginx_status {
+    keepalive_timeout 0;
+    stub_status on;
+    access_log off;
+}
+
+# Static files location
+location ~*^.+\.(svg|jpg|jpeg|gif|png|ico|css|zip|tgz|gz|rar|bz2|doc|xls|exe|pdf|ppt|tar|mid|midi|wav|bmp|rtf|js|swf|woff|woff2|ttf|map|json|webm)$ {
+    include params/static_params;
+}
+
+location ~ ^/apple-touch-icon(.*)\.png$ {
+    default_type image/png;
+    alias /app-back/public/favicon.png;
+}
+
+# deny access to .htaccess files, if Apache's document root
+# concurs with nginx's one
+location ~ /\.(htaccess|htpasswd|.svn|.bzr|.git|gitignore|idea) {
+    access_log off;
+    deny  all;
+}

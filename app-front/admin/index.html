@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Панель администратора Convertor — статистика, пользователи, очереди.">
+  <title>Администратор — Convertor</title>
+  <meta name="robots" content="noindex, nofollow">
+
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2'><path d='M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10'/></svg>">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+  <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <!-- Chart.js — only on admin page -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/auth.js"></script>
+
+  <style>[x-cloak] { display: none !important; }</style>
+</head>
+<body class="min-h-screen bg-slate-900 text-white antialiased" x-data>
+
+  <!-- Auth guard: redirect non-admins -->
+  <div x-init="
+    $nextTick(() => {
+      if (!$store.auth.isAuthenticated || !$store.auth.isAdmin) {
+        window.location.href = '/';
+      }
+    })
+  "></div>
+
+  <!-- Unauthorized message (shown briefly before redirect) -->
+  <div x-show="!$store.auth.isAuthenticated || !$store.auth.isAdmin" x-cloak
+    class="flex min-h-screen items-center justify-center">
+    <div class="text-center">
+      <p class="text-zinc-500">Проверка прав доступа...</p>
+    </div>
+  </div>
+
+  <!-- Admin Panel (only for admins) -->
+  <div x-show="$store.auth.isAuthenticated && $store.auth.isAdmin" x-cloak>
+
+    <!-- Admin Header -->
+    <header class="sticky top-0 z-40 border-b border-zinc-800 bg-slate-900/95 backdrop-blur-sm" role="banner">
+      <div class="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
+        <div class="flex items-center gap-4">
+          <!-- Logo -->
+          <a href="/" class="flex items-center gap-2 text-lg font-bold text-white">
+            <svg class="h-6 w-6 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"/>
+            </svg>
+            Convertor
+          </a>
+          <span class="rounded-full bg-red-500/20 px-2.5 py-0.5 text-xs font-semibold text-red-400">Admin</span>
+        </div>
+
+        <div class="flex items-center gap-4">
+          <span class="text-sm text-zinc-400" x-text="$store.auth.user?.name || 'Admin'"></span>
+          <a href="/" class="text-sm text-zinc-500 hover:text-white transition-colors">← На сайт</a>
+          <button
+            @click="$store.auth.logout(); window.location.href = '/'"
+            class="text-sm text-red-400 hover:text-red-300 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500 rounded">
+            Выйти
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="flex">
+      <!-- Sidebar -->
+      <nav class="hidden w-56 shrink-0 lg:block" aria-label="Навигация администратора">
+        <div class="sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto border-r border-zinc-800 py-6">
+          <ul class="space-y-1 px-3" role="list">
+            <li>
+              <a href="#overview" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-white bg-zinc-800">
+                <svg class="h-4 w-4 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+                </svg>
+                Обзор
+              </a>
+            </li>
+            <li>
+              <a href="#conversions" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+                Конвертации
+              </a>
+            </li>
+            <li>
+              <a href="#queues" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+                </svg>
+                Очереди
+              </a>
+            </li>
+            <li>
+              <a href="#users" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                Пользователи
+              </a>
+            </li>
+          </ul>
+        </div>
+      </nav>
+
+      <!-- Main content -->
+      <main class="flex-1 overflow-auto p-4 sm:p-6 lg:p-8" x-data="adminDashboard()" x-init="init()">
+
+        <!-- Page title -->
+        <div class="flex items-center justify-between">
+          <h1 class="text-2xl font-bold text-white">Панель администратора</h1>
+          <div class="flex items-center gap-2 text-sm text-zinc-500">
+            <div class="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div>
+            Онлайн
+          </div>
+        </div>
+
+        <!-- Section: Stats cards -->
+        <section id="overview" class="mt-8" aria-labelledby="stats-heading">
+          <h2 id="stats-heading" class="sr-only">Статистика</h2>
+
+          <div
+            id="stats-cards"
+            hx-get="/api/v1/admin/stats"
+            hx-trigger="load, every 30s"
+            hx-swap="innerHTML"
+            class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
+            aria-label="Статистика системы">
+
+            <!-- Skeleton -->
+            <template x-for="i in [1,2,3,4]" :key="i">
+              <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-5 animate-pulse">
+                <div class="flex items-center justify-between">
+                  <div class="h-3 w-24 rounded bg-zinc-700"></div>
+                  <div class="h-8 w-8 rounded-lg bg-zinc-700"></div>
+                </div>
+                <div class="mt-4 h-8 w-20 rounded bg-zinc-700"></div>
+                <div class="mt-2 h-3 w-32 rounded bg-zinc-700"></div>
+              </div>
+            </template>
+          </div>
+        </section>
+
+        <!-- Section: Chart -->
+        <section class="mt-8" aria-labelledby="chart-heading">
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+            <div class="flex items-center justify-between">
+              <h2 id="chart-heading" class="font-semibold text-white">Конвертации за 7 дней</h2>
+              <div class="flex gap-2">
+                <span class="flex items-center gap-1.5 text-xs text-zinc-500">
+                  <span class="h-2.5 w-2.5 rounded-full bg-indigo-500"></span>
+                  Обычные
+                </span>
+                <span class="flex items-center gap-1.5 text-xs text-zinc-500">
+                  <span class="h-2.5 w-2.5 rounded-full bg-purple-500"></span>
+                  AI
+                </span>
+              </div>
+            </div>
+            <div class="mt-4 h-64" role="img" aria-label="График конвертаций за последние 7 дней">
+              <canvas id="conversions-chart" aria-label="График конвертаций"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Recent conversions table -->
+        <section id="conversions" class="mt-8" aria-labelledby="recent-heading">
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+            <div class="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <h2 id="recent-heading" class="font-semibold text-white">Последние конвертации</h2>
+              <button
+                hx-get="/api/v1/admin/conversions"
+                hx-target="#admin-conversions-table"
+                hx-swap="innerHTML"
+                class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
+                aria-label="Обновить таблицу конвертаций">
+                Обновить
+              </button>
+            </div>
+
+            <div
+              id="admin-conversions-table"
+              hx-get="/api/v1/admin/conversions"
+              hx-trigger="load"
+              hx-swap="innerHTML"
+              aria-live="polite">
+              <!-- Loading state -->
+              <div class="p-5 space-y-2">
+                <template x-for="i in [1,2,3,4,5]" :key="i">
+                  <div class="flex items-center gap-4 rounded-lg bg-zinc-800/50 px-4 py-3 animate-pulse">
+                    <div class="h-3 w-20 rounded bg-zinc-700"></div>
+                    <div class="h-3 w-8 rounded bg-zinc-700"></div>
+                    <div class="h-3 flex-1 rounded bg-zinc-700"></div>
+                    <div class="h-3 w-16 rounded bg-zinc-700"></div>
+                    <div class="h-3 w-16 rounded bg-zinc-700"></div>
+                    <div class="h-5 w-14 rounded-full bg-zinc-700"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Queues -->
+        <section id="queues" class="mt-8" aria-labelledby="queues-heading">
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+            <div class="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <h2 id="queues-heading" class="font-semibold text-white">Очереди воркеров</h2>
+              <div
+                hx-get="/api/v1/admin/queues"
+                hx-trigger="every 10s"
+                hx-target="#queues-table"
+                hx-swap="innerHTML">
+              </div>
+              <span class="text-xs text-zinc-600">Обновляется каждые 10 сек</span>
+            </div>
+
+            <div
+              id="queues-table"
+              hx-get="/api/v1/admin/queues"
+              hx-trigger="load"
+              hx-swap="innerHTML"
+              class="overflow-x-auto"
+              aria-live="polite"
+              aria-label="Статус очередей воркеров">
+
+              <!-- Skeleton -->
+              <table class="w-full" role="table">
+                <thead>
+                  <tr class="border-b border-zinc-800 bg-zinc-800/30">
+                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-zinc-500" scope="col">Воркер</th>
+                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-zinc-500" scope="col">Очередь</th>
+                    <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-zinc-500" scope="col">Задач</th>
+                    <th class="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wider text-zinc-500" scope="col">Статус</th>
+                    <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-zinc-500" scope="col">Обработано</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-zinc-800">
+                  <template x-for="w in ['libreoffice', 'ffmpeg', 'image', 'ai', 'data']" :key="w">
+                    <tr class="hover:bg-zinc-800/30 transition-colors animate-pulse">
+                      <td class="px-5 py-4"><div class="h-3 w-28 rounded bg-zinc-700"></div></td>
+                      <td class="px-5 py-4"><div class="h-3 w-20 rounded bg-zinc-700"></div></td>
+                      <td class="px-5 py-4 text-right"><div class="ml-auto h-3 w-8 rounded bg-zinc-700"></div></td>
+                      <td class="px-5 py-4 text-center"><div class="mx-auto h-5 w-16 rounded-full bg-zinc-700"></div></td>
+                      <td class="px-5 py-4 text-right"><div class="ml-auto h-3 w-12 rounded bg-zinc-700"></div></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Users (simplified) -->
+        <section id="users" class="mt-8 mb-8" aria-labelledby="users-heading">
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+            <div class="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <h2 id="users-heading" class="font-semibold text-white">Пользователи</h2>
+              <!-- Search -->
+              <div class="flex items-center gap-2">
+                <input
+                  type="search"
+                  placeholder="Поиск..."
+                  hx-get="/api/v1/admin/users"
+                  hx-trigger="keyup changed delay:500ms"
+                  hx-target="#users-table"
+                  hx-include="this"
+                  name="q"
+                  class="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-white placeholder-zinc-600 focus:border-indigo-500 focus:outline-none w-40"
+                  aria-label="Поиск пользователей">
+              </div>
+            </div>
+
+            <div
+              id="users-table"
+              hx-get="/api/v1/admin/users"
+              hx-trigger="load"
+              hx-swap="innerHTML"
+              aria-live="polite">
+              <!-- Loading skeleton -->
+              <div class="p-5 space-y-2">
+                <template x-for="i in [1,2,3]" :key="i">
+                  <div class="flex items-center gap-4 rounded-lg bg-zinc-800/50 px-4 py-3 animate-pulse">
+                    <div class="h-8 w-8 rounded-full bg-zinc-700"></div>
+                    <div class="flex-1">
+                      <div class="h-3 w-32 rounded bg-zinc-700"></div>
+                      <div class="mt-1 h-2.5 w-48 rounded bg-zinc-700"></div>
+                    </div>
+                    <div class="h-5 w-14 rounded-full bg-zinc-700"></div>
+                    <div class="h-5 w-16 rounded-full bg-zinc-700"></div>
+                    <div class="h-3 w-20 rounded bg-zinc-700"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <script>
+    function adminDashboard() {
+      return {
+        chart: null,
+
+        async init() {
+          // Wait for auth to be ready
+          await this.$nextTick();
+          if (!Alpine.store('auth').isAdmin) return;
+
+          // Load stats and then draw chart
+          await this.loadChart();
+
+          // Listen for HTMX stats load to update chart
+          document.addEventListener('htmx:afterSwap', (e) => {
+            if (e.detail.target.id === 'stats-cards') {
+              this.loadChart();
+            }
+          });
+        },
+
+        async loadChart() {
+          try {
+            const token = localStorage.getItem('jwt_token');
+            const response = await fetch('/api/v1/admin/stats', {
+              headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+            });
+            if (!response.ok) return;
+
+            const data = await response.json();
+            this.renderChart(data.chart || this.getMockChartData());
+          } catch (e) {
+            this.renderChart(this.getMockChartData());
+          }
+        },
+
+        getMockChartData() {
+          const days = [];
+          const now = new Date();
+          for (let i = 6; i >= 0; i--) {
+            const d = new Date(now);
+            d.setDate(d.getDate() - i);
+            days.push(d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }));
+          }
+          return {
+            labels: days,
+            regular: [12, 19, 8, 25, 17, 30, 22],
+            ai: [3, 5, 2, 8, 4, 9, 6],
+          };
+        },
+
+        renderChart(data) {
+          const canvas = document.getElementById('conversions-chart');
+          if (!canvas) return;
+
+          if (this.chart) {
+            this.chart.destroy();
+          }
+
+          const ctx = canvas.getContext('2d');
+          this.chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: data.labels,
+              datasets: [
+                {
+                  label: 'Обычные конвертации',
+                  data: data.regular,
+                  borderColor: '#6366f1',
+                  backgroundColor: 'rgba(99,102,241,0.1)',
+                  tension: 0.4,
+                  fill: true,
+                  pointBackgroundColor: '#6366f1',
+                  pointBorderColor: '#6366f1',
+                  pointRadius: 4,
+                },
+                {
+                  label: 'AI конвертации',
+                  data: data.ai,
+                  borderColor: '#a855f7',
+                  backgroundColor: 'rgba(168,85,247,0.1)',
+                  tension: 0.4,
+                  fill: true,
+                  pointBackgroundColor: '#a855f7',
+                  pointBorderColor: '#a855f7',
+                  pointRadius: 4,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              interaction: {
+                intersect: false,
+                mode: 'index',
+              },
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  backgroundColor: '#18181b',
+                  borderColor: '#3f3f46',
+                  borderWidth: 1,
+                  titleColor: '#a1a1aa',
+                  bodyColor: '#ffffff',
+                  padding: 12,
+                },
+              },
+              scales: {
+                x: {
+                  grid: { color: '#27272a' },
+                  ticks: { color: '#71717a' },
+                },
+                y: {
+                  grid: { color: '#27272a' },
+                  ticks: { color: '#71717a' },
+                  beginAtZero: true,
+                },
+              },
+            },
+          });
+        },
+      };
+    }
+  </script>
+
+</body>
+</html>

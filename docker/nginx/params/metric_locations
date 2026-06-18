@@ -1,0 +1,12 @@
+
+location /sq_nginx_exporter {
+    proxy_pass http://nginx-exporter:9113/metrics;
+}
+
+location /sq_mysqld_exporter {
+    proxy_pass http://mysqld-exporter:9104/metrics;
+}
+
+location /sq_fluent_exporter {
+    proxy_pass http://fluent-bit:2021/metrics;
+}
