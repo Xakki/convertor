@@ -20,6 +20,9 @@ Phase 3 (AI, not started):
 - faster-whisper STT model setup + test.
 - Coqui/local TTS setup + test.
 - AI conversion quota tracking in QuotaService.
+- **worker-ai egress blocker (found in review):** `ai.Dockerfile` does NOT pre-bake the Whisper model — it downloads from HuggingFace on first run, but `worker-ai` sits on the `backend` network which is `internal: true` (no egress) → download fails silently (healthcheck only does `import faster_whisper`). Fix: pre-bake the model into the image, or grant worker-ai controlled egress.
+
+Note: depends on [[fix-queue-php-worker-mismatch]] — until the queue contract is fixed, no worker (incl. these) actually receives jobs.
 
 **Impact:**
 Core product breadth (the format matrix in plan.md) is unverified; advertised conversions may not work.
