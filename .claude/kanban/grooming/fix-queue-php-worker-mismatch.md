@@ -37,16 +37,17 @@ Run a DESIGN phase producing a concrete architecture + decision points, then bre
 - libreoffice runs as a queue consumer.
 - Covered by e2e test (ties into [[smoke-run-verify]], [[worker-conversion-tests]]).
 
-**Open questions (DESIGN phase — to resolve with user):**
-- Capability routing under overlap: one Messenger stream + workers filter by declared caps, or one stream per capability/category, or a routing key? How does Messenger group/consumer semantics map to "any worker that can handle it"?
-- Fault-tolerance: Messenger Streams consumer-group ack/claim (XACK/XAUTOCLAIM) for crash recovery — retry limits, dead-letter? How does the Redis status store stay consistent with stream redelivery?
-- Redis status schema: key layout, what's stored (state, output S3 key, error), TTL, and how PHP polling reads it (direct Redis read vs sync to MariaDB `conversions` table that already exists).
-- S3/MinIO: reuse the storage work in [[docs-prod-polish]] (S3 result sink) — sequence/couple them. Local-dev MinIO vs shared infra?
-- libreoffice conversion to queue: keep soffice profile-isolation per job; capability list (doc/docx/odt/pdf/html/epub→docx/txt/md).
-- Multi-worker launch/scaling — explicitly deferred; capture as a follow-up card.
+**Design doc (canonical plan):** `docs/queue-redesign-design.md` — full architecture + phased cards A–N. This card is the epic tracker; phases are NOT exploded into separate files.
 
 **Decisions:**
 - Transport = Messenger Redis Streams + JSON serializer; workers consume Streams (user, 2026-06-19).
-- Results: files→S3/MinIO, status→Redis, fault-tolerant (user, 2026-06-19).
-- libreoffice becomes a queue consumer (user, 2026-06-19).
-- Capability-declaring workers, overlapping caps, multiple instances; launch strategy deferred (user, 2026-06-19).
+- One stream per routing-key (`conv.<key>`, key=`isAi?ai:category`, markup→document), group `convertor`; PHP routes via `TransportNamesStamp`.
+- Fault-tolerance: XGROUP/XREADGROUP/XACK/XAUTOCLAIM, max_retries=3, idle=5min, DLQ `conv.dead`, idempotent ordered commit (S3→Redis status→XACK).
+- **Status/history:** workers write only to Redis; **PHP consumes the result/ready queue and persists to MariaDB itself** (DB authoritative for history/download; Redis = live status, TTL 24h) (user).
+- **S3:** outputs → shared **`apis3.variantgood.com`** MinIO in dev AND prod (no local MinIO container); inputs stay on `/shared-files` (input→S3 is [[docs-prod-polish]]) (user).
+- **Registry:** drop archives now (follow-up later); expand libreoffice worker to advertised targets; fix AI routing `isAi→ai` + add `subType` to message (user).
+- Download = authenticated PHP proxy; capability-declaring workers, overlap via shared group, multi-instance; launch strategy deferred (follow-up card).
+
+**Spin-off follow-ups (not in this epic):**
+- Archive (zip/tar) worker — re-add to registry when implemented.
+- Multi-worker launch/scaling strategy.
