@@ -10,7 +10,8 @@ namespace App\Service\Queue;
  * `dbindex` query param to stay consistent with the Messenger transport — the
  * DSN *path* there means stream/group, not the db. See docs/queue-contract.md §1.
  */
-final class RedisConnectionFactory
+// Non-final: the result-consumer test doubles this to inject a mock \Redis.
+class RedisConnectionFactory
 {
     private ?\Redis $connection = null;
 

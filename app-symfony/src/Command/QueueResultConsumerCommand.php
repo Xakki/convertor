@@ -6,6 +6,8 @@ namespace App\Command;
 
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Queue\RedisConnectionFactory;
+use Doctrine\ORM\EntityManagerInterface;
+use Doctrine\Persistence\ManagerRegistry;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -19,6 +21,11 @@ use Symfony\Component\Console\Output\OutputInterface;
  * holding the raw §5 result body (NOT a Messenger envelope), so we decode once.
  * Each result is persisted to MariaDB then XACK'd. Crash/claim recovery
  * (XAUTOCLAIM, delivery counts) is intentionally deferred to Phase 5 (card M).
+ *
+ * Poison-message isolation: any per-message error routes the entry to the dead-
+ * letter stream `conv.result.dead` and ACKs the original so it stops being
+ * redelivered. If the error closed the EntityManager, resetManager() restores a
+ * fresh EM for subsequent messages.
  */
 #[AsCommand(
     name: 'app:queue:result-consumer',
@@ -27,11 +34,13 @@ use Symfony\Component\Console\Output\OutputInterface;
 final class QueueResultConsumerCommand extends Command
 {
     private const STREAM = 'conv.result';
+    private const STREAM_DLQ = 'conv.result.dead';
     private const GROUP = 'convertor';
 
     public function __construct(
         private readonly RedisConnectionFactory $redisFactory,
         private readonly ConversionResultPersister $persister,
+        private readonly ManagerRegistry $registry,
         private readonly LoggerInterface $logger,
     ) {
         parent::__construct();
@@ -67,11 +76,13 @@ final class QueueResultConsumerCommand extends Command
                     $this->handle($fields);
                     $redis->xAck(self::STREAM, self::GROUP, [$id]);
                 } catch (\Throwable $e) {
-                    // Leave the entry pending; Phase 5 adds claim-based recovery.
                     $this->logger->error('Failed to persist result event', [
                         'stream_id' => $id,
                         'error'     => $e->getMessage(),
                     ]);
+                    $this->sendToDlq($redis, $id, $fields);
+                    $redis->xAck(self::STREAM, self::GROUP, [$id]);
+                    $this->resetEmIfClosed();
                 }
             }
         }
@@ -105,5 +116,30 @@ final class QueueResultConsumerCommand extends Command
         $body = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
 
         $this->persister->persist($body);
+    }
+
+    /**
+     * @param array<string, string> $fields
+     */
+    private function sendToDlq(\Redis $redis, string $originalId, array $fields): void
+    {
+        try {
+            $redis->xAdd(self::STREAM_DLQ, '*', array_merge($fields, ['_original_id' => $originalId]));
+        } catch (\Throwable $e) {
+            $this->logger->critical('Failed to write to DLQ', [
+                'dlq_stream'  => self::STREAM_DLQ,
+                'original_id' => $originalId,
+                'error'       => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function resetEmIfClosed(): void
+    {
+        $em = $this->registry->getManager();
+        if ($em instanceof EntityManagerInterface && !$em->isOpen()) {
+            $this->registry->resetManager();
+            $this->logger->info('EntityManager reset after close', ['stream' => self::STREAM]);
+        }
     }
 }

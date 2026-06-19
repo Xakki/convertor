@@ -36,3 +36,7 @@ services:
     App\Service\Storage\S3Storage:
         arguments:
             $bucketPrefix: '%env(S3_BUCKET_PREFIX)%'
+
+    App\Service\Queue\ConversionResultPersister:
+        arguments:
+            $resultsBucket: '%env(S3_BUCKET_PREFIX)%-results'

@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+import redis
 
 from workers.common.stream_consumer import (
     _GROUP,
@@ -84,6 +85,7 @@ class _StubWorker(StreamConsumerBase):
         self._consumer = "test-worker-1"
         self._running = True
         self._redis = mock_redis
+        self._redis_blocking = mock_redis  # override per-test for blocking-loop tests
 
     def convert(self, job: dict) -> tuple[str, str, str]:
         raise NotImplementedError("should not be called in these tests")
@@ -244,3 +246,61 @@ def test_dlq_after_max_retries():
     dead_call_args = [c for c in mock_redis.xadd.call_args_list if c.args[0] == "conv.dead"]
     assert len(dead_call_args) == 1, "should emit one entry to conv.dead"
     convert_spy.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# Main loop robustness — blocking xreadgroup transient errors
+# --------------------------------------------------------------------------
+
+def test_main_loop_swallows_timeout_error_and_continues():
+    """TimeoutError from blocking xreadgroup must not propagate; loop iterates again."""
+    mock_redis = MagicMock()
+    mock_redis_blocking = MagicMock()
+
+    worker = _StubWorker(mock_redis)
+    worker._redis_blocking = mock_redis_blocking
+    worker._reclaim_stuck = MagicMock()  # bypass PEL reclaim in loop
+
+    iterations = [0]
+
+    def xreadgroup_side_effect(*args, **kwargs):
+        iterations[0] += 1
+        if iterations[0] == 1:
+            raise redis.exceptions.TimeoutError("Timeout reading from socket")
+        # Second call: stop the loop and return empty (no messages)
+        worker._running = False
+        return []
+
+    mock_redis_blocking.xreadgroup.side_effect = xreadgroup_side_effect
+
+    # Must return normally — TimeoutError is swallowed, not re-raised
+    worker._main_loop()
+
+    assert iterations[0] == 2, "loop must have attempted xreadgroup twice"
+    assert mock_redis_blocking.xreadgroup.call_count == 2
+
+
+def test_main_loop_swallows_connection_error_and_continues():
+    """ConnectionError (transient blip) from blocking xreadgroup must not propagate."""
+    mock_redis = MagicMock()
+    mock_redis_blocking = MagicMock()
+
+    worker = _StubWorker(mock_redis)
+    worker._redis_blocking = mock_redis_blocking
+    worker._reclaim_stuck = MagicMock()
+
+    iterations = [0]
+
+    def xreadgroup_side_effect(*args, **kwargs):
+        iterations[0] += 1
+        if iterations[0] == 1:
+            raise redis.exceptions.ConnectionError("Connection reset by peer")
+        worker._running = False
+        return []
+
+    mock_redis_blocking.xreadgroup.side_effect = xreadgroup_side_effect
+
+    worker._main_loop()
+
+    assert iterations[0] == 2
+    assert mock_redis_blocking.xreadgroup.call_count == 2

@@ -99,6 +99,7 @@ class StreamConsumerBase(ABC):
         self._consumer = _consumer_name()
         self._running = True
         self._redis = self._connect()
+        self._redis_blocking = self._connect_blocking()
         self._setup_streams()
         self._setup_signals()
         logger.info(
@@ -146,6 +147,18 @@ class StreamConsumerBase(ABC):
             decode_responses=True,
         )
 
+    def _connect_blocking(self) -> redis.Redis:
+        # socket_timeout=None is mandatory: a finite value shorter than
+        # CONSUMER_BLOCK_MS causes TimeoutError before BLOCK returns empty.
+        return redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=REDIS_DB,
+            password=_REDIS_PASSWORD,
+            decode_responses=True,
+            socket_timeout=None,
+        )
+
     def _setup_streams(self) -> None:
         for key in self.CAPABILITIES.get("routing_keys", []):
             stream = f"conv.{key}"
@@ -186,13 +199,20 @@ class StreamConsumerBase(ABC):
                 self._reclaim_stuck()
                 last_reclaim_ms = now
 
-            results = self._redis.xreadgroup(
-                groupname=_GROUP,
-                consumername=self._consumer,
-                streams=streams,
-                count=_READ_COUNT,
-                block=_BLOCK_MS,
-            )
+            try:
+                results = self._redis_blocking.xreadgroup(
+                    groupname=_GROUP,
+                    consumername=self._consumer,
+                    streams=streams,
+                    count=_READ_COUNT,
+                    block=_BLOCK_MS,
+                )
+            except (redis.exceptions.TimeoutError, redis.exceptions.ConnectionError) as exc:
+                logger.info(
+                    "transient error on blocking xreadgroup — continuing",
+                    extra={"error": str(exc)},
+                )
+                continue
             if not results:
                 continue
 
