@@ -62,6 +62,9 @@ SaaS-сервис конвертации файлов всех форматов.
 - Shared volume: /shared-files/ монтируется во все сервисы
 - KeyDB — единственный instance, несколько баз (0: cache, 1: sessions, 2: queues)
 
+## Secrets / env
+- **Секреты — только в `.env.local`** (gitignored). Makefile делает `include .env` + `-include .env.local` + `export`, поэтому значения из `.env.local` уходят в окружение и compose подхватывает их через `${VAR}`. В трекаемых `.env` / `.env_dist` секреты держим ПУСТЫМИ (плейсхолдеры). Никогда не коммить реальные ключи.
+
 ## Frontend Rules
 - Никаких npm install в проде — CDN для Alpine.js и HTMX, Tailwind через CDN play
 - Для сборки (если нужна): Vite без тяжёлых зависимостей
