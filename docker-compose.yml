@@ -80,6 +80,8 @@ services:
             - ./docker/php/${DOCKER_ENV}/zz-docker.conf:/usr/local/etc/php-fpm.d/zz-docker.conf:ro
             - ./docker/php/supervisor.app.ini:/etc/supervisor.d/supervisor.app.ini:ro
             - php-socket:/run/sock
+            # uploads land here (SHARE_DIR); workers read the same volume
+            - shared-files:/shared-files
         command: "composer deploy"
         environment:
             <<: *_app_env
@@ -105,6 +107,7 @@ services:
             - ./app-symfony:/app-symfony
             - ./docker/php/${DOCKER_ENV}/php-cron.ini:/usr/local/etc/php/conf.d/app.ini:ro
             - ./docker/php/supervisor.app.ini:/etc/supervisor.d/supervisor.app.ini:ro
+            - shared-files:/shared-files
         environment:
             <<: *_app_env
             ENABLED_SUPERVISORD: "1"

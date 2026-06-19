@@ -41,13 +41,19 @@ class ConversionManager
         $isAi = $this->registry->isAi($fromFormat, $toFormat);
         $this->quotaService->checkAndDecrement($user, $isAi);
 
+        // Read metadata BEFORE move() — move() relocates the temp upload, after
+        // which $file->getMimeType()/getSize() would fail ("file does not exist").
+        $originalName = $file->getClientOriginalName() ?: 'upload';
+        $mimeType = $file->getMimeType() ?? 'application/octet-stream';
+        $sizeBytes = $file->getSize();
+
         $storagePath = $this->storeUploadedFile($file);
 
         $inputFile = new FileStorage();
-        $inputFile->setOriginalName($file->getClientOriginalName() ?: 'upload');
+        $inputFile->setOriginalName($originalName);
         $inputFile->setStoragePath($storagePath);
-        $inputFile->setMimeType($file->getMimeType() ?? 'application/octet-stream');
-        $inputFile->setSizeBytes($file->getSize());
+        $inputFile->setMimeType($mimeType);
+        $inputFile->setSizeBytes($sizeBytes);
         $inputFile->setExpiresAt(new \DateTimeImmutable('+48 hours'));
 
         $this->em->persist($inputFile);
