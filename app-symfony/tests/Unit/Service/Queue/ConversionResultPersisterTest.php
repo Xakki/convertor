@@ -21,7 +21,7 @@ final class ConversionResultPersisterTest extends TestCase
 
     private function makeRegistry(EntityManagerInterface $em): ManagerRegistry
     {
-        $registry = $this->createMock(ManagerRegistry::class);
+        $registry = $this->createStub(ManagerRegistry::class);
         $registry->method('getManager')->willReturn($em);
 
         return $registry;
@@ -43,7 +43,7 @@ final class ConversionResultPersisterTest extends TestCase
 
     public function testMissingConversionIdThrows(): void
     {
-        $em = $this->createMock(EntityManagerInterface::class);
+        $em = $this->createStub(EntityManagerInterface::class);
         $persister = $this->makePersister($this->makeRegistry($em));
 
         $this->expectException(\RuntimeException::class);
@@ -54,7 +54,7 @@ final class ConversionResultPersisterTest extends TestCase
 
     public function testIdempotencySkipsTerminalConversion(): void
     {
-        $conversion = $this->createMock(Conversion::class);
+        $conversion = $this->createStub(Conversion::class);
         $conversion->method('getStatus')->willReturn(ConversionStatus::Completed);
 
         $em = $this->createMock(EntityManagerInterface::class);
@@ -69,7 +69,7 @@ final class ConversionResultPersisterTest extends TestCase
 
     public function testEmIsObtainedFromRegistryOnEachCall(): void
     {
-        $em = $this->createMock(EntityManagerInterface::class);
+        $em = $this->createStub(EntityManagerInterface::class);
         $em->method('find')->willReturn(null);
 
         $registry = $this->createMock(ManagerRegistry::class);

@@ -30,12 +30,12 @@ final class QueueResultConsumerCommandTest extends TestCase
     {
         // -- Entities / EMs -------------------------------------------------------
 
-        // Reusable non-terminal conversion mock for both messages.
-        $conversion = $this->createMock(Conversion::class);
+        // Reusable non-terminal conversion stub for both messages.
+        $conversion = $this->createStub(Conversion::class);
         $conversion->method('getStatus')->willReturn(ConversionStatus::Processing);
 
-        // em1: used for message 1. find() succeeds once; flush() throws → EM closes.
-        $em1 = $this->createMock(EntityManagerInterface::class);
+        // em1: find() succeeds once; flush() throws → EM closes.
+        $em1 = $this->createStub(EntityManagerInterface::class);
         $findCalls = 0;
         $em1->method('find')->willReturnCallback(function () use ($conversion, &$findCalls) {
             if (++$findCalls > 1) {
@@ -48,10 +48,10 @@ final class QueueResultConsumerCommandTest extends TestCase
         $em1->method('flush')->willThrowException(new \RuntimeException('DB connection lost'));
         $em1->method('isOpen')->willReturn(false);
 
-        // em2: returned after resetManager(). find() + flush() both succeed.
-        $em2 = $this->createMock(EntityManagerInterface::class);
+        // em2: returned after resetManager(). find() + flush() both succeed (void, no willReturn).
+        $em2 = $this->createStub(EntityManagerInterface::class);
         $em2->method('find')->willReturn($conversion);
-        $em2->method('isOpen')->willReturn(true);
+        // flush() is void — no willReturn; stub returns null by default, which is correct.
 
         // -- Registry -------------------------------------------------------------
         // Calls: 1 (persist msg1) → em1, 2 (resetEmIfClosed check) → em1 (isOpen=false → reset),
@@ -100,9 +100,18 @@ final class QueueResultConsumerCommandTest extends TestCase
                 $this->callback(fn (array $f) => ($f['_original_id'] ?? '') === '1-0'),
             );
 
-        // -- Factory --------------------------------------------------------------
-        $factory = $this->createMock(RedisConnectionFactory::class);
-        $factory->method('create')->willReturn($redis);
+        // -- Factory (anonymous subclass — avoids mocking a non-final class unnecessarily) --
+        $factory = new class ($redis) extends RedisConnectionFactory {
+            public function __construct(private \Redis $mockRedis)
+            {
+                parent::__construct('redis://localhost:6379?dbindex=0');
+            }
+
+            public function create(): \Redis
+            {
+                return $this->mockRedis;
+            }
+        };
 
         // -- Run ------------------------------------------------------------------
         $command = new QueueResultConsumerCommand($factory, $persister, $registry, new NullLogger());
