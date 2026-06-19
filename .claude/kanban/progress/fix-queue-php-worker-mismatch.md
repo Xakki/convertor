@@ -51,3 +51,27 @@ Run a DESIGN phase producing a concrete architecture + decision points, then bre
 **Spin-off follow-ups (not in this epic):**
 - Archive (zip/tar) worker — re-add to registry when implemented.
 - Multi-worker launch/scaling strategy.
+
+---
+
+## Execution Log
+
+### Phase 0 — DONE (2026-06-19, commit `1bedcef`)
+Scope per user: **"Только Phase 0 пока"** — ship the contract foundation only; phases 1–6 deferred to a later session.
+
+Delivered (cards A + B):
+- `docs/queue-contract.md` (new) — canonical PHP⇄Python wire contract: Messenger Redis stream entry (single field `message` = JSON `{body,headers}`, body double-encoded), camelCase job body, Redis status hash `conv:status:{id}`, result event `conversions_result`. Phase-0 = single stream `conversions`; per-key `conv.<key>` naming documented as the Phase-1 target.
+- `ConversionMessage` DTO extended: `outputFormat`→`targetFormat`; added `sourceFormat`, `isAi`, `subType`, `options`.
+- `ConversionManager::dispatch()` populates all new fields from entity accessors; `resolveSubType()` derives ocr/stt/tts (null for plain formats).
+- `messenger.yaml` — both transports use `serializer: messenger.transport.symfony_serializer` (JSON, Python-parseable).
+- `docker-compose.yml` — 5 workers' env `REDIS_QUEUE_DB`→`REDIS_DB` (value `${REDIS_QUEUE_DB:-2}`), matching what `base_worker.py` reads; aligned to PHP `REDIS_DSN ?dbindex=2`.
+
+Review: **APPROVE-WITH-NITS** (reviewer). No blockers. Nits all forward-looking/stylistic (final readonly class; result-stream envelope shape to pin in Phase 1; redundant explicit `options: []`).
+
+**Important — not end-to-end yet:** Phase 0 ships only the *producer* + contract. Python workers still consume via Redis **lists**, not the stream, so conversions do NOT flow until the worker stream-consumer switch (Phase 2/4). Expected per scope.
+
+Follow-up found during Phase 0 (→ belongs to [[fix-configs-working-state]] or a config card, NOT a Phase 0 blocker):
+- `REDIS_DSN` (and `DATABASE_URL`) are referenced via `%env()%` in Symfony config but defined **only** in the gitignored `app-symfony/.env`. No tracked template (`app-symfony/.env.dist`) provides them → a fresh checkout has no Symfony env defaults. Root cause: the whole `app-symfony/.env` was gitignored because a live Telegram token was placed there instead of `.env.local`. Clean fix: move secrets to `.env.local`, commit `app-symfony/.env` (or `.env.dist`) with non-secret defaults incl. `REDIS_DSN=redis://keydb:6379?dbindex=2`.
+
+### Phases 1–6 — DEFERRED (later session)
+Per `docs/queue-redesign-design.md` §"Phased cards": C/D (Phase 1), E/F (Phase 2), G (Phase 3), H–L (Phase 4), M (Phase 5), N (Phase 6). Card stays in `progress/` (epic paused after Phase 0).
