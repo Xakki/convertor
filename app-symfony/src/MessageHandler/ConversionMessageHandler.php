@@ -63,10 +63,10 @@ class ConversionMessageHandler
 
             $outputFile = new FileStorage();
             $outputFile->setOriginalName(
-                pathinfo($message->inputPath, PATHINFO_FILENAME) . '.' . $message->outputFormat
+                pathinfo($message->inputPath, PATHINFO_FILENAME) . '.' . $message->targetFormat
             );
             $outputFile->setStoragePath($outputPath);
-            $outputFile->setMimeType($this->guessMime($message->outputFormat));
+            $outputFile->setMimeType($this->guessMime($message->targetFormat));
             $outputFile->setSizeBytes(file_exists($outputPath) ? filesize($outputPath) : 0);
             $outputFile->setExpiresAt(new \DateTimeImmutable('+24 hours'));
 
@@ -99,7 +99,7 @@ class ConversionMessageHandler
         $response = $this->httpClient->request('POST', rtrim($workerUrl, '/') . '/convert', [
             'json' => [
                 'input_path'    => $message->inputPath,
-                'output_format' => $message->outputFormat,
+                'output_format' => $message->targetFormat,
                 'category'      => $message->category,
                 'conversion_id' => $message->conversionId,
             ],

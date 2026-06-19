@@ -5,6 +5,9 @@ framework:
         transports:
             async:
                 dsn: '%env(REDIS_DSN)%'
+                # JSON envelope so Python workers can parse the stream entry.
+                # Stream-entry/job-body shape pinned in docs/queue-contract.md.
+                serializer: messenger.transport.symfony_serializer
                 options:
                     stream: conversions
                     group: convertor
@@ -16,6 +19,7 @@ framework:
 
             failed:
                 dsn: '%env(REDIS_DSN)%'
+                serializer: messenger.transport.symfony_serializer
                 options:
                     stream: conversions_failed
 

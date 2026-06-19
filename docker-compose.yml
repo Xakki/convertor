@@ -252,7 +252,9 @@ services:
             TZ: ${TZ}
             REDIS_HOST: ${REDIS_HOST:-keydb}
             REDIS_PASSWORD: ${REDIS_PASSWORD}
-            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
+            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
+            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             SHARE_DIR: ${SHARE_DIR:-/shared-files}
             LIBREOFFICE_URL: http://libreoffice:6000
         depends_on:
@@ -285,7 +287,9 @@ services:
             TZ: ${TZ}
             REDIS_HOST: ${REDIS_HOST:-keydb}
             REDIS_PASSWORD: ${REDIS_PASSWORD}
-            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
+            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
+            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.ffmpeg.worker
         depends_on:
@@ -316,7 +320,9 @@ services:
             TZ: ${TZ}
             REDIS_HOST: ${REDIS_HOST:-keydb}
             REDIS_PASSWORD: ${REDIS_PASSWORD}
-            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
+            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
+            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.image.worker
         depends_on:
@@ -348,7 +354,9 @@ services:
             TZ: ${TZ}
             REDIS_HOST: ${REDIS_HOST:-keydb}
             REDIS_PASSWORD: ${REDIS_PASSWORD}
-            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
+            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
+            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.ai.worker
             WHISPER_MODEL: ${WHISPER_MODEL:-base}
@@ -380,7 +388,9 @@ services:
             TZ: ${TZ}
             REDIS_HOST: ${REDIS_HOST:-keydb}
             REDIS_PASSWORD: ${REDIS_PASSWORD}
-            REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
+            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
+            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.data.worker
         depends_on:

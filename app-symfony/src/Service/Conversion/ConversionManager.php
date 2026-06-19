@@ -65,12 +65,35 @@ class ConversionManager
 
     public function dispatch(Conversion $conversion): void
     {
+        $sourceFormat = $conversion->getFromFormat();
+
         $this->bus->dispatch(new ConversionMessage(
             conversionId: $conversion->getId(),
             inputPath: $conversion->getInputFile()->getStoragePath(),
-            outputFormat: $conversion->getToFormat(),
+            sourceFormat: $sourceFormat,
+            targetFormat: $conversion->getToFormat(),
             category: $conversion->getCategory()->value,
+            isAi: $conversion->isAi(),
+            subType: $this->resolveSubType($sourceFormat),
+            options: [],
         ));
+    }
+
+    /**
+     * Derive the AI sub-type (ocr/stt/tts) from the registry's virtual source
+     * key suffix (e.g. "mp3_stt"). Returns null for plain formats. Real AI
+     * sub-type population is the deferred AI-routing gap, not Phase 0.
+     */
+    private function resolveSubType(string $sourceFormat): ?string
+    {
+        $pos = strrpos($sourceFormat, '_');
+        if ($pos === false) {
+            return null;
+        }
+
+        $suffix = substr($sourceFormat, $pos + 1);
+
+        return in_array($suffix, ['ocr', 'stt', 'tts'], true) ? $suffix : null;
     }
 
     public function getStatus(int $id, User $user): ConversionResultDTO
