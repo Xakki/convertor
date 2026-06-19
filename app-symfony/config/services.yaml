@@ -12,15 +12,6 @@ services:
             - '../src/Entity/'
             - '../src/Kernel.php'
 
-    App\MessageHandler\ConversionMessageHandler:
-        arguments:
-            $workerLibreofficeUrl: '%env(WORKER_LIBREOFFICE_URL)%'
-            $workerFfmpegUrl: '%env(WORKER_FFMPEG_URL)%'
-            $workerImageUrl: '%env(WORKER_IMAGE_URL)%'
-            $workerAiUrl: '%env(WORKER_AI_URL)%'
-            $workerDataUrl: '%env(WORKER_DATA_URL)%'
-            $shareDir: '%env(SHARE_DIR)%'
-
     App\Service\Auth\TelegramAuthService:
         arguments:
             $telegramBotToken: '%env(TELEGRAM_BOT_TOKEN)%'
@@ -28,3 +19,20 @@ services:
     App\Service\Conversion\ConversionManager:
         arguments:
             $shareDir: '%env(SHARE_DIR)%'
+
+    App\Service\Queue\RedisConnectionFactory:
+        arguments:
+            $dsn: '%env(REDIS_DSN)%'
+
+    AsyncAws\S3\S3Client:
+        arguments:
+            $configuration:
+                endpoint: '%env(S3_ENDPOINT)%'
+                accessKeyId: '%env(S3_KEY)%'
+                accessKeySecret: '%env(S3_SECRET)%'
+                region: '%env(S3_REGION)%'
+                pathStyleEndpoint: '%env(bool:S3_USE_PATH_STYLE)%'
+
+    App\Service\Storage\S3Storage:
+        arguments:
+            $bucketPrefix: '%env(S3_BUCKET_PREFIX)%'

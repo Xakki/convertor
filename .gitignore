@@ -10,6 +10,7 @@ app-symfony/var/
 app-symfony/.env.local
 app-symfony/config/jwt/
 *.log
+*.pid
 docker/mysqld_exporter.cnf
 __pycache__/
 *.pyc

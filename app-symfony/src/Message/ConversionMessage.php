@@ -9,11 +9,12 @@ namespace App\Message;
  * consumed by the Python workers. Field names are camelCase end-to-end and
  * pinned in docs/queue-contract.md — do NOT rename without updating that doc
  * and the worker-side decoders.
- *
- * @param array<string, mixed> $options
  */
 class ConversionMessage
 {
+    /**
+     * @param array<string, mixed> $options
+     */
     public function __construct(
         public readonly int $conversionId,
         public readonly string $inputPath,

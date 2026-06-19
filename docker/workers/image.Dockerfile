@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir \
     aiohttp \
     structlog \
     Pillow \
-    pytesseract
+    pytesseract \
+    boto3
 
 WORKDIR /app
 

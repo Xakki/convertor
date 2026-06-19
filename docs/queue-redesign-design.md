@@ -51,4 +51,7 @@ Result event (worker→`conversions_result`): `{conversionId,state,outputBucket,
 6. **Retry/DLQ:** max_retries=3, XAUTOCLAIM idle=5min, stream MAXLEN cap. (accepted default)
 7. **Download delivery:** authenticated PHP proxy (keeps per-user access check). (accepted default)
 
+## Follow-ups (deferred)
+- **image: add pillow-heif/cairosvg/libavif to worker Dockerfile to re-enable heic/svg/avif.** Phase-1 image slice trims `svg`/`heic`/`avif` from `ConversionRegistry` (image inputs + `avif` output) because the plain-Pillow worker rejects them. Once the worker image ships cairosvg (svg), pillow-heif (heic), and libavif/pillow-avif (avif), restore those formats to the image matrix and add a registry⇄worker drift test.
+
 This document is the canonical plan; phases A–N above are tracked here (not exploded into 14 separate cards). The epic card is `fix-queue-php-worker-mismatch`.

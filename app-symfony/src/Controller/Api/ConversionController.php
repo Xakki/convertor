@@ -9,13 +9,11 @@ use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionRegistry;
 use App\Service\Quota\QuotaService;
+use App\Service\Storage\S3Storage;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\ResponseHeaderBag;
-use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 use Symfony\Component\Routing\Attribute\Route;
@@ -29,6 +27,7 @@ class ConversionController extends AbstractController
         private readonly ConversionRegistry $registry,
         private readonly ConversionRepository $conversionRepository,
         private readonly QuotaService $quotaService,
+        private readonly S3Storage $s3,
     ) {}
 
     #[Route('/convert', methods: ['POST'])]
@@ -50,7 +49,7 @@ class ConversionController extends AbstractController
         }
 
         try {
-            $conversion = $this->conversionManager->createConversion($user, $file, strtolower($toFormat));
+            $conversion = $this->conversionManager->createConversion($user, $file, strtolower((string) $toFormat));
             $this->conversionManager->dispatch($conversion);
 
             return $this->json([
@@ -98,18 +97,16 @@ class ConversionController extends AbstractController
         }
 
         $outputFile = $conversion->getOutputFile();
-        if ($outputFile === null || !file_exists($outputFile->getStoragePath())) {
+        if ($outputFile === null) {
             return $this->json(['error' => 'Output file not available'], Response::HTTP_NOT_FOUND);
         }
 
-        $response = new BinaryFileResponse($outputFile->getStoragePath());
-        $response->setContentDisposition(
-            ResponseHeaderBag::DISPOSITION_ATTACHMENT,
+        // storagePath holds the S3 object key for results; bucket is config-derived.
+        return $this->s3->downloadResponse(
+            $outputFile->getStoragePath(),
             $outputFile->getOriginalName(),
+            $outputFile->getMimeType(),
         );
-        $response->headers->set('Content-Type', $outputFile->getMimeType());
-
-        return $response;
     }
 
     #[Route('/convert/history', methods: ['GET'])]

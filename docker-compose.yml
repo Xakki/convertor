@@ -16,6 +16,10 @@ x-app-env: &_app_env
     REDIS_HOST: ${REDIS_HOST:-keydb}
     REDIS_USERNAME: ${REDIS_USERNAME:-default}
     REDIS_PASSWORD: ${REDIS_PASSWORD}
+    # Canonical Messenger DSN — authoritative here (app-symfony/.env is gitignored).
+    # db via ?dbindex (path = stream/group, not db). No password: KeyDB runs
+    # protected-mode no / no requirepass. See docs/queue-contract.md §1.
+    REDIS_DSN: redis://${REDIS_HOST:-keydb}:6379?dbindex=${REDIS_QUEUE_DB:-2}
     REDIS_CACHE_DB: ${REDIS_CACHE_DB:-0}
     REDIS_SESSION_DB: ${REDIS_SESSION_DB:-1}
     REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
@@ -29,11 +33,13 @@ x-app-env: &_app_env
     CRYPTOMUS_MERCHANT_ID: ${CRYPTOMUS_MERCHANT_ID}
     CRYPTOMUS_API_KEY: ${CRYPTOMUS_API_KEY}
     SHARE_DIR: ${SHARE_DIR:-/shared-files}
-    WORKER_LIBREOFFICE_URL: ${WORKER_LIBREOFFICE_URL:-http://worker-libreoffice:6001}
-    WORKER_FFMPEG_URL: ${WORKER_FFMPEG_URL:-http://worker-ffmpeg:6001}
-    WORKER_IMAGE_URL: ${WORKER_IMAGE_URL:-http://worker-image:6001}
-    WORKER_AI_URL: ${WORKER_AI_URL:-http://worker-ai:6001}
-    WORKER_DATA_URL: ${WORKER_DATA_URL:-http://worker-data:6001}
+    # S3 result sink + download proxy (shared apis3 MinIO; secrets via .env.local).
+    S3_ENDPOINT: ${S3_ENDPOINT}
+    S3_KEY: ${S3_KEY}
+    S3_SECRET: ${S3_SECRET}
+    S3_REGION: ${S3_REGION}
+    S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
+    S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
 
 # Общие настройки контейнера для php / cron (одинаковый image, stop-сигналы, security).
 x-app-base: &_app_base
@@ -325,6 +331,14 @@ services:
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
             SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.image.worker
+            REDIS_PORT: ${REDIS_PORT:-6379}
+            # Image worker uploads results to S3 + emits the result event.
+            S3_ENDPOINT: ${S3_ENDPOINT}
+            S3_KEY: ${S3_KEY}
+            S3_SECRET: ${S3_SECRET}
+            S3_REGION: ${S3_REGION}
+            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
+            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
         depends_on:
             keydb:
                 condition: service_healthy

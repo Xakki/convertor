@@ -20,6 +20,9 @@ class ConversionRegistry
         $this->matrix = $this->buildMatrix();
     }
 
+    /**
+     * @return list<array{from: string, to: string, category: string, isAi: bool}>
+     */
     public function getSupportedFormats(): array
     {
         $result = [];
@@ -53,6 +56,9 @@ class ConversionRegistry
             ?? throw new \InvalidArgumentException("Unsupported conversion: {$from} → {$to}");
     }
 
+    /**
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     */
     private function buildMatrix(): array
     {
         $matrix = [];
@@ -96,9 +102,12 @@ class ConversionRegistry
             }
         }
 
-        // Images
-        $imageSources = ['jpg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'svg', 'ico', 'avif', 'heic'];
-        $imageTargets = ['jpg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'ico', 'avif', 'pdf'];
+        // Images — plain Pillow worker only. svg/heic/avif need extra libs
+        // (cairosvg/pillow-heif/libavif) not yet in the worker image, so they are
+        // excluded to avoid routing jobs the worker would reject. See follow-up
+        // note in docs/queue-redesign-design.md.
+        $imageSources = ['jpg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'ico'];
+        $imageTargets = ['jpg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'ico', 'pdf'];
         foreach ($imageSources as $from) {
             foreach ($imageTargets as $to) {
                 if ($from !== $to) {

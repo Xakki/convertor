@@ -2,20 +2,68 @@ framework:
     messenger:
         failure_transport: failed
 
+        # One transport per routing-key → stream `conv.<key>`, group `convertor`.
+        # JSON serializer (`messenger.transport.symfony_serializer`) so the Python
+        # workers (the ONLY consumers) can parse the envelope.
+        #
+        # `options.serializer: 0` is MANDATORY on every conv_* transport. It is the
+        # phpredis CONNECTION serializer (\Redis::SERIALIZER_NONE), NOT the Messenger
+        # message serializer above. symfony/redis-messenger's Connection DEFAULT_OPTIONS
+        # sets it to 1 (\Redis::SERIALIZER_PHP), which PHP-serialize-wraps the value
+        # before XADD — the stream field `message` would be stored as `s:NNN:"{json}";`
+        # instead of raw JSON, and the worker's `json.loads(fields["message"])` would
+        # throw on every message. `0` stores the raw symfony_serializer JSON string.
+        #
+        # PHP MUST NOT run `messenger:consume conv_*` — that would join the Python
+        # consumer group and steal jobs. See docs/queue-contract.md §1/§2.
         transports:
-            async:
+            conv_document:
                 dsn: '%env(REDIS_DSN)%'
-                # JSON envelope so Python workers can parse the stream entry.
-                # Stream-entry/job-body shape pinned in docs/queue-contract.md.
                 serializer: messenger.transport.symfony_serializer
                 options:
-                    stream: conversions
+                    serializer: 0
+                    stream: conv.document
                     group: convertor
-                retry_strategy:
-                    max_retries: 3
-                    delay: 1000
-                    multiplier: 2
-                    max_delay: 0
+
+            conv_image:
+                dsn: '%env(REDIS_DSN)%'
+                serializer: messenger.transport.symfony_serializer
+                options:
+                    serializer: 0
+                    stream: conv.image
+                    group: convertor
+
+            conv_audio:
+                dsn: '%env(REDIS_DSN)%'
+                serializer: messenger.transport.symfony_serializer
+                options:
+                    serializer: 0
+                    stream: conv.audio
+                    group: convertor
+
+            conv_video:
+                dsn: '%env(REDIS_DSN)%'
+                serializer: messenger.transport.symfony_serializer
+                options:
+                    serializer: 0
+                    stream: conv.video
+                    group: convertor
+
+            conv_data:
+                dsn: '%env(REDIS_DSN)%'
+                serializer: messenger.transport.symfony_serializer
+                options:
+                    serializer: 0
+                    stream: conv.data
+                    group: convertor
+
+            conv_ai:
+                dsn: '%env(REDIS_DSN)%'
+                serializer: messenger.transport.symfony_serializer
+                options:
+                    serializer: 0
+                    stream: conv.ai
+                    group: convertor
 
             failed:
                 dsn: '%env(REDIS_DSN)%'
@@ -23,5 +71,7 @@ framework:
                 options:
                     stream: conversions_failed
 
-        routing:
-            App\Message\ConversionMessage: async
+        # No routing map: ConversionManager::dispatch() targets the transport
+        # explicitly via TransportNamesStamp(['conv_'.$key]). conv.result is NOT a
+        # Messenger transport — it is a raw stream consumed by
+        # `app:queue:result-consumer` (workers emit it as plain JSON, not an envelope).

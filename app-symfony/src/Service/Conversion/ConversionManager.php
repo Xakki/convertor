@@ -11,10 +11,12 @@ use App\Entity\User;
 use App\Enum\ConversionStatus;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
+use App\Service\Queue\ConversionStatusReader;
 use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\Messenger\MessageBusInterface;
+use Symfony\Component\Messenger\Stamp\TransportNamesStamp;
 
 class ConversionManager
 {
@@ -24,6 +26,7 @@ class ConversionManager
         private readonly QuotaService $quotaService,
         private readonly EntityManagerInterface $em,
         private readonly MessageBusInterface $bus,
+        private readonly ConversionStatusReader $statusReader,
         private readonly string $shareDir,
     ) {}
 
@@ -41,7 +44,7 @@ class ConversionManager
         $storagePath = $this->storeUploadedFile($file);
 
         $inputFile = new FileStorage();
-        $inputFile->setOriginalName($file->getClientOriginalName() ?? 'upload');
+        $inputFile->setOriginalName($file->getClientOriginalName() ?: 'upload');
         $inputFile->setStoragePath($storagePath);
         $inputFile->setMimeType($file->getMimeType() ?? 'application/octet-stream');
         $inputFile->setSizeBytes($file->getSize());
@@ -66,17 +69,36 @@ class ConversionManager
     public function dispatch(Conversion $conversion): void
     {
         $sourceFormat = $conversion->getFromFormat();
+        $key = $this->routingKey($conversion);
 
-        $this->bus->dispatch(new ConversionMessage(
-            conversionId: $conversion->getId(),
-            inputPath: $conversion->getInputFile()->getStoragePath(),
-            sourceFormat: $sourceFormat,
-            targetFormat: $conversion->getToFormat(),
-            category: $conversion->getCategory()->value,
-            isAi: $conversion->isAi(),
-            subType: $this->resolveSubType($sourceFormat),
-            options: [],
-        ));
+        $this->bus->dispatch(
+            new ConversionMessage(
+                conversionId: $conversion->getId(),
+                inputPath: $conversion->getInputFile()->getStoragePath(),
+                sourceFormat: $sourceFormat,
+                targetFormat: $conversion->getToFormat(),
+                category: $conversion->getCategory()->value,
+                isAi: $conversion->isAi(),
+                subType: $this->resolveSubType($sourceFormat),
+                options: [],
+            ),
+            [new TransportNamesStamp(['conv_' . $key])],
+        );
+    }
+
+    /**
+     * Routing key = stream suffix. AI jobs go to the dedicated `ai` stream;
+     * `markup` is folded into `document` (no dedicated markup worker).
+     */
+    private function routingKey(Conversion $conversion): string
+    {
+        if ($conversion->isAi()) {
+            return 'ai';
+        }
+
+        $category = $conversion->getCategory()->value;
+
+        return $category === 'markup' ? 'document' : $category;
     }
 
     /**
@@ -102,6 +124,20 @@ class ConversionManager
 
         if ($conversion === null || $conversion->getUser()->getId() !== $user->getId()) {
             throw new \RuntimeException('Conversion not found');
+        }
+
+        // Live status from Redis hash `conv:status:{id}` (TTL 24h). Falls back to
+        // the MariaDB row once the hash has expired. Contract §4.
+        $live = $this->statusReader->read($id);
+        if ($live !== null) {
+            $state = isset($live['state']) ? ConversionStatus::tryFrom($live['state']) : null;
+
+            return new ConversionResultDTO(
+                conversionId: $conversion->getId(),
+                status: $state ?? $conversion->getStatus(),
+                outputPath: $live['outputUrl'] ?? $live['outputKey'] ?? $conversion->getOutputFile()?->getStoragePath(),
+                errorMessage: ($live['error'] ?? '') !== '' ? $live['error'] : $conversion->getErrorMessage(),
+            );
         }
 
         return new ConversionResultDTO(

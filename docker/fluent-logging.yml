@@ -1,6 +1,6 @@
 
 include:
-    - fluent-log/docker-fluent.yml
+    - docker/fluent-log/docker-fluent.yml
 
 
 x-logging: &_logging

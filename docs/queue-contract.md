@@ -35,24 +35,66 @@ hash, and the result event. Companion to `docs/queue-redesign-design.md`
   a bare `default:@` prefix (that produces a broken AUTH). If `requirepass` is
   ever enabled, the canonical authed form is:
   `redis://default:${REDIS_PASSWORD}@keydb:6379?dbindex=2`.
-- **Serializer:** `messenger.transport.symfony_serializer` (Symfony Serializer,
-  JSON) — so Python can parse the envelope. (Default PHP-native serializer is
-  unreadable from Python.)
+- **Serializer (message):** `messenger.transport.symfony_serializer` (Symfony
+  Serializer, JSON) — so Python can parse the envelope. (Default PHP-native
+  serializer is unreadable from Python.)
+- **⚠ Serializer (connection) — MANDATORY `serializer: 0`:** every Redis
+  Messenger transport MUST set the **connection** option `serializer: 0`
+  (`\Redis::SERIALIZER_NONE`) in `messenger.yaml` `options`. This is a different
+  knob from the message serializer above. `symfony/redis-messenger`'s
+  `Connection` DEFAULT_OPTIONS sets it to `1` (`\Redis::SERIALIZER_PHP`), which
+  makes phpredis **PHP-serialize-wrap** the value before `XADD` — the stream
+  field `message` is then stored as `s:NNN:"{json}";` instead of raw JSON, and
+  the worker's `json.loads(fields["message"])` throws on every message. `0`
+  stores the raw symfony_serializer JSON string. Verified at the wire level via
+  `XRANGE conv.image`. **Any new per-key transport must repeat `serializer: 0`.**
 
-### Stream / transport naming (target — Phase 1)
+### Stream / transport naming (Phase 1 — current)
 
+There are **two distinct wire shapes** on **two sets of streams** — do not
+conflate them (see the producer/consumer/field/decode table below).
+
+**Job streams `conv.<key>`** — PHP produces, Python consumes:
 - **Routing key:** `key = isAi ? 'ai' : category`. `markup` is folded into
   `document`. Keys: `document`, `image`, `audio`, `video`, `data`, `ai`.
 - **Stream name:** `conv.<key>` (e.g. `conv.document`, `conv.ai`).
 - **Transport name (messenger.yaml):** `conv_<key>` (e.g. `conv_document`),
   routed via `TransportNamesStamp(['conv_'.$key])`.
-- **Consumer group:** `convertor` (one per stream).
-- **Phase 0 (current):** single stream `conversions`, group `convertor`,
-  failure stream `conversions_failed`.
+- **Consumer group:** `convertor` (one per stream). PHP only **produces** (XADD)
+  and never creates these groups — so the **worker** creates the group, and it
+  MUST use start-id **`0`**, not `$`:
+  `XGROUP CREATE conv.<key> convertor 0 MKSTREAM`. Using `$` (only-new) would
+  silently drop every job XADDed before the worker first connects.
+
+**Result stream `conv.result`** — Python produces, PHP consumes:
+- Single stream `conv.result`, group `convertor`, consumed by the PHP command
+  `app:queue:result-consumer` (a **raw** stream consumer, NOT Messenger).
+- Workers also write the live status hash `conv:status:{id}` (§4).
+
+**Failure transport** `conversions_failed` (Messenger failure transport;
+PHP-side only).
+
+| Stream         | Producer | Consumer            | Stream field | Decode depth |
+|----------------|----------|---------------------|--------------|--------------|
+| `conv.<key>`   | PHP (Messenger) | Python workers | `message`    | **twice** (`message`→`{body,headers}`; `body` is a JSON string) — §2 |
+| `conv.result`  | Python workers  | PHP command   | `data`       | **once** (`data` is the raw §5 JSON body) — §5 |
+
+> ⚠ The two shapes differ: `conv.<key>` is a Messenger envelope (field
+> `message`, double-encoded); `conv.result` is a plain JSON payload (field
+> `data`, single-encoded). A worker must NOT wrap result events in an envelope,
+> and PHP must NOT double-decode `conv.result`.
+
+> Phase 0 used a single stream `conversions`; Phase 1 replaces it with the
+> per-key `conv.<key>` streams above.
 
 ---
 
-## 2. Stream entry shape (Messenger Redis transport + JSON serializer)
+## 2. Job stream entry shape — `conv.<key>` (PHP produces, Python consumes)
+
+Applies to the job streams `conv.<key>` only. **Decode twice.**
+
+> Requires the transport connection option `serializer: 0` (§1) — otherwise the
+> `message` value is PHP-serialized (`s:NNN:"…";`), not the JSON shown below.
 
 The Redis transport writes each message with **`XADD <stream> * message <value>`** —
 i.e. a **single stream field literally named `message`**. Its value is a JSON
@@ -129,9 +171,24 @@ configured), so the JSON keys are the property names verbatim.
 Live status, written by workers, read by the PHP status endpoint. **TTL 24h.**
 MariaDB remains authoritative for `/history` + `/download`; Redis is live state.
 
+**`state` vocabulary — MUST match the `ConversionStatus` enum `.value`** (PHP
+stores these in DB rows + returns them as the public API value, so workers HSET
+the SAME strings to avoid live-vs-history drift):
+
+| `state` HSET by worker | meaning |
+|------------------------|---------|
+| `pending`              | accepted, not yet started |
+| `processing`           | worker picked it up |
+| `completed`            | success (output in S3) |
+| `failed`               | terminal error (`error` set) |
+
+PHP maps `state` → `ConversionStatus::tryFrom($state)`; an unknown/missing
+`state` falls back to the MariaDB row status (total, safe default). Do NOT emit
+`queued` — use `pending`.
+
 | Field          | Type   | Notes |
 |----------------|--------|-------|
-| `state`        | string | `queued` / `processing` / `completed` / `failed`. |
+| `state`        | string | one of the four values above. |
 | `sourceFormat` | string | mirrors job body. |
 | `targetFormat` | string | mirrors job body. |
 | `category`     | string | mirrors job body. |
@@ -150,12 +207,31 @@ MariaDB remains authoritative for `/history` + `/download`; Redis is live state.
 
 ---
 
-## 5. Result event — stream `conversions_result`
+## 5. Result event — stream `conv.result` (Python produces, PHP consumes)
 
-Emitted by workers (worker → `conversions_result`), consumed by a PHP handler
-that persists `FileStorage` (S3 key) + `Conversion.status` to MariaDB (DB writes
-stay in PHP). Same JSON-envelope shape as §2 when produced by Messenger; when
-produced directly by a worker, document the field set as the body:
+**Producer:** Python worker. **Consumer:** PHP command `app:queue:result-consumer`
+(group `convertor`, raw stream — NOT Messenger).
+
+**Wire shape (pinned):** the worker emits with
+
+```
+XADD conv.result * data <json>
+```
+
+i.e. a **single stream field literally named `data`** whose value is the JSON of
+the result body below. This is a **plain payload, NOT a Messenger envelope** —
+there is no `message`/`body`/`headers` wrapping. PHP decodes it **once**:
+
+```python
+import json, time
+r.xadd("conv.result", {"data": json.dumps(result_body)})
+```
+```php
+// PHP consumer side:
+$body = json_decode($fields['data'], true);   // single decode
+```
+
+Result body:
 
 ```json
 {

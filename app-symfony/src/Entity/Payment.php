@@ -36,6 +36,7 @@ class Payment
     #[ORM\Column(type: 'string', length: 255, nullable: true)]
     private ?string $externalId = null;
 
+    /** @var array<string, mixed> */
     #[ORM\Column(type: 'json')]
     private array $metadata = [];
 
@@ -118,11 +119,13 @@ class Payment
         return $this;
     }
 
+    /** @return array<string, mixed> */
     public function getMetadata(): array
     {
         return $this->metadata;
     }
 
+    /** @param array<string, mixed> $metadata */
     public function setMetadata(array $metadata): self
     {
         $this->metadata = $metadata;

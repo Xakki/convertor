@@ -14,7 +14,7 @@ framework:
 
     # Serializer for API responses
     serializer:
-        enable_annotations: false
+        enable_attributes: true
 
     # Validator
     validation:

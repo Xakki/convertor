@@ -10,7 +10,11 @@ use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 
 class QuotaService
 {
-    /** Daily limits per plan [regular, ai] */
+    /**
+     * Daily limits per plan [regular, ai].
+     *
+     * @var array<string, array<string, int>>
+     */
     private array $planLimits = [
         'free'  => ['conversions' => 2,   'ai_conversions' => 1],
         'basic' => ['conversions' => 100, 'ai_conversions' => 30],
@@ -50,6 +54,9 @@ class QuotaService
         $this->em->flush();
     }
 
+    /**
+     * @return array<string, int|string>
+     */
     public function getRemainingQuota(User $user): array
     {
         $this->resetIfNeeded($user);
