@@ -1,42 +1,52 @@
-### Fix php↔worker queue mechanism mismatch (Streams vs list)
+### Redesign worker/queue architecture (Streams + capabilities + S3 results)
 
 **Criticality:** Blocking
 
 **TAGS:**
+- feature
 - bug-fix
 
 **Description:**
-Discovered during review of [[fix-configs-working-state]]. The PHP producer and the Python workers use **incompatible KeyDB queue mechanisms**, so dispatched conversion jobs are never consumed.
+Started as a producer/consumer mismatch fix; expanded by user decision (2026-06-19) into a worker/queue **redesign**. Currently PHP dispatches via Symfony Messenger **Redis Streams** (`conversions` stream, group `convertor`, PHP-native serializer) while Python workers read a plain **list** (`convertor:{cat}`, JSON) — so nothing is consumed. The libreoffice worker is HTTP-only (not queued). This card defines the target design; **needs a DESIGN phase before implementation.**
 
-**Problem:**
-- PHP side: Symfony Messenger Redis transport using **Redis Streams** (`config/packages/messenger.yaml` — stream `conversions`, group `convertor`; `bus->dispatch(...)`).
-- Worker side: `workers/common/keydb_client.py` uses a plain **list** (`lpush` + `brpoplpush` on `<queue>` / `<queue>:processing`).
-- Streams ≠ lists → messages produced by PHP land in a stream the workers never read, and vice versa. No conversion ever flows end-to-end.
+**User-set direction (binding):**
+- **Queue → keep Symfony Messenger Redis Streams.** Workers are rewritten to consume Streams (XREADGROUP) and PHP Messenger uses a **JSON serializer** so Python can parse the envelope.
+- **Results storage:** converted **files → S3/MinIO**; **status/metadata → Redis** (design the key schema + TTL). Must be **fault-tolerant** (ack/retry, crash recovery, no lost/double-processed jobs).
+- **libreoffice → queue consumer** like the other workers (drop the HTTP-only design).
+- **Worker capability registry:** each worker **declares the conversion tasks it can handle**; capabilities may **overlap** between workers; there may be **multiple worker instances**. Launch/scaling strategy is **deferred** ("продумаем отдельно").
+- Status reaches the client via the existing polling endpoint, sourced from Redis (not HTTP callback).
 
-Related config smells found in the same review:
-- `WORKER_*_URL` inconsistent/stale: compose default `http://worker-libreoffice:6001` (health port) vs `app-symfony/.env` `http://libreoffice-worker:8000` (wrong host+port); neither targets the real HTTP service `libreoffice:6000`.
-- `REDIS_QUEUE_DB=2` is dead config — `base_worker.py` reads `REDIS_DB` (default 0); workers run on db 0 (coincidentally aligned with Messenger `redis://keydb:6379` db 0). Worker healthcheck pings db 2 — cosmetic mismatch.
-- Callback path dormant: workers support `callback_url` but PHP never sets it. When wired, note workers are on `backend` and nginx (HTTP entry) is on `default` only → callback would be unreachable as-is.
+**Problem (current, confirmed):**
+- Streams (PHP) vs list (workers) → zero consumption.
+- PHP-native serializer vs Python JSON.
+- Message fields `conversionId/category` (camelCase) vs worker `id/category` (snake).
+- `ConversionMessageHandler` calls workers over HTTP (`callWorker`), but queue workers expose no HTTP endpoint — dead path.
+- `REDIS_QUEUE_DB=2` injected but `base_worker.py` reads `REDIS_DB` (db 0); naming/db drift.
+- Callback unreachable (workers on `backend`, nginx on `default`).
 
 **Impact:**
-Core product is non-functional: a submitted file is queued but never processed. Containers report healthy while nothing converts.
+Core product non-functional end-to-end until redesigned.
 
 **Recommendation:**
-Pick ONE queue contract and align both sides. Per project CLAUDE.md the architecture follows ExRate (Symfony Messenger). Decide between:
-- (a) Workers consume Redis Streams (rewrite `keydb_client.py` to `XREADGROUP`/`XACK`, matching Messenger's stream+group), or
-- (b) PHP produces to a plain list compatible with the workers' `brpoplpush` reliable-queue pattern (custom transport / direct lpush), dropping Messenger Redis transport for the worker channel.
-Then reconcile `WORKER_*_URL`, `REDIS_DB`/healthcheck db, and the callback path / status-update mechanism (callback vs polling).
+Run a DESIGN phase producing a concrete architecture + decision points, then break into implementation cards (PHP Messenger JSON+routing; worker Streams consumer base; capability registry; S3 result sink; Redis status store + fault-tolerance; libreoffice→queue; multi-worker launch).
 
-**Acceptance Criteria:**
-- A file submitted via the API is picked up by the correct worker and produces output in `/shared-files/`.
-- Status updates reach PHP (callback or polling) and the job is marked done.
-- One queue mechanism used consistently on both sides; `WORKER_*_URL`, `REDIS_DB`, healthcheck db reconciled.
-- Covered by an e2e/integration test (ties into [[smoke-run-verify]] / [[worker-conversion-tests]]).
+**Acceptance Criteria (target):**
+- File submitted via API → routed to a worker that declares the capability → processed → output stored in S3/MinIO → status in Redis → client polling reflects done.
+- One consistent transport (Messenger Streams, JSON) both sides; capability-based routing with overlap support.
+- Fault-tolerant: job survives worker crash (re-delivery), no double-final-write.
+- libreoffice runs as a queue consumer.
+- Covered by e2e test (ties into [[smoke-run-verify]], [[worker-conversion-tests]]).
 
-**Open questions:**
-- Streams (a) or list (b)? ExRate reference suggests Messenger/Streams — confirm.
-- Status updates: worker→PHP callback HTTP, or PHP polling KeyDB? (callback needs a reachable PHP HTTP endpoint across networks).
-- One channel per category (`conversion.documents/images/...` per CLAUDE.md) vs single channel + routing?
+**Open questions (DESIGN phase — to resolve with user):**
+- Capability routing under overlap: one Messenger stream + workers filter by declared caps, or one stream per capability/category, or a routing key? How does Messenger group/consumer semantics map to "any worker that can handle it"?
+- Fault-tolerance: Messenger Streams consumer-group ack/claim (XACK/XAUTOCLAIM) for crash recovery — retry limits, dead-letter? How does the Redis status store stay consistent with stream redelivery?
+- Redis status schema: key layout, what's stored (state, output S3 key, error), TTL, and how PHP polling reads it (direct Redis read vs sync to MariaDB `conversions` table that already exists).
+- S3/MinIO: reuse the storage work in [[docs-prod-polish]] (S3 result sink) — sequence/couple them. Local-dev MinIO vs shared infra?
+- libreoffice conversion to queue: keep soffice profile-isolation per job; capability list (doc/docx/odt/pdf/html/epub→docx/txt/md).
+- Multi-worker launch/scaling — explicitly deferred; capture as a follow-up card.
 
 **Decisions:**
-- (to be filled during grooming)
+- Transport = Messenger Redis Streams + JSON serializer; workers consume Streams (user, 2026-06-19).
+- Results: files→S3/MinIO, status→Redis, fault-tolerant (user, 2026-06-19).
+- libreoffice becomes a queue consumer (user, 2026-06-19).
+- Capability-declaring workers, overlapping caps, multiple instances; launch strategy deferred (user, 2026-06-19).
