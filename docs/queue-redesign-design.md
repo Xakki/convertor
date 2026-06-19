@@ -42,11 +42,13 @@ Result event (worker→`conversions_result`): `{conversionId,state,outputBucket,
 - **Phase 5:** M. fault-tolerance e2e.
 - **Phase 6:** N. e2e smoke (ties to smoke-run-verify, worker-conversion-tests).
 
-## Decisions pending (see card)
-1. Stream granularity (recommend category values, markup→document, dedicated `ai`).
-2. DB status sync model (recommend result-event→PHP→MariaDB authoritative).
-3. Dev outputs: local MinIO container now (recommended) vs /shared-files in dev.
-4. Prod MinIO: project-local vs shared `apis3.variantgood.com` (shared w/ docs-prod-polish).
-5. Registry/worker reconciliation: archive worker vs drop archives; libreoffice expand vs trim; confirm AI `isAi→ai` routing + subType.
-6. Retry/DLQ tunables (max_retries=3, XAUTOCLAIM idle=5min, MAXLEN cap).
-7. Download delivery: presigned redirect vs authenticated PHP proxy (recommend proxy).
+## Decisions (resolved 2026-06-19)
+1. **Stream granularity:** routing-keys = `FileCategory` values + dedicated `ai`; markup folded into `document`. (accepted default)
+2. **Status/history:** workers write **only to Redis** (status + result event). **PHP consumes the result/ready queue and persists to MariaDB itself** — DB writes stay in PHP; MariaDB is authoritative for `/history`+`/download`; Redis is live status (TTL 24h). (user)
+3. **Dev outputs S3:** use the **shared `apis3.variantgood.com`** MinIO in dev too — **no local MinIO container**. Configure S3 client (endpoint/keys) for both dev and prod against shared infra. (user)
+4. **Prod MinIO:** shared `apis3.variantgood.com` (same as dev). (user)
+5. **Registry reconciliation:** **drop archives** from the registry now (follow-up card later); **expand libreoffice worker** to all advertised targets (pdf/odt/html/rtf/docx, epub if soffice supports); confirm AI `isAi→ai` routing + `subType` in message. (user)
+6. **Retry/DLQ:** max_retries=3, XAUTOCLAIM idle=5min, stream MAXLEN cap. (accepted default)
+7. **Download delivery:** authenticated PHP proxy (keeps per-user access check). (accepted default)
+
+This document is the canonical plan; phases A–N above are tracked here (not exploded into 14 separate cards). The epic card is `fix-queue-php-worker-mismatch`.
