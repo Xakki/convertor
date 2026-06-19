@@ -29,11 +29,18 @@ Add the `Xakki/FluentLog` git submodule, wire all services (incl. workers + libr
 - Logs visible in target Graylog (or local dev sink) end-to-end.
 - `.env_dist` includes fluent vars with comments.
 
-**Open questions:**
-- Local dev: spin up a local Graylog container, or always ship to remote `log.variantgood.com`?
-- Workers log_format: reuse `php`/generic, or add a `python`/`worker` parser in fluent-bit?
-- Is `docker/logs/` meant to hold fluent-bit config, or is everything inside the submodule? Decide what's committed here.
-- Submodule pinning: lock to a specific commit/tag?
+**Decisions (resolved):**
+- **Graylog → REMOTE** `log.variantgood.com:443/gelf` (no local dev container) (user).
+- Workers `log_format: "auto"` — FluentLog has no python parser; `gl.auto`/`json_default` unwraps worker JSON globally. Switch to a `python` parser if added upstream.
+- fluent-bit config lives in the submodule (not `docker/logs/`); `Xakki/FluentLog` pinned to **v0.1.4** (`2d0c11c`).
 
-**Decisions:**
-- (to be filled during grooming)
+**Execution Log:**
+- Implemented by logging-fixer; reviewed by reviewer (APPROVE-WITH-NITS → nits fixed).
+- Submodule `docker/fluent-log` (v0.1.4) added (provides fluent-bit + logrotate); `COMPOSE_FILE` restored to `docker-compose.yml:docker/fluent-logging.yml` in .env + .env_dist.
+- All 6 remaining services (libreoffice + 5 workers) wired with `<<: *_logging` + tier/log_format=auto + depends_on fluent-bit; existing 5 untouched; keydb rename intact.
+- Workers converted to structured JSON stdout: new `workers/common/logging_config.py` (stdlib JsonFormatter, Monolog-numeric levels, ISO8601, recursive secret redaction over message+context+exception); base_worker + all worker entrypoints + libreoffice/main.py route through it; no stray basicConfig.
+- Fixed pre-existing broken `COPY main.py` in libreoffice.Dockerfile; added `__pycache__/`+`*.pyc` to .gitignore.
+- Validation: PyYAML parse OK + py_compile OK + redaction smoke OK (`docker compose config` unavailable in sandbox).
+- Committed: submodule/.gitmodules in `779c7e8`; impl in `5582e0c`.
+
+**Status — handed to `test/`:** implemented + reviewed; static validation green. Runtime verification (logs actually arriving in Graylog) deferred to [[smoke-run-verify]] (needs `docker compose up`). Out-of-scope note: libreoffice HTTP-proxy vs `libreoffice` service overlap (reviewer N3) handled in the queue redesign (libreoffice→consumer).
