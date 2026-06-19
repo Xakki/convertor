@@ -1,24 +1,7 @@
-# s3-profmatrix.xakki.ru — публичный фасад dev поверх MinIO `apis3.xakki.ru` (path-style S3).
-# Dev-аналог prod-блока (docker/nginx/prod/conf.d/s3-proxy.conf): PHP-клиент (AWS SDK)
-# пишет/удаляет напрямую на apis3.xakki.ru, nginx раздаёт публичные GET'ы с кешем.
-# Бакеты dev: pf-dev-pdf / pf-dev-video / pf-dev-summary (path-style, bucket в URI).
-#
-# Маршрутизацию s3-profmatrix.xakki.ru → этот dev-nginx настраивает разработчик отдельно.
-# TLS терминируется снаружи; в контейнере слушаем только :80.
-server {
-    listen 80;
-    server_name s3-profmatrix.xakki.ru;
-
-    # На случай очень больших объектов (через прокси идут только GET/HEAD,
-    # но не ограничиваем заранее — приоритет на отсутствие 413).
-    client_max_body_size 32M;
-
-    # DNS для апстрима apis3.xakki.ru — внешний, не Docker.
-    resolver 8.8.8.8 valid=300s ipv6=off;
 
     # MinIO health probe — должен отвечать 200 без аутентификации.
     # Smoke-тест: curl -I http://s3-profmatrix.xakki.ru/minio/health/live
-    location = /minio/health/live {
+    location = /s3/live {
         proxy_pass https://apis3.xakki.ru;
         proxy_set_header Host apis3.xakki.ru;
         proxy_http_version 1.1;
@@ -29,8 +12,12 @@ server {
     }
 
     # Основное проксирование объектов: https://s3-profmatrix.xakki.ru/<bucket>/<key>
-    # → https://apis3.xakki.ru/<bucket>/<key> (path-style).
-    location / {
+    # → /s3/<bucket>/<key> (path-style).
+    location /s3 {
+
+        # На случай очень больших объектов (через прокси идут только GET/HEAD,
+        # но не ограничиваем заранее — приоритет на отсутствие 413).
+        client_max_body_size 32M;
         # Защита от использования фасада как анонимного PUT-relay'я.
         # Авторизованные PUT/DELETE идут напрямую с PHP-клиента на apis3.xakki.ru.
         limit_except GET HEAD OPTIONS {
@@ -62,4 +49,3 @@ server {
         # Длинный публичный кеш для клиентов (объекты неизменяемы по ключу).
         add_header Cache-Control "public, max-age=86400" always;
     }
-}

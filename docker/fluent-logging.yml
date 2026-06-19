@@ -68,14 +68,6 @@ services:
     # No dedicated fluent-bit parser for these → log_format: "auto" (gl.auto:
     # global json_default unwraps structured JSON, php multiline joins the rest).
     # Switch to a "python"/"worker" parser here once one is added to the submodule.
-    libreoffice:
-        <<: *_logging
-        labels:
-            tier: "converter"
-            log_format: "auto"
-        depends_on:
-            fluent-bit:
-                condition: service_started
     worker-libreoffice:
         <<: *_logging
         labels:

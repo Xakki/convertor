@@ -19,6 +19,10 @@ RESET = \033[0m
 GREEN = \033[32m
 CYAN  = \033[36m
 
+# Guard for data-destroying targets: when APP_ENV is production, require an explicit
+# interactive "yes". No TTY (e.g. CI) → refuse. Non-prod envs pass through silently.
+CONFIRM_PROD = if [ "$(APP_ENV)" = "production" ] || [ "$(APP_ENV)" = "prod" ]; then if [ ! -t 0 ]; then echo "✋ APP_ENV=$(APP_ENV): refusing destructive target without interactive confirmation"; exit 1; fi; read -p "⚠️  APP_ENV=$(APP_ENV): this DESTROYS DB data. Type 'yes' to continue: " a; [ "$$a" = "yes" ] || { echo "Aborted."; exit 1; }; fi
+
 ##@ Help
 
 .PHONY: help
@@ -173,58 +177,3 @@ build-php: ## PHP image is pulled from harbor (DOCKER_IMAGE_PHP), not built here
 
 .PHONY: build-workers
 build-workers: build-libreoffice build-ffmpeg build-image build-ai build-data ## Build all worker images
-
-##@ LibreOffice HTTP-API (original)
-
-.PHONY: build-libreoffice-api
-build-libreoffice-api: ## Build original libreoffice HTTP-API image
-	docker build -t xakki/libreoffice:latest libreoffice/
-
-.PHONY: push-libreoffice
-push-libreoffice: ## Push original libreoffice HTTP-API image
-	docker push xakki/libreoffice:latest
-
-.PHONY: my-test
-my-test: ## Run libreoffice shell test
-	./libreoffice/test.sh
-
-
-##@ Library (libreoffice)
-build-library: ## Build libreoffice image
-	docker build -t $(REGISTRY)/library/libreoffice:latest -t xakki/libreoffice:latest libreoffice/
-
-push-library: ## Push libreoffice image to $(REGISTRY) and Docker Hub
-	docker push $(REGISTRY)/library/libreoffice:latest
-	docker push xakki/libreoffice:latest
-
-build-push-library-multiarch: buildx-setup ## Build + push libreoffice multi-arch ($(PLATFORMS))
-	docker buildx build --builder $(MULTIARCH_BUILDER) --platform $(PLATFORMS) \
-	    -t $(REGISTRY)/library/libreoffice:latest -t xakki/libreoffice:latest \
-	    --push libreoffice/
-
-test-library: build-library  ## Smoke-test libreoffice image (runs libreoffice/tests/test_convert.py against test_source/)
-	@set -e; \
-	IMG=xakki/libreoffice:latest; \
-	WORK=$$(mktemp -d -t libreoffice-test.XXXXXX); \
-	cp libreoffice/test_source/* $$WORK/; \
-	chmod -R a+rwX $$WORK; \
-	echo "=== Starting container (share=$$WORK) ==="; \
-	CID=$$(docker run -d --rm -P -v $$WORK:/share $$IMG); \
-	trap "docker stop $$CID >/dev/null 2>&1 || true; rm -rf $$WORK" EXIT; \
-	PORT=$$(docker port $$CID 6000/tcp | head -n1 | awk -F: '{print $$NF}'); \
-	URL="http://127.0.0.1:$$PORT"; \
-	echo "Container: $$CID  $$URL"; \
-	echo "=== Waiting for /health ==="; \
-	for i in $$(seq 1 60); do \
-	    STATUS=$$(docker inspect --format='{{.State.Health.Status}}' $$CID 2>/dev/null || echo none); \
-	    echo "  [$$i] health=$$STATUS"; \
-	    [ "$$STATUS" = "healthy" ] && break; \
-	    sleep 2; \
-	done; \
-	[ "$$STATUS" = "healthy" ] || { echo "health failed"; docker logs $$CID; exit 1; }; \
-	echo "=== Running libreoffice/tests/test_convert.py ==="; \
-	LIBREOFFICE_URL="$$URL" \
-	    TEST_SOURCE="$(CURDIR)/libreoffice/test_source" \
-	    HOST_SHARE="$$WORK" \
-	    CONTAINER_SHARE=/share \
-	    python3 libreoffice/tests/test_convert.py

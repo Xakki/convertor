@@ -33,7 +33,7 @@
   - components: header, footer, login-modal (Telegram Widget + SMS)
   - JS: app.js (Alpine store, apiFetch), upload.js, auth.js
 - [x] **docker/** — инфраструктура (14 файлов)
-  - docker-compose.yml: 11 сервисов (nginx, php-fpm, mariadb, keydb, libreoffice, 5 воркеров)
+  - docker-compose.yml: 10 сервисов (nginx, php-fpm, mariadb, keydb, 5 воркеров)
   - Dockerfiles для всех воркеров
   - nginx/conf.d/default.conf: API → php-fpm, SPA fallback
   - Makefile: полный набор команд
