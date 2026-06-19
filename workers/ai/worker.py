@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from workers.common.base_worker import SHARE_DIR, BaseWorker
+from workers.common.logging_config import configure_logging
 from workers.common.safe_path import safe_share_path
 
 logger = logging.getLogger(__name__)
@@ -387,5 +388,5 @@ class AiWorker(BaseWorker):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    configure_logging()
     AiWorker().run()

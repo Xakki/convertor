@@ -40,7 +40,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 WORKDIR /share
-COPY --chown=app:app main.py /proxy/main.py
+# Build context is the repo root (compose: context: .). Ship the proxy plus the
+# shared JSON-logging module flat into /proxy (this image has no `workers` package).
+COPY --chown=app:app workers/libreoffice/main.py /proxy/main.py
+COPY --chown=app:app workers/common/logging_config.py /proxy/logging_config.py
 
 USER app
 

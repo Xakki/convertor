@@ -16,6 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from workers.common.keydb_client import QueueClient
+from workers.common.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ class BaseWorker(ABC):
 
     def run(self) -> None:
         """Start the worker: health server + main async loop."""
+        configure_logging()
         self._setup_signals()
         health_thread = self._start_health_server()
         try:

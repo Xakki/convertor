@@ -20,12 +20,19 @@ conversions don't fight over ~/.config/libreoffice.
 """
 
 import asyncio
+import logging
 import os
-import sys
 import tempfile
 from pathlib import Path
 
 from aiohttp import web
+
+try:  # repo / worker images ship the package; the libreoffice image gets a flat copy
+    from workers.common.logging_config import configure_logging
+except ModuleNotFoundError:  # /proxy/logging_config.py (see libreoffice.Dockerfile)
+    from logging_config import configure_logging
+
+logger = logging.getLogger(__name__)
 
 PORT = int(os.getenv("PORT", "6000"))
 SHARE_DIR = Path(os.getenv("SHARE_DIR", "/share")).resolve()
@@ -243,5 +250,9 @@ def make_app() -> web.Application:
 
 
 if __name__ == "__main__":
-    print(f"Listening on :{PORT}, SHARE_DIR={SHARE_DIR}", file=sys.stderr)
+    configure_logging()
+    logger.info(
+        "libreoffice proxy starting",
+        extra={"port": PORT, "share_dir": str(SHARE_DIR)},
+    )
     web.run_app(make_app(), port=PORT, print=None)
