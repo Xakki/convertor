@@ -65,6 +65,9 @@ SaaS-сервис конвертации файлов всех форматов.
 ## Secrets / env
 - **Секреты — только в `.env.local`** (gitignored). Makefile делает `include .env` + `-include .env.local` + `export`, поэтому значения из `.env.local` уходят в окружение и compose подхватывает их через `${VAR}`. В трекаемых `.env` / `.env_dist` секреты держим ПУСТЫМИ (плейсхолдеры). Никогда не коммить реальные ключи.
 
+## S3 / MinIO
+- **Все операции с S3 — через MCP `minio`** (`mcp__minio__*`): бакеты, юзеры, политики, объекты, presign. Не дёргать `mc`/`mc admin` вручную. Шаренный endpoint — `apis3.xakki.ru` / `apis3.variantgood.com`; бакет результатов — `convertor-results` (`${S3_BUCKET_PREFIX}-results`). Ограничение MCP: создание кастомной IAM-политики недоступно — только встроенные (`readwrite`/`readonly`/…) через `policy_attach`.
+
 ## Frontend Rules
 - Никаких npm install в проде — CDN для Alpine.js и HTMX, Tailwind через CDN play
 - Для сборки (если нужна): Vite без тяжёлых зависимостей

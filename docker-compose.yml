@@ -348,7 +348,10 @@ services:
             timeout: 5s
             retries: 3
             start_period: 10s
+        # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend =
+        # reach keydb. Other workers get `default` too when migrated (Phase 4).
         networks:
+            - default
             - backend
 
     worker-ai:
