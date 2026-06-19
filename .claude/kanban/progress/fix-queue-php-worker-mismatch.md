@@ -73,5 +73,25 @@ Review: **APPROVE-WITH-NITS** (reviewer). No blockers. Nits all forward-looking/
 Follow-up found during Phase 0 (→ belongs to [[fix-configs-working-state]] or a config card, NOT a Phase 0 blocker):
 - `REDIS_DSN` (and `DATABASE_URL`) are referenced via `%env()%` in Symfony config but defined **only** in the gitignored `app-symfony/.env`. No tracked template (`app-symfony/.env.dist`) provides them → a fresh checkout has no Symfony env defaults. Root cause: the whole `app-symfony/.env` was gitignored because a live Telegram token was placed there instead of `.env.local`. Clean fix: move secrets to `.env.local`, commit `app-symfony/.env` (or `.env.dist`) with non-secret defaults incl. `REDIS_DSN=redis://keydb:6379?dbindex=2`.
 
-### Phases 1–6 — DEFERRED (later session)
-Per `docs/queue-redesign-design.md` §"Phased cards": C/D (Phase 1), E/F (Phase 2), G (Phase 3), H–L (Phase 4), M (Phase 5), N (Phase 6). Card stays in `progress/` (epic paused after Phase 0).
+### Phase 1–4 (image vertical slice) — IMPLEMENTED + WIRE-VERIFIED, pre-smoke (2026-06-19, commit `7646c17`)
+Strategy (user): **vertical slice** — drive ONE worker (image) end-to-end before fanning out. Team: queue-impl (PHP), py-worker (Python), reviewer.
+
+Delivered:
+- **PHP (C+D):** 6 per-key transports `conv_<key>` (stream `conv.<key>`, group `convertor`, JSON serializer, **`serializer: 0`** redis conn option); `dispatch()` routes via `TransportNamesStamp`; deleted `ConversionMessageHandler`+HTTP path; `getStatus()` reads Redis hash w/ DB fallback; new `app:queue:result-consumer` (raw XREADGROUP `conv.result`, idempotent persist to MariaDB); `S3Storage` (async-aws) + `/download` authed S3 proxy; `RedisConnectionFactory`/`ConversionStatusReader`/`ConversionResultPersister`.
+- **Python (E+G+H):** `StreamConsumerBase` (XGROUP id 0, double-decode envelope, ordered commit S3→HSET→XADD→XACK, XAUTOCLAIM idle 5min, max_retries 3→`conv.dead`, idempotency re-emit); `s3.py` (boto3); image worker→Pillow consumer; 22 pytest green.
+- Registry trimmed (svg/heic/avif removed from image until Dockerfile libs added).
+
+Review: **CHANGES-REQUESTED → resolved.** Blocker `symfony/redis-messenger` missing from composer.json (fixed); nits ext-redis declare + `/download` friendly filename (fixed); `getChunks()` verified correct.
+
+**🎯 Critical runtime blocker caught by live wire-check (not by review/phpstan):** `symfony/redis-messenger` Connection DEFAULT_OPTIONS `serializer => 1` (SERIALIZER_PHP) → phpredis wrote `message` as `s:NNN:"{json}";` → Python `json.loads` would throw on every message. Fixed with `options.serializer: 0` on all conv_*; **verified on the wire** (`XRANGE conv.image` → raw `{body,headers}` JSON). worker-image confirmed live: creates group on `conv.image`, XREADGROUP loop running.
+
+Gate: **PHPStan green** (1 slice + 15 pre-existing legacy errors fixed; added `phpstan/phpstan-doctrine`). `composer.lock` now committed.
+
+**Pending = full e2e smoke**, blocked on: (a) 🔴 root step `mc admin policy create local convertor-dev docs/infra/minio-convertor-policy.json` (then teamlead attaches via MCP) so S3 upload works; (b) dispatch a real image job → worker → S3 → result-consumer → DB round-trip. Card stays in `progress/` until smoke passes.
+
+### fix-configs spillover (found while booting the stack — belong to [[fix-configs-working-state]], some already fixed here)
+- FIXED here: `docker/fluent-logging.yml` include path (`fluent-log/`→`docker/fluent-log/`); missing `symfony/twig-bundle` (kernel wouldn't boot); `framework.serializer.enable_annotations`→`enable_attributes` (SF7); `image.Dockerfile` ignored `workers/requirements.txt` (hardcoded pip list missing boto3) — added boto3 inline.
+- STILL OPEN: `make cs`/`cs-check` targets miss `--allow-risky=yes` (cs-fixer ruleset has `declare_strict_types`); `xakki-convertor-libreoffice` healthcheck unhealthy (old HTTP main.py — to be migrated in a later phase); worker Dockerfiles should install from `workers/requirements.txt` not hardcoded lists ([[optimize-worker-dockerfiles]]); Symfony Flex scaffolded files left untracked (decide whether to commit the app baseline).
+
+### Phases 5–6 + remaining workers — DEFERRED (later session)
+Per `docs/queue-redesign-design.md` §"Phased cards": migrate ffmpeg/data/ai/libreoffice (H–L remainder), fault-tolerance e2e (M), e2e smoke (N). Card stays in `progress/`.
