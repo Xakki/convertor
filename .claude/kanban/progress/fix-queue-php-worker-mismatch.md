@@ -87,11 +87,18 @@ Review: **CHANGES-REQUESTED → resolved.** Blocker `symfony/redis-messenger` mi
 
 Gate: **PHPStan green** (1 slice + 15 pre-existing legacy errors fixed; added `phpstan/phpstan-doctrine`). `composer.lock` now committed.
 
-**Pending = full e2e smoke**, blocked on: (a) 🔴 root step `mc admin policy create local convertor-dev docs/infra/minio-convertor-policy.json` (then teamlead attaches via MCP) so S3 upload works; (b) dispatch a real image job → worker → S3 → result-consumer → DB round-trip. Card stays in `progress/` until smoke passes.
+### ✅ FULL API E2E PASSED (2026-06-19, commits `d24d463` etc.)
+S3 access via MCP (`policy_attach convertor-dev → readwrite`; ⚠ broad — MCP can't create a scoped policy; scoped JSON in `docs/infra/` for later). Buckets created via MCP; effective prefix `convertor-dev` (user un-commented `.env.local` override) → bucket `convertor-dev-results`.
 
-### fix-configs spillover (found while booting the stack — belong to [[fix-configs-working-state]], some already fixed here)
-- FIXED here: `docker/fluent-logging.yml` include path (`fluent-log/`→`docker/fluent-log/`); missing `symfony/twig-bundle` (kernel wouldn't boot); `framework.serializer.enable_annotations`→`enable_attributes` (SF7); `image.Dockerfile` ignored `workers/requirements.txt` (hardcoded pip list missing boto3) — added boto3 inline.
-- STILL OPEN: `make cs`/`cs-check` targets miss `--allow-risky=yes` (cs-fixer ruleset has `declare_strict_types`); `xakki-convertor-libreoffice` healthcheck unhealthy (old HTTP main.py — to be migrated in a later phase); worker Dockerfiles should install from `workers/requirements.txt` not hardcoded lists ([[optimize-worker-dockerfiles]]); Symfony Flex scaffolded files left untracked (decide whether to commit the app baseline).
+**Fully automatic round-trip proven (no manual steps):**
+`POST /auth/telegram (JWT) → POST /convert (upload png, quota, mime, store, dispatch) → conv.image (serializer:0 raw JSON) → worker (decode → Pillow png→jpg → S3 PUT convertor-dev-results) → conv.result → cron app:queue:result-consumer auto-persists FileStorage+status to MariaDB → GET /status=completed → GET /download → HTTP 200 image/jpeg, valid JPEG (magic ffd8ff)`. Verified worker-half (status hash + conv.result + XACK + real S3 object) AND full HTTP e2e.
+
+**Result-consumer robustness (routed to queue-impl, happy-path green):** persister logic correct (direct call + clean auto-run both OK), but a poison/orphan event throws → Doctrine **EntityManager closes** → long-running consumer wedges (every later persist fails) until supervisord restart. Fix = per-message catch + reset EM if closed + missing-conversion ack/skip + DLQ. Also py-worker: redis socket `TimeoutError` on XREADGROUP BLOCK crashed the worker (socket_timeout < block) → fix routed.
+
+### fix-configs spillover (found while booting+e2e'ing the stack — belong to [[fix-configs-working-state]])
+- FIXED here: `fluent-logging.yml` include path; missing `symfony/twig-bundle` (kernel boot); `enable_annotations`→`enable_attributes` (SF7); `image.Dockerfile` ignored `requirements.txt` (added boto3); **stray `nginx pf.conf`** (upstream `node:5173` of an unrelated frontend → nginx crash-loop) removed; **lexik JWT** `secret_key`/`public_key` → `%env(resolve:...)%` (was writing keys to a literal `%kernel.project_dir%` dir); **`shared-files` volume not mounted into php/cron** (uploads failed) — added; **`symfony/mime`** missing (upload MIME guess); `ConversionManager::createConversion` read upload mime/size AFTER `move()` → "file does not exist" (now reads before).
+- RUNTIME-ONLY fix (needs persistent fix): `/shared-files` owned root:root vs php uid 1000 → `chown 1000:1000` applied at runtime; entrypoint should chown SHARE_DIR to PUID:PGID. JWT keypair generated in-container (gitignored).
+- STILL OPEN: `make cs`/`cs-check` miss `--allow-risky=yes`; `libreoffice` healthcheck unhealthy (old HTTP main.py, later phase); worker Dockerfiles should install from `requirements.txt` ([[optimize-worker-dockerfiles]]); Symfony Flex scaffolded app baseline left untracked (decide whether to commit); migrations must be run (`make migrate`) on fresh setup.
 
 ### Phases 5–6 + remaining workers — DEFERRED (later session)
 Per `docs/queue-redesign-design.md` §"Phased cards": migrate ffmpeg/data/ai/libreoffice (H–L remainder), fault-tolerance e2e (M), e2e smoke (N). Card stays in `progress/`.
