@@ -11,6 +11,7 @@ From `docs/plan.md` + `docs/progress.md`: extended (phase 2) and AI (phase 3) co
 **Problem / scope:**
 Phase 2 (extended, "in progress" per docs):
 - FFmpeg worker — real audio/video conversions, codec deps in Docker.
+  - **3gp input support:** add `"3gp"` to `SUPPORTED` in `workers/ffmpeg/worker.py` (вход 3gp → mp4 уже маппится на `libx264`). Покрыть **integration-тестом 3gp→mp4** (реальный ffmpeg, маркер `integration`). Фикстура готова: `workers/tests/example_files/video.3gp` укорочена до 41KB (h263+aac, 3s). Перенесено сюда из [[worker-conversion-tests]] (там unit-only), решение от 2026-06-20.
 - Image worker (Pillow/ImageMagick) — format conversions + versions.
 - Data worker — CSV/JSON/XML/YAML with real datasets.
 - Tesseract OCR — image→text.
