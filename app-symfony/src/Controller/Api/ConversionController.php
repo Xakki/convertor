@@ -40,6 +40,7 @@ class ConversionController extends AbstractController
 
         $file     = $request->files->get('file');
         $toFormat = $request->request->get('to_format');
+        $ocr      = $request->request->getBoolean('ocr');
 
         if ($file === null) {
             return $this->json(['error' => 'File required'], Response::HTTP_BAD_REQUEST);
@@ -50,7 +51,7 @@ class ConversionController extends AbstractController
         }
 
         try {
-            $conversion = $this->conversionManager->createConversion($user, $file, strtolower((string) $toFormat));
+            $conversion = $this->conversionManager->createConversion($user, $file, strtolower((string) $toFormat), $ocr);
             $this->conversionManager->dispatch($conversion);
 
             return $this->json([

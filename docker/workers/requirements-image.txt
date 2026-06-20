@@ -1,6 +1,6 @@
 # worker-image pinned requirements (generated 2026-06-20)
 # Base: redis, aiohttp, structlog, boto3 + their transitive deps
-# Extra: Pillow, pytesseract
+# Extra: Pillow, pytesseract, python-docx (OCR→docx), pdf2image (pdf OCR)
 aiohappyeyeballs==2.6.2
 aiohttp==3.14.1
 aiosignal==1.4.0
@@ -10,11 +10,14 @@ botocore==1.43.34
 frozenlist==1.8.0
 idna==3.18
 jmespath==1.1.0
+lxml==6.1.1
 multidict==6.7.1
 packaging==26.2
+pdf2image==1.17.0
 pillow==12.2.0
 propcache==0.5.2
 python-dateutil==2.9.0.post0
+python-docx==1.2.0
 pytesseract==0.3.13
 redis==8.0.0
 s3transfer==0.19.0

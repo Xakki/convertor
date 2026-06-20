@@ -1,8 +1,11 @@
 """Image conversion worker — Phase 1, XREADGROUP-based.
 
 Consumes stream conv.image, consumer group convertor.
-Supported: raster → raster/pdf via Pillow.
-OCR (isAi=true) routes to conv.ai — not handled here.
+Supported:
+  - raster → raster/pdf via Pillow.
+  - OCR (raster + pdf → txt/md/docx) inline via tesseract/poppler. The worker
+    decides OCR by OUTPUT format: targetFormat ∈ {txt,md,docx} → OCR mode
+    (subType is null for raster OCR jobs, so it is NOT the trigger).
 
 Missing registry formats that need extra packages:
   svg   → requires cairosvg  (not in base image)
@@ -18,6 +21,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pdf2image
+import pytesseract
 from PIL import Image
 
 from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
@@ -25,6 +30,17 @@ from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
 logger = logging.getLogger(__name__)
 
 OCR_LANGS = os.getenv("OCR_LANGS", "rus+eng")
+
+# OCR (text) output targets the WORKER recognises by output format.
+_OCR_TARGETS: set[str] = {"txt", "md", "docx"}
+
+# Sources that the OCR branch accepts (raster via PIL + pdf via poppler).
+_OCR_SOURCES: set[str] = {"jpg", "jpeg", "png", "tiff", "tif", "pdf"}
+
+_DOCX_MIME = (
+    "application/vnd.openxmlformats-officedocument."
+    "wordprocessingml.document"
+)
 
 # MIME types for output formats
 _MIME: dict[str, str] = {
@@ -38,6 +54,9 @@ _MIME: dict[str, str] = {
     "tif":  "image/tiff",
     "ico":  "image/x-icon",
     "pdf":  "application/pdf",
+    "txt":  "text/plain",
+    "md":   "text/markdown",
+    "docx": _DOCX_MIME,
 }
 
 # Pillow save-format aliases (ext → PIL format name)
@@ -49,16 +68,21 @@ _PILLOW_FORMAT: dict[str, str] = {
 
 # Supported conversions (raster-native Pillow only).
 # svg/heic/avif excluded — need optional plugins not present in base image.
+# OCR targets (txt/md/docx) are advertised ONLY on the ROADMAP OCR-row sources
+# jpg/jpeg/png/tiff/tif (+ a pdf source that ONLY produces OCR text). They are
+# routing/advertisement hints; the OCR branch in convert() validates sources
+# against _OCR_SOURCES itself and bypasses this matrix.
 _MATRIX: dict[str, set[str]] = {
-    "jpg":  {"png", "gif", "bmp", "webp", "tiff", "ico", "pdf"},
-    "jpeg": {"png", "gif", "bmp", "webp", "tiff", "ico", "pdf"},
-    "png":  {"jpg", "gif", "bmp", "webp", "tiff", "ico", "pdf"},
+    "jpg":  {"png", "gif", "bmp", "webp", "tiff", "ico", "pdf", "txt", "md", "docx"},
+    "jpeg": {"png", "gif", "bmp", "webp", "tiff", "ico", "pdf", "txt", "md", "docx"},
+    "png":  {"jpg", "gif", "bmp", "webp", "tiff", "ico", "pdf", "txt", "md", "docx"},
     "gif":  {"jpg", "png", "bmp", "webp", "tiff", "ico", "pdf"},
     "bmp":  {"jpg", "png", "gif", "webp", "tiff", "ico", "pdf"},
     "webp": {"jpg", "png", "gif", "bmp", "tiff", "ico", "pdf"},
-    "tiff": {"jpg", "png", "gif", "bmp", "webp", "ico", "pdf"},
-    "tif":  {"jpg", "png", "gif", "bmp", "webp", "ico", "pdf"},
+    "tiff": {"jpg", "png", "gif", "bmp", "webp", "ico", "pdf", "txt", "md", "docx"},
+    "tif":  {"jpg", "png", "gif", "bmp", "webp", "ico", "pdf", "txt", "md", "docx"},
     "ico":  {"jpg", "png", "gif", "bmp", "webp", "tiff", "pdf"},
+    "pdf":  {"txt", "md", "docx"},
 }
 
 
@@ -74,6 +98,65 @@ def _do_convert(src: Path, out_path: Path, out_ext: str) -> None:
             img.convert("RGB").save(str(out_path), "JPEG")
         else:
             img.save(str(out_path), _pillow_fmt(out_ext))
+
+
+# --------------------------------------------------------------------------
+# OCR helpers
+# --------------------------------------------------------------------------
+
+def _ocr_image(img: "Image.Image") -> str:
+    return pytesseract.image_to_string(img, lang=OCR_LANGS)
+
+
+def _extract_text(src: Path, src_ext: str) -> list[str]:
+    """Return per-page OCR text. Raster sources yield a single page."""
+    if src_ext == "pdf":
+        pages = pdf2image.convert_from_path(str(src))
+        out: list[str] = []
+        for page in pages:
+            try:
+                out.append(_ocr_image(page).strip())
+            finally:
+                page.close()
+        return out
+    with Image.open(src) as img:
+        return [_ocr_image(img).strip()]
+
+
+def _write_txt(pages: list[str], out_path: Path) -> None:
+    out_path.write_text("\n\n".join(pages).strip() + "\n", encoding="utf-8")
+
+
+def _write_md(pages: list[str], out_path: Path) -> None:
+    # Each page's blank-line-separated blocks become markdown paragraphs;
+    # multiple pages are joined by a horizontal rule.
+    blocks: list[str] = []
+    for page in pages:
+        para = "\n\n".join(b.strip() for b in page.split("\n\n") if b.strip())
+        blocks.append(para)
+    sep = "\n\n---\n\n" if len(pages) > 1 else "\n\n"
+    out_path.write_text(sep.join(blocks).strip() + "\n", encoding="utf-8")
+
+
+def _write_docx(pages: list[str], out_path: Path) -> None:
+    import docx  # local import: only needed on the docx path
+
+    document = docx.Document()
+    for idx, page in enumerate(pages):
+        for block in page.split("\n\n"):
+            block = block.strip()
+            if block:
+                document.add_paragraph(block)
+        if idx < len(pages) - 1:
+            document.add_page_break()
+    document.save(str(out_path))
+
+
+_OCR_WRITERS = {
+    "txt": _write_txt,
+    "md": _write_md,
+    "docx": _write_docx,
+}
 
 
 class ImageWorker(StreamConsumerBase):
@@ -103,12 +186,18 @@ class ImageWorker(StreamConsumerBase):
         if not src.is_file():
             raise FileNotFoundError(f"input not found: {src}")
 
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+        # --- OCR branch: decided by OUTPUT format (txt/md/docx) -------------
+        if target_fmt in _OCR_TARGETS:
+            return self._convert_ocr(conv_id, src, src_ext, target_fmt)
+
+        # --- Raster branch (raster → raster / pdf) -------------------------
         if src_ext not in _MATRIX:
             raise ValueError(f"unsupported source format: {src_ext!r}")
         if target_fmt not in _MATRIX[src_ext]:
             raise ValueError(f"unsupported conversion: {src_ext} → {target_fmt}")
 
-        WORK_DIR.mkdir(parents=True, exist_ok=True)
         out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
 
         _do_convert(src, out_path, target_fmt)
@@ -124,6 +213,41 @@ class ImageWorker(StreamConsumerBase):
                 "src": src.name,
                 "out": out_path.name,
                 "mime": mime,
+            },
+        )
+        return str(out_path), mime, target_fmt
+
+    def _convert_ocr(
+        self, conv_id: int, src: Path, src_ext: str, target_fmt: str
+    ) -> tuple[str, str, str]:
+        """OCR a raster/pdf source into txt/md/docx text output."""
+        if src_ext not in _OCR_SOURCES:
+            raise ValueError(f"unsupported OCR source format: {src_ext!r}")
+
+        pages = _extract_text(src, src_ext)
+
+        if not any(p.strip() for p in pages):
+            logger.warning(
+                "OCR extracted no text — producing empty output",
+                extra={"conversionId": conv_id, "src": src.name, "pages": len(pages)},
+            )
+
+        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
+        _OCR_WRITERS[target_fmt](pages, out_path)
+
+        if not out_path.exists():
+            raise RuntimeError(f"OCR produced no output for conversionId={conv_id}")
+
+        mime = _MIME[target_fmt]
+        logger.info(
+            "image OCR completed",
+            extra={
+                "conversionId": conv_id,
+                "src": src.name,
+                "out": out_path.name,
+                "mime": mime,
+                "pages": len(pages),
+                "langs": OCR_LANGS,
             },
         )
         return str(out_path), mime, target_fmt

@@ -52,6 +52,9 @@ class Conversion
     #[ORM\Column(type: 'boolean')]
     private bool $isAi = false;
 
+    #[ORM\Column(type: 'boolean')]
+    private bool $isOcr = false;
+
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
 
@@ -191,6 +194,18 @@ class Conversion
     public function setIsAi(bool $isAi): self
     {
         $this->isAi = $isAi;
+
+        return $this;
+    }
+
+    public function isOcr(): bool
+    {
+        return $this->isOcr;
+    }
+
+    public function setIsOcr(bool $isOcr): self
+    {
+        $this->isOcr = $isOcr;
 
         return $this;
     }

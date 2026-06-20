@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr \
         tesseract-ocr-rus \
         tesseract-ocr-eng \
+        poppler-utils \
         imagemagick \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*

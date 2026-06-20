@@ -40,3 +40,22 @@ Ffmpeg-воркер (`workers/ffmpeg/worker.py`) уже Streams-consumer (чер
 - Unit-тесты ffmpeg покрываются отдельно в [[worker-conversion-tests]]; здесь — 3gp + integration 3gp→mp4 + валидация матрицы.
 
 Siblings: [[validate-image-worker]] · [[validate-data-worker]] · [[validate-libreoffice-worker]] · [[validate-ai-worker]]
+
+**Итог (2026-06-20):**
+- `3gp` объявлен **только на вход** (`SUPPORTED["3gp"] = _VIDEO_FORMATS | {mp3,wav,ogg,flac}`)
+  — по `ROADMAP.md` L154 3gp есть только в input-колонке видео, в output его нет; поэтому в
+  `_VIDEO_FORMATS`/`_MIME`/`CODEC_MAP` не добавлялся (3gp никогда не цель), `test_matrix_mime_coverage`
+  остаётся зелёным.
+- Integration-тест 3gp→mp4 на **реальном ffmpeg** (`workers/tests/test_ffmpeg_integration.py`,
+  маркер `integration`) — гоняет настоящий `convert()` на фикстуре, проверяет mp4/mime/ftyp +
+  полную декодируемость через `ffmpeg -f null`. Маркер зарегистрирован в новом `pytest.ini`.
+- Валидация матрицы vs ROADMAP: ничего заявленного не сломано; воркер — строгий **супермножество**
+  в 2 местах (audio→`wma` объявлен, ROADMAP output до `opus`; video→audio разрешает источники
+  `webm/flv/wmv`+3gp, ROADMAP — только `mp4/avi/mkv/mov`). Не правил (вне scope) → follow-up
+  [[reconcile-ffmpeg-matrix-roadmap]].
+- `pytest workers/tests` 64 passed/1 skipped (skip — пред-существующий `test_ai_worker`),
+  `pytest -m integration -v` 1 passed, `make docker-check` чисто. Ревью: APPROVE-WITH-NITS.
+- Caveat: системного `ffmpeg` нет (sudo недоступен) — тест гонялся на userspace static-сборке
+  (johnvansickle 7.0.2 via imageio-ffmpeg в `~/.local/bin`); без неё integration-тест skip'ается.
+  В CI/prod ffmpeg должен поставлять Dockerfile воркера (см. [[finish-worker-compose-wiring]]).
+  Runtime-валидация через S3 осталась заблокирована той же зависимостью.

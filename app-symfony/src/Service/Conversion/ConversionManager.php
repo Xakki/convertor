@@ -9,6 +9,7 @@ use App\Entity\Conversion;
 use App\Entity\FileStorage;
 use App\Entity\User;
 use App\Enum\ConversionStatus;
+use App\Enum\FileCategory;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Queue\ConversionStatusReader;
@@ -32,15 +33,27 @@ class ConversionManager
     ) {
     }
 
-    public function createConversion(User $user, UploadedFile $file, string $toFormat): Conversion
+    public function createConversion(User $user, UploadedFile $file, string $toFormat, bool $ocr = false): Conversion
     {
         $fromFormat = strtolower($file->getClientOriginalExtension());
 
-        if (! $this->registry->isSupported($fromFormat, $toFormat)) {
-            throw new \InvalidArgumentException("Unsupported conversion: {$fromFormat} → {$toFormat}");
+        // Explicit OCR intent: validate against the OCR capability set up front
+        // (cheap 400 before quota/S3), then force an image-worker, non-AI, free
+        // job. The worker decides OCR by the text targetFormat.
+        if ($ocr) {
+            if (! $this->registry->isOcrSupported($fromFormat, $toFormat)) {
+                throw new \InvalidArgumentException("Unsupported OCR conversion: {$fromFormat} → {$toFormat}");
+            }
+            $category = FileCategory::Image;
+            $isAi     = false;
+        } else {
+            if (! $this->registry->isSupported($fromFormat, $toFormat)) {
+                throw new \InvalidArgumentException("Unsupported conversion: {$fromFormat} → {$toFormat}");
+            }
+            $category = $this->registry->getCategory($fromFormat, $toFormat);
+            $isAi     = $this->registry->isAi($fromFormat, $toFormat);
         }
 
-        $isAi = $this->registry->isAi($fromFormat, $toFormat);
         $this->quotaService->checkAndDecrement($user, $isAi);
 
         // Read metadata BEFORE the upload is consumed — keep size/mime from the
@@ -65,8 +78,9 @@ class ConversionManager
         $conversion->setInputFile($inputFile);
         $conversion->setFromFormat($fromFormat);
         $conversion->setToFormat($toFormat);
-        $conversion->setCategory($this->registry->getCategory($fromFormat, $toFormat));
+        $conversion->setCategory($category);
         $conversion->setIsAi($isAi);
+        $conversion->setIsOcr($ocr);
 
         $this->em->persist($conversion);
         $this->em->flush();
@@ -97,18 +111,17 @@ class ConversionManager
     }
 
     /**
-     * Routing key = stream suffix. AI jobs go to the dedicated `ai` stream;
-     * `markup` is folded into `document` (no dedicated markup worker).
+     * Routing key = stream suffix. Delegates to the pure
+     * {@see ConversionRegistry::streamFor()}; OCR jobs are forced to the image
+     * stream via the persisted {@see Conversion::isOcr()} flag.
      */
     private function routingKey(Conversion $conversion): string
     {
-        if ($conversion->isAi()) {
-            return 'ai';
-        }
-
-        $category = $conversion->getCategory()->value;
-
-        return $category === 'markup' ? 'document' : $category;
+        return $this->registry->streamFor(
+            $conversion->getFromFormat(),
+            $conversion->getToFormat(),
+            $conversion->isOcr(),
+        );
     }
 
     /**

@@ -121,6 +121,14 @@ test-php: ## Run PHPUnit tests
 test-python: ## Run pytest for all workers
 	PYTHONPATH=. pytest workers/tests/ -v
 
+.PHONY: test-image-ocr
+test-image-ocr: build-image ## Run OCR integration tests inside worker-image (real tesseract+poppler)
+	docker run --rm --entrypoint sh \
+	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src \
+	    -u root $(COMPOSE_PROJECT_NAME)/worker-image:latest \
+	    -c "pip install --no-cache-dir --quiet pytest && \
+	        python3 -m pytest workers/tests -m integration -v"
+
 .PHONY: phpstan
 phpstan: ## Run PHPStan static analysis
 	docker exec $(PHP_CONT) php vendor/bin/phpstan analyse

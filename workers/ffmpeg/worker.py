@@ -71,6 +71,9 @@ SUPPORTED: dict[str, set[str]] = {
     "opus": _AUDIO_FORMATS,
     "wma":  _AUDIO_FORMATS,
     # video → video / video → audio
+    # 3gp is input-only per ROADMAP (listed in the video input column as +3gp,
+    # absent from the output column) — never a target, so no _MIME/CODEC entry.
+    "3gp":  _VIDEO_FORMATS | {"mp3", "wav", "ogg", "flac"},
     "mp4":  _VIDEO_FORMATS | {"mp3", "wav", "ogg", "flac"},
     "avi":  _VIDEO_FORMATS | {"mp3", "wav", "ogg", "flac"},
     "mkv":  _VIDEO_FORMATS | {"mp3", "wav", "ogg", "flac"},
