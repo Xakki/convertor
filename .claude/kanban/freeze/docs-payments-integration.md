@@ -33,6 +33,7 @@ Implement each gateway behind a common payment abstraction; verify webhooks; rec
 - Test/sandbox credentials availability for Stripe/Cryptomus?
 - Credit model: per-conversion credits, subscription tiers, or both?
 - Split into one card per gateway when moving to todo?
+- **YooMoney** (RU, RUB, ~3.5%) присутствует в платёжной таблице `docs/plan.md` (строка 226) рядом с Telegram Stars/Stripe/Cryptomus, но не в текущем scope. Включать YooMoney или нет при разморозке?
 
 **Decisions:**
 - (to be filled during grooming)
