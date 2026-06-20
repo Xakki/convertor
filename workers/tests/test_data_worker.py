@@ -117,14 +117,91 @@ class TestReadWrite:
         assert out_xml.exists()
         assert "<root>" in out_xml.read_text(encoding="utf-8")
 
+    def test_toml_read_dict(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "data.toml"
+        toml_file.write_text(
+            'title = "Convertor"\n[owner]\nname = "Alice"\nage = 30\n',
+            encoding="utf-8",
+        )
+        data = _read_data(toml_file)
+        assert isinstance(data, dict)
+        assert data["title"] == "Convertor"
+        assert data["owner"]["name"] == "Alice"
+
+    def test_toml_write_wraps_list_under_rows(self, tmp_path: Path) -> None:
+        import tomllib
+
+        out_toml = tmp_path / "out.toml"
+        _write_data(SAMPLE_RECORDS, out_toml)
+        reloaded = tomllib.loads(out_toml.read_text(encoding="utf-8"))
+        assert "rows" in reloaded
+        assert reloaded["rows"][0]["name"] == "Alice"
+        assert reloaded["rows"][1]["city"] == "Almaty"
+
+    def test_toml_write_dict_passthrough(self, tmp_path: Path) -> None:
+        import tomllib
+
+        out_toml = tmp_path / "out.toml"
+        _write_data({"owner": {"name": "Bob", "age": 25}}, out_toml)
+        reloaded = tomllib.loads(out_toml.read_text(encoding="utf-8"))
+        assert reloaded["owner"]["name"] == "Bob"
+
+    def test_toml_write_drops_none(self, tmp_path: Path) -> None:
+        import tomllib
+
+        records = [{"name": "Alice", "city": None}, {"name": "Bob", "city": "Almaty"}]
+        out_toml = tmp_path / "out.toml"
+        _write_data(records, out_toml)
+        reloaded = tomllib.loads(out_toml.read_text(encoding="utf-8"))
+        assert "city" not in reloaded["rows"][0]
+        assert reloaded["rows"][1]["city"] == "Almaty"
+
+    def test_toml_write_drops_nan_from_csv(self, tmp_path: Path) -> None:
+        import tomllib
+
+        import pandas as pd
+
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("name,city\nAlice,\nBob,Almaty\n", encoding="utf-8")
+        data = _read_data(csv_file)  # pandas yields NaN for the blank cell
+
+        out_toml = tmp_path / "out.toml"
+        _write_data(data, out_toml)
+        reloaded = tomllib.loads(out_toml.read_text(encoding="utf-8"))
+        assert "city" not in reloaded["rows"][0]
+        assert reloaded["rows"][1]["city"] == "Almaty"
+
+    def test_toml_json_roundtrip(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "data.toml"
+        _write_data(SAMPLE_RECORDS, toml_file)
+
+        data = _read_data(toml_file)
+        assert data == {"rows": SAMPLE_RECORDS}
+
+        out_json = tmp_path / "out.json"
+        _write_data(data, out_json)
+        reloaded = json.loads(out_json.read_text(encoding="utf-8"))
+        assert reloaded["rows"] == SAMPLE_RECORDS
+
+    def test_toml_with_date_to_json(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "data.toml"
+        toml_file.write_text('released = 2024-01-15\nname = "x"\n', encoding="utf-8")
+
+        data = _read_data(toml_file)  # tomllib yields a datetime.date
+
+        out_json = tmp_path / "out.json"
+        _write_data(data, out_json)  # must not raise on the date value
+        reloaded = json.loads(out_json.read_text(encoding="utf-8"))
+        assert reloaded["released"] == "2024-01-15"
+
     def test_unsupported_input_raises(self, tmp_path: Path) -> None:
-        bad_file = tmp_path / "file.toml"
-        bad_file.write_text("key = 'value'", encoding="utf-8")
+        bad_file = tmp_path / "file.ini"
+        bad_file.write_text("key = value", encoding="utf-8")
         with pytest.raises(ValueError, match="unsupported input format"):
             _read_data(bad_file)
 
     def test_unsupported_output_raises(self, tmp_path: Path) -> None:
-        bad_out = Path("/tmp/out.toml")
+        bad_out = Path("/tmp/out.ini")
         with pytest.raises(ValueError, match="unsupported output format"):
             _write_data(SAMPLE_RECORDS, bad_out)
 
@@ -165,6 +242,113 @@ class TestDataConvert:
         assert mime == "application/x-yaml"
         loaded = yaml.safe_load(Path(out_path).read_text(encoding="utf-8"))
         assert loaded[1]["name"] == "Bob"
+
+    def test_csv_to_toml(self, tmp_path: Path) -> None:
+        import tomllib
+
+        import pandas as pd
+
+        src = tmp_path / "data.csv"
+        pd.DataFrame(SAMPLE_RECORDS).to_csv(src, index=False)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(_make_job(6, src, "csv", "toml"))
+
+        assert Path(out_path).exists()
+        assert ext == "toml"
+        assert mime == "application/toml"
+        loaded = tomllib.loads(Path(out_path).read_text(encoding="utf-8"))
+        assert loaded["rows"][0]["name"] == "Alice"
+
+    def test_json_to_toml(self, tmp_path: Path) -> None:
+        import tomllib
+
+        src = tmp_path / "data.json"
+        src.write_text(json.dumps(SAMPLE_RECORDS), encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(_make_job(7, src, "json", "toml"))
+
+        assert ext == "toml"
+        loaded = tomllib.loads(Path(out_path).read_text(encoding="utf-8"))
+        assert loaded["rows"][1]["name"] == "Bob"
+
+    def test_toml_to_json(self, tmp_path: Path) -> None:
+        src = tmp_path / "data.toml"
+        _write_data(SAMPLE_RECORDS, src)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(_make_job(8, src, "toml", "json"))
+
+        assert ext == "json"
+        loaded = json.loads(Path(out_path).read_text(encoding="utf-8"))
+        assert loaded["rows"][0]["name"] == "Alice"
+
+    def test_toml_to_csv(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        src = tmp_path / "data.toml"
+        _write_data(SAMPLE_RECORDS, src)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(_make_job(9, src, "toml", "csv"))
+
+        assert ext == "csv"
+        loaded = pd.read_csv(Path(out_path)).to_dict(orient="records")
+        assert loaded[0]["name"] == "Alice"
+        assert loaded[1]["city"] == "Almaty"
+
+    def test_yaml_to_toml_with_date(self, tmp_path: Path) -> None:
+        import datetime
+        import tomllib
+
+        import yaml
+
+        payload = {
+            "title": "Release",
+            "released": datetime.date(2024, 1, 15),
+            "owner": {"name": "Alice", "age": 30},
+        }
+        src = tmp_path / "data.yaml"
+        src.write_text(yaml.dump(payload, allow_unicode=True), encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(_make_job(10, src, "yaml", "toml"))
+
+        assert ext == "toml"
+        assert mime == "application/toml"
+        # tomllib parses TOML dates back to datetime.date → full structural round-trip.
+        loaded = tomllib.loads(Path(out_path).read_text(encoding="utf-8"))
+        assert loaded == payload
+
+    def test_toml_to_yaml_with_date(self, tmp_path: Path) -> None:
+        import datetime
+
+        import yaml
+
+        src = tmp_path / "data.toml"
+        src.write_text(
+            'title = "Release"\nreleased = 2024-01-15\n[owner]\nname = "Bob"\nage = 25\n',
+            encoding="utf-8",
+        )
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(_make_job(11, src, "toml", "yaml"))
+
+        assert ext == "yaml"
+        assert mime == "application/x-yaml"
+        loaded = yaml.safe_load(Path(out_path).read_text(encoding="utf-8"))
+        assert loaded == {
+            "title": "Release",
+            "released": datetime.date(2024, 1, 15),
+            "owner": {"name": "Bob", "age": 25},
+        }
 
     def test_output_placed_in_work_dir_with_conv_id(self, tmp_path: Path) -> None:
         src = tmp_path / "data.json"

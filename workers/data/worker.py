@@ -1,4 +1,4 @@
-"""Data format conversion worker: csv ↔ json ↔ xml ↔ yaml.
+"""Data format conversion worker: csv ↔ json ↔ xml ↔ yaml ↔ toml.
 
 Phase 1, XREADGROUP-based: consumes stream conv.data (consumer group
 convertor), reads the local input the base class downloaded from S3
@@ -19,11 +19,12 @@ from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
 logger = logging.getLogger(__name__)
 
 SUPPORTED: dict[str, set[str]] = {
-    "csv":  {"json", "xml", "yaml", "yml"},
-    "json": {"csv", "xml", "yaml", "yml"},
-    "xml":  {"csv", "json", "yaml", "yml"},
-    "yaml": {"csv", "json", "xml"},
-    "yml":  {"csv", "json", "xml"},
+    "csv":  {"json", "xml", "yaml", "yml", "toml"},
+    "json": {"csv", "xml", "yaml", "yml", "toml"},
+    "xml":  {"csv", "json", "yaml", "yml", "toml"},
+    "yaml": {"csv", "json", "xml", "toml"},
+    "yml":  {"csv", "json", "xml", "toml"},
+    "toml": {"csv", "json", "xml", "yaml", "yml"},
 }
 
 # MIME types for output formats
@@ -33,6 +34,7 @@ _MIME: dict[str, str] = {
     "xml":  "application/xml",
     "yaml": "application/x-yaml",
     "yml":  "application/x-yaml",
+    "toml": "application/toml",
 }
 
 
@@ -51,6 +53,10 @@ def _read_data(src: Path) -> Any:
     if ext in ("yaml", "yml"):
         import yaml
         return yaml.safe_load(src.read_text(encoding="utf-8"))
+
+    if ext == "toml":
+        import tomllib
+        return tomllib.loads(src.read_text(encoding="utf-8"))
 
     if ext == "xml":
         import xml.etree.ElementTree as ET
@@ -80,13 +86,30 @@ def _read_data(src: Path) -> Any:
     raise ValueError(f"unsupported input format: {ext}")
 
 
+def _toml_safe(value: Any) -> Any:
+    """Drop None/NaN recursively: TOML has no null and csv/pandas yields NaN."""
+    if isinstance(value, dict):
+        return {k: _toml_safe(v) for k, v in value.items() if not _is_null(v)}
+    if isinstance(value, list):
+        return [_toml_safe(v) for v in value if not _is_null(v)]
+    return value
+
+
+def _is_null(value: Any) -> bool:
+    import math
+
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
 def _write_data(data: Any, out_path: Path) -> None:
     """Write Python object *data* to *out_path* in the appropriate format."""
     ext = out_path.suffix.lower().lstrip(".")
 
     if ext == "json":
+        # default=str: TOML/YAML yield native date/datetime objects json can't serialize.
         out_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(data, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
         )
         return
 
@@ -113,6 +136,17 @@ def _write_data(data: Any, out_path: Path) -> None:
         else:
             raise ValueError("cannot convert to CSV: unexpected data shape")
         df.to_csv(out_path, index=False, encoding="utf-8")
+        return
+
+    if ext == "toml":
+        import tomli_w
+
+        safe = _toml_safe(data)
+        # TOML root must be a table; wrap a top-level list (csv/json array) under "rows".
+        doc = {"rows": safe} if isinstance(safe, list) else safe
+        if not isinstance(doc, dict):
+            raise ValueError("cannot convert to TOML: unexpected data shape")
+        out_path.write_text(tomli_w.dumps(doc), encoding="utf-8")
         return
 
     if ext == "xml":

@@ -37,3 +37,18 @@ Data-воркер (`workers/data/worker.py`) уже Streams-consumer (через
 - Unit-тесты data-воркера (полная матрица + round-trip + malformed) покрываются отдельно в [[worker-conversion-tests]]; здесь — `toml` + валидация на реальных датасетах.
 
 Siblings: [[validate-ffmpeg-worker]] · [[validate-image-worker]] · [[validate-libreoffice-worker]] · [[validate-ai-worker]]
+
+**Итог (2026-06-20):**
+- Миграция на KeyDB Streams + S3 уже была в коде (коммит 72ad579) — Redis-LISTS и
+  `/shared-files` в `workers/data/worker.py` отсутствуют. По факту сделано: `toml` (вход+выход)
+  + валидация матрицы.
+- `toml`: добавлен в `SUPPORTED` (обе стороны, без toml→toml), MIME `application/toml`,
+  чтение `tomllib`, запись `tomli_w`; топ-левел список оборачивается в `{"rows": …}`,
+  None/NaN рекурсивно отбрасываются; `json.dumps(default=str)` для native date.
+- Зависимости: `tomli-w>=1.0` (`workers/requirements.txt`), `tomli_w==1.2.0`
+  (`docker/workers/requirements-data.txt`).
+- Валидация: матрица csv/json/xml/yaml/toml провалидирована end-to-end на реальном MinIO
+  (`convertor-dev`, in→`-inputs`, out→`-results`). `make test-python` 63 passed/1 skipped,
+  `make docker-check` чисто. Ревью: APPROVE-WITH-NITS (блокеров нет).
+- Вскрытые при валидации пред-существующие дефекты CSV-writer/XML-reader (`*→csv` теряет
+  колонки, `xml→csv` вырожден) вынесены в отдельную карточку [[csv-xml-writer-hardening]].

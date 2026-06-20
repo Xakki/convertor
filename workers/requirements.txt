@@ -6,6 +6,7 @@ Pillow>=10.3
 pytesseract>=0.3.10
 pandas>=2.2
 pyyaml>=6.0
+tomli-w>=1.0
 lxml>=5.2
 faster-whisper>=1.0
 pyttsx3>=2.90
