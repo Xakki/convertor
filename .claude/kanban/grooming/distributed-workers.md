@@ -19,9 +19,13 @@ gated off the main stack via `profiles: ["ai"]` (done in [[optimize-worker-docke
 heavy for prod-on-box.
 
 **Decisions (2026-06-20, user):**
-- **Redis access = TLS SNI-stream via `shared-nginx`** — same pattern already used on saFin for
-  `mongo.*` / `pg.*` / `opensearch.*` (stream :81). Expose KeyDB as `redis.<domain>` over TLS;
-  external worker connects with TLS + KeyDB password. (NOT a public plain port; NOT a per-host VPN.)
+- **Redis access = TLS SNI-stream via `shared-nginx`, subdomain `redis.<domain>`** — same pattern as
+  saFin `mongo.*`/`pg.*`/`opensearch.*` (stream :81). Subdomain is **forced**, not a preference: Redis
+  is a raw TCP protocol, so an HTTP sub-path (`/redis`) is impossible; SNI-stream routes by hostname
+  only. External worker connects with TLS + KeyDB password. (NOT a public plain port; NOT a per-host VPN.)
+- **S3 access = reuse existing public endpoint `apis3.xakki.ru` / `apis3.variantgood.com`** — already
+  live (global CLAUDE.md). No new exposure. A sub-path `/api-s3` is rejected: it breaks virtual-host
+  bucket addressing and SigV4/presigned/CORS under path-style. So the only **new** infra is `redis.*`.
 
 **Depends on:** [[storage-input-to-s3]] — a remote worker cannot mount `/shared-files`, so input must
 already be in S3.

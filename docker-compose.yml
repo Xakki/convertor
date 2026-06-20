@@ -330,6 +330,7 @@ services:
             - backend
 
     worker-ai:
+        profiles: ["ai"]
         build:
             context: .
             dockerfile: docker/workers/ai.Dockerfile
