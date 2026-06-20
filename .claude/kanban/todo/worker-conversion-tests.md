@@ -1,47 +1,52 @@
-### Write conversion tests for workers (+ fixtures in tests/example_files)
+### Тесты конвертации для воркеров (+ фикстуры в tests/example_files)
 
-**Criticality:** High
+**Критичность:** High
 
 **TAGS:**
 - feature
 - tech-debt
 
-**Description:**
-Worker conversion logic is largely untested. Only `DataWorker` has partial conversion tests; `Image/Ffmpeg/Ai` workers have **zero**; `LibreOffice` has integration-only tests (needs running service). Fixtures in `workers/tests/example_files/` are sparse and partly orphaned.
+**Описание:**
+Логика конвертации в воркерах слабо покрыта тестами. Не покрыты **Ffmpeg** и **Ai** воркеры. Нет `conftest.py` и конфига pytest (маркеры, asyncio-режим). LibreOffice покрыт отдельным `unittest`-интеграционником (требует живой сервис). Фикстуры в `workers/tests/example_files/` неполные и частично «осиротевшие».
 
-**Problem:**
-Current coverage:
-- `test_base_worker.py` — plumbing only (callback/ack/loop via EchoWorker), no real conversions.
-- `test_data_worker.py` — ~20% of CSV/JSON/XML/YAML matrix, no error/edge cases.
-- Image/Ffmpeg/Ai workers — untested.
-- LibreOffice — `unittest` integration only, requires live service.
+**Текущее покрытие (актуализировано при груминге):**
+- `test_base_worker.py` — только инфраструктура (pop/ack очереди, retry callback'а), без реальных конвертаций.
+- `test_data_worker.py` — csv/json/yaml/xml чтение/запись + round-trip + ошибки на неподдерживаемый формат; матрица неполная, мало edge-кейсов.
+- `test_image_worker_stream.py` — **уже есть**: Pillow png↔jpg↔webp↔bmp↔pdf, формат имени выходного файла, ошибки (неподдерживаемый формат, нет входного файла).
+- `test_stream_consumer.py` — **уже есть**: декод двойного JSON-конверта Symfony Messenger, типы ключей/значений (bytes/str).
+- `workers/libreoffice/tests/test_main.py` — `unittest` HTTP-интеграция, нужен живой сервис / `HOST_SHARE`.
+- **Ffmpeg, Ai** — тестов нет вообще.
 
-Fixture gaps in `tests/example_files/`:
-- Have: `image.jpg`, several doc/docx/pdf, plus **orphans** `29216306410573.dwg` (no worker) and `video.3gp` (3gp unsupported by ffmpeg worker).
-- Missing: audio (mp3/wav/ogg/flac), valid video (mp4/avi/mkv), data (csv/json/xml/yaml), extra image formats, OCR test image, malformed/empty files.
+**Проблема:**
+Регрессии конвертации уезжают в прод молча; нельзя доверять ядру продукта (конвертация файлов). Каждый тест-файл сам мокает redis/requests/urllib3 — дублирование, которое просится в общий `conftest.py`.
 
-**Impact:**
-Conversion regressions ship silently; can't trust the core product (file conversion).
+**Пробелы в фикстурах (`tests/example_files/`):**
+- Есть: `image.jpg`, несколько doc/docx/pdf, плюс **сироты** `29216306410573.dwg` (нет воркера) и `video.3gp` (3gp нет в SUPPORTED-матрице ffmpeg-воркера).
+- Пользователь добавил `story.mp3` (**5.9 MB — нужно укоротить до ≤50KB**).
+- Не хватает: data (csv/json/xml/yaml), malformed/пустые файлы. Видео-фикстуры для unit-тестов не нужны (subprocess мокается).
 
-**Recommendation:**
-Add pytest config (`conftest.py`/`pytest.ini`, asyncio mode, `integration`/`slow` markers). Layer tests:
-- **Tier 1 (cheap, mock/validation):** unsupported input/output format, missing file, path-traversal (`safe_share_path`), empty input, output-not-created — across Image/Ffmpeg/Ai/Data.
-- **Tier 2 (real conversions):** Image jpg→png/pdf/webp (Pillow), Data full matrix + roundtrip + malformed JSON/XML/CSV, OCR (mock pytesseract).
-- **Tier 3 (integration, marked):** Ffmpeg audio/video (needs binaries+fixtures), LibreOffice HTTP endpoints + path-traversal + size limit.
-Add the missing fixtures (small clips/files) and remove or document the orphans.
+**Влияние:**
+Без покрытия Ffmpeg/Ai любая поломка кодеков/провайдеров/выбора формата проходит незамеченной.
 
-**Acceptance Criteria:**
-- `pytest workers/tests -m "not integration"` green and runnable without external binaries.
-- Each worker has happy-path + error-case coverage; safe_path traversal tested.
-- Required fixtures present (small, committed); orphan fixtures resolved.
-- Tests/QA green per project CLAUDE.md (`pytest` for workers).
+**Решение (scope — только unit, реальные движки мокаем):**
+Добавить конфиг pytest и слой unit-тестов без внешних бинарей.
+- Завести `conftest.py` (общие фикстуры: моки redis/requests, временный share-dir) + `pytest.ini` (`asyncio_mode=auto`, маркеры `integration`/`slow` — на будущее, кейсы под ними сейчас не пишем).
+- **Валидация/моки (все воркеры Image/Ffmpeg/Ai/Data):** неподдерживаемый вход/выход, нет входного файла, path-traversal (`safe_share_path`), пустой вход, «выход не создан». Для Ffmpeg/Ai — мокать `subprocess`/движки (whisper/TTS/SDK).
+- **Лёгкие реальные конвертации (без бинарей):** Data — полная матрица csv/json/xml/yaml + round-trip + malformed JSON/XML/CSV. Image — уже покрыт, при необходимости дополнить.
+- **Сироты `.dwg`/`.3gp`:** оставить файлы, покрыть `xfail`/`skip`-тестом как намеренно неподдерживаемый формат.
+- Укоротить `story.mp3` до ≤50KB и закоммитить (для Ai-воркера достаточно факта существования файла — STT/движок мокается).
 
-**Open questions:**
-- Generate audio/video fixtures synthetically (ffmpeg `testsrc`/`sine`, kept tiny) or commit small real samples? Repo-size limit?
-- Mock heavy engines (whisper/TTS/ffmpeg/soffice) for unit tests vs run real in a marked integration suite — where to draw the line?
-- Should LibreOffice tests be refactored from `unittest` to pytest, or kept separate?
-- Target a coverage threshold (e.g. enforce in CI), or just add cases now?
-- Remove orphan `.dwg`/`.3gp` fixtures, or add worker support to match them?
+**Критерии приёмки:**
+- `pytest workers/tests` зелёный и запускается **без внешних бинарей** (ffmpeg/soffice/whisper не требуются).
+- Ffmpeg и Ai воркеры получают unit-покрытие (моки subprocess/SDK): happy-path + error-case.
+- У каждого воркера есть happy-path + error-case; протестирован path-traversal через `safe_share_path`.
+- Добавлены `conftest.py` + `pytest.ini`; настроены asyncio-режим и маркеры.
+- `story.mp3` укорочен до ≤50KB и закоммичен; сироты `.dwg`/`.3gp` покрыты `xfail`/`skip`.
+- QA зелёный по project CLAUDE.md (`pytest` для воркеров).
 
-**Decisions:**
-- (to be filled during grooming)
+**Decisions (зафиксировано при груминге 2026-06-20):**
+- **Фикстуры audio:** использовать добавленный пользователем `story.mp3`, укоротить до ≤50KB, закоммитить. Video-фикстуры для unit не нужны (subprocess мокается). Data/malformed — мелкие, коммитим.
+- **Граница unit/integration:** сейчас **только unit**. Тяжёлые движки (ffmpeg/soffice/whisper/TTS) мокаем. Реальные integration-тесты (tier 3) — отложены в отдельную будущую карточку; маркер `integration` заводим заранее, но кейсы под ним сейчас не пишем.
+- **Сироты `.dwg`/`.3gp`:** оставить, покрыть `xfail`/`skip` («неподдерживаемый формат» — намеренно).
+- **Coverage gate:** не вводим. Опционально можно подключить `pytest-cov` для отчёта, но **без** `--fail-under`.
+- **LibreOffice unittest-интеграционник:** в scope этой карточки не трогаем (он требует живой сервис → не unit). Рефактор/перенос на pytest — при необходимости отдельной задачей.
