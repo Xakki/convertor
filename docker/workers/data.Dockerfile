@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.12-slim
+# ---------- shared base stage (BuildKit deduplicates identical layers) ----------
+FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -8,24 +9,29 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         tini \
-    && rm -rf /var/lib/apt/lists/*
+        ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN pip install --no-cache-dir \
-    redis \
-    aiohttp \
-    structlog \
-    boto3 \
-    pandas \
-    pyyaml \
-    lxml \
-    openpyxl
+RUN useradd -m -u 1000 app
+
+# ---------- worker-data stage ----------
+FROM base AS worker
+
+# Deps before COPY source for layer caching
+COPY docker/workers/requirements-data.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+RUN mkdir -p /work && chown app:app /work
 
 WORKDIR /app
 
-COPY workers/common/ /app/workers/common/
-COPY workers/data/ /app/workers/data/
+COPY --chown=app:app workers/common/ /app/workers/common/
+COPY --chown=app:app workers/data/ /app/workers/data/
 
 ENV WORKER_MODULE=workers.data.worker
+
+USER app
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python3 -c "import pandas, yaml, lxml; print('ok')" || exit 1

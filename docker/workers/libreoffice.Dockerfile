@@ -34,8 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i -E 's/^# (en_US\.UTF-8|ru_RU\.UTF-8|de_DE\.UTF-8|fr_FR\.UTF-8|es_ES\.UTF-8|it_IT\.UTF-8|zh_CN\.UTF-8|ja_JP\.UTF-8|ko_KR\.UTF-8) UTF-8/\1 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && useradd -m -u 1000 -d /home/app app \
-    && mkdir -p /share /proxy \
-    && chown -R app:app /share /proxy /home/app \
+    && mkdir -p /share /proxy /work \
+    && chown -R app:app /share /proxy /home/app /work \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 

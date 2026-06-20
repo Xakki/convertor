@@ -340,7 +340,7 @@ services:
         stop_signal: SIGTERM
         volumes:
             - shared-files:/shared-files
-            - whisper-models:/root/.cache/huggingface
+            - whisper-models:/home/app/.cache/huggingface
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}

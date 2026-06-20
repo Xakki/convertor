@@ -116,7 +116,7 @@ test-php: ## Run PHPUnit tests
 
 .PHONY: test-python
 test-python: ## Run pytest for all workers
-	pytest workers/tests/ -v
+	PYTHONPATH=. pytest workers/tests/ -v
 
 .PHONY: phpstan
 phpstan: ## Run PHPStan static analysis
