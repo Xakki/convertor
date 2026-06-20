@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY docker/workers/requirements-ai.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-RUN mkdir -p /work && chown app:app /work
+RUN mkdir -p /work /app && chown app:app /work /app
 
 WORKDIR /app
 
