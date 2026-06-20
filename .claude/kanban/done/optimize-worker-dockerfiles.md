@@ -52,3 +52,19 @@ Slow rebuilds, large images, security exposure (root), surprise breakage from fl
 - Rebuild `worker-image` from no-cache → re-run its pytest (`test_image_worker_stream.py`, `test_stream_consumer.py`) + image e2e round-trip → MUST stay green. Non-root + pins can silently break the only proven slice (file-write perms esp.).
 - Clean `docker compose build` from no cache succeeds for all (discriminating test for the base-stage ordering).
 - Record before/after sizes. Baseline (2026-06-20): image 468MB · data 437MB · ffmpeg 834MB · libreoffice 1.35GB · ai 1.46GB. ai/libreoffice are payload-dominated → expect modest size change; honest wins are reproducibility/non-root/cache/.dockerignore.
+
+---
+
+## Execution Log — DONE, review APPROVE-WITH-NITS (2026-06-20)
+
+Commits: `e4b2e8f` (boto3 + .dockerignore, unblock) → `77a6f64` (base-stage + non-root + pinned per-worker requirements + ai cache path) → `fab888d` (worker-ai `profiles: ["ai"]`) → `716eea1` (review nits: `/app` chown).
+
+**Delivered:** identical `python:3.12-slim AS base` stage per python worker (BuildKit dedup), non-root `app` uid 1000, per-worker pinned `requirements-*.txt` (`==`, boto3==1.43.34 everywhere), `.dockerignore`, source COPY after deps, writable `/work`+`/app`. worker-ai gated behind `profiles:["ai"]` (off by default — prod doesn't run ai); whisper volume `/root/.cache`→`/home/app/.cache/huggingface`. libreoffice hygiene-only (no pip, PEP 668).
+
+**Verification (team-lead):** all 5 build; container smoke non-root uid=1000 + boto3/deps import (incl faster_whisper); image-slice **pytest 24 passed** (regression intact); `/app` writable; `annotated-doc==0.0.4` confirmed real on PyPI.
+
+**Sizes after (≈+50MB/worker from boto3, expected):** image 469 · data 488 · ffmpeg 887 · ai 1.51GB · libreoffice 1.35GB. AC "size reduction" NOT met — boto3-everywhere outweighs trimming; accepted deviation (wins = non-root/reproducibility/cache/.dockerignore).
+
+**Reviewer nits:** [nit] `/app` root-owned → FIXED (`716eea1`); [nit] `annotated-doc` phantom? → verified real, kept; [nit] whisper re-download first start → expected/documented.
+
+**Awaiting:** user approval `ready → done`.

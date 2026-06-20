@@ -8,7 +8,11 @@
 - transcriptAudioToText() - /v1/audio/transcriptions
 - textToAudio() - /api/audio/speech
 - textToImage() - /images/{filename}
+
+
 -------------------
+# Краткая сводка
+
 OpenAPI v0.5, 21 path / 31 операция. Три слоя авторизации (важно для понимания):
 
 ┌─────────────────────────┬───────────────────────────┬───────────────────────────────────────────────┐                                                                                                                                                                                                                                                             
