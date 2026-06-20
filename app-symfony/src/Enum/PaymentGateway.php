@@ -7,6 +7,6 @@ namespace App\Enum;
 enum PaymentGateway: string
 {
     case TelegramStars = 'telegram_stars';
-    case Stripe = 'stripe';
-    case Cryptomus = 'cryptomus';
+    case Stripe        = 'stripe';
+    case Cryptomus     = 'cryptomus';
 }

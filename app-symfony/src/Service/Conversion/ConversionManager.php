@@ -13,6 +13,7 @@ use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Quota\QuotaService;
+use App\Service\Storage\S3Storage;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\Messenger\MessageBusInterface;
@@ -27,27 +28,28 @@ class ConversionManager
         private readonly EntityManagerInterface $em,
         private readonly MessageBusInterface $bus,
         private readonly ConversionStatusReader $statusReader,
-        private readonly string $shareDir,
-    ) {}
+        private readonly S3Storage $s3,
+    ) {
+    }
 
     public function createConversion(User $user, UploadedFile $file, string $toFormat): Conversion
     {
         $fromFormat = strtolower($file->getClientOriginalExtension());
 
-        if (!$this->registry->isSupported($fromFormat, $toFormat)) {
+        if (! $this->registry->isSupported($fromFormat, $toFormat)) {
             throw new \InvalidArgumentException("Unsupported conversion: {$fromFormat} → {$toFormat}");
         }
 
         $isAi = $this->registry->isAi($fromFormat, $toFormat);
         $this->quotaService->checkAndDecrement($user, $isAi);
 
-        // Read metadata BEFORE move() — move() relocates the temp upload, after
-        // which $file->getMimeType()/getSize() would fail ("file does not exist").
+        // Read metadata BEFORE the upload is consumed — keep size/mime from the
+        // live tmp upload.
         $originalName = $file->getClientOriginalName() ?: 'upload';
-        $mimeType = $file->getMimeType() ?? 'application/octet-stream';
-        $sizeBytes = $file->getSize();
+        $mimeType     = $file->getMimeType() ?? 'application/octet-stream';
+        $sizeBytes    = $file->getSize();
 
-        $storagePath = $this->storeUploadedFile($file);
+        $storagePath = $this->storeInput($file, $fromFormat, $mimeType);
 
         $inputFile = new FileStorage();
         $inputFile->setOriginalName($originalName);
@@ -75,12 +77,14 @@ class ConversionManager
     public function dispatch(Conversion $conversion): void
     {
         $sourceFormat = $conversion->getFromFormat();
-        $key = $this->routingKey($conversion);
+        $key          = $this->routingKey($conversion);
 
         $this->bus->dispatch(
             new ConversionMessage(
                 conversionId: $conversion->getId(),
-                inputPath: $conversion->getInputFile()->getStoragePath(),
+                inputBucket: $this->s3->inputsBucket(),
+                inputKey: $conversion->getInputFile()->getStoragePath(),
+                originalFilename: $conversion->getInputFile()->getOriginalName(),
                 sourceFormat: $sourceFormat,
                 targetFormat: $conversion->getToFormat(),
                 category: $conversion->getCategory()->value,
@@ -140,7 +144,7 @@ class ConversionManager
 
             return new ConversionResultDTO(
                 conversionId: $conversion->getId(),
-                status: $state ?? $conversion->getStatus(),
+                status: $state                 ?? $conversion->getStatus(),
                 outputPath: $live['outputUrl'] ?? $live['outputKey'] ?? $conversion->getOutputFile()?->getStoragePath(),
                 errorMessage: ($live['error'] ?? '') !== '' ? $live['error'] : $conversion->getErrorMessage(),
             );
@@ -154,16 +158,28 @@ class ConversionManager
         );
     }
 
-    private function storeUploadedFile(UploadedFile $file): string
+    /**
+     * Upload the validated input to the S3 inputs bucket and return the object
+     * key. Key layout mirrors the results layout: `inputs/{Y}/{m}/{d}/{uuid}.{ext}`
+     * with a random, path-traversal-safe basename (never the user filename).
+     * `$ext` is the already-validated source extension; `$mimeType` is stored as
+     * the object Content-Type. Nothing is written to /shared-files.
+     */
+    private function storeInput(UploadedFile $file, string $ext, string $mimeType): string
     {
-        $dir = rtrim($this->shareDir, '/') . '/input/' . date('Y/m/d');
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        $key = 'inputs/' . date('Y/m/d') . '/' . bin2hex(random_bytes(16)) . '.' . $ext;
+
+        $stream = fopen($file->getPathname(), 'r');
+        if ($stream === false) {
+            throw new \RuntimeException('Unable to open uploaded file for reading');
         }
 
-        $filename = bin2hex(random_bytes(16)) . '.' . $file->getClientOriginalExtension();
-        $file->move($dir, $filename);
+        try {
+            $this->s3->putObject($this->s3->inputsBucket(), $key, $stream, $mimeType);
+        } finally {
+            fclose($stream);
+        }
 
-        return $dir . '/' . $filename;
+        return $key;
     }
 }

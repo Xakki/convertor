@@ -15,7 +15,9 @@ class RedisConnectionFactory
 {
     private ?\Redis $connection = null;
 
-    public function __construct(private readonly string $dsn) {}
+    public function __construct(private readonly string $dsn)
+    {
+    }
 
     public function create(): \Redis
     {

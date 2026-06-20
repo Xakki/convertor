@@ -11,7 +11,9 @@ namespace App\Service\Queue;
  */
 final class ConversionStatusReader
 {
-    public function __construct(private readonly RedisConnectionFactory $factory) {}
+    public function __construct(private readonly RedisConnectionFactory $factory)
+    {
+    }
 
     /**
      * @return array<string, string>|null
@@ -20,7 +22,7 @@ final class ConversionStatusReader
     {
         $data = $this->factory->create()->hGetAll('conv:status:' . $conversionId);
 
-        if (!is_array($data) || $data === []) {
+        if (! is_array($data) || $data === []) {
             return null;
         }
 

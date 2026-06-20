@@ -27,7 +27,8 @@ final class ConversionResultPersister
         private readonly ManagerRegistry $registry,
         private readonly string $resultsBucket,
         private readonly LoggerInterface $logger,
-    ) {}
+    ) {
+    }
 
     /**
      * @param array<string, mixed> $body decoded result-event JSON
@@ -56,7 +57,7 @@ final class ConversionResultPersister
         }
 
         $processingMs = isset($body['processingMs']) ? (int) $body['processingMs'] : null;
-        $state = isset($body['state']) ? (string) $body['state'] : '';
+        $state        = isset($body['state']) ? (string) $body['state'] : '';
 
         if ($state === 'failed') {
             $conversion->setStatus(ConversionStatus::Failed);

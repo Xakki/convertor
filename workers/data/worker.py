@@ -1,13 +1,20 @@
-"""Data format conversion worker: csv ↔ json ↔ xml ↔ yaml."""
+"""Data format conversion worker: csv ↔ json ↔ xml ↔ yaml.
+
+Phase 1, XREADGROUP-based: consumes stream conv.data (consumer group
+convertor), reads the local input the base class downloaded from S3
+(job['_localInput']), and returns (out_path, mime, target_ext) for the base
+class to upload to the results bucket.
+"""
+
+from __future__ import annotations
 
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
-from workers.common.base_worker import SHARE_DIR, BaseWorker
-from workers.common.logging_config import configure_logging
-from workers.common.safe_path import safe_share_path
+from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +24,15 @@ SUPPORTED: dict[str, set[str]] = {
     "xml":  {"csv", "json", "yaml", "yml"},
     "yaml": {"csv", "json", "xml"},
     "yml":  {"csv", "json", "xml"},
+}
+
+# MIME types for output formats
+_MIME: dict[str, str] = {
+    "json": "application/json",
+    "csv":  "text/csv",
+    "xml":  "application/xml",
+    "yaml": "application/x-yaml",
+    "yml":  "application/x-yaml",
 }
 
 
@@ -130,48 +146,47 @@ def _write_data(data: Any, out_path: Path) -> None:
     raise ValueError(f"unsupported output format: {ext}")
 
 
-class DataWorker(BaseWorker):
-    """Queue worker for structured data format conversions (csv/json/xml/yaml)."""
+class DataWorker(StreamConsumerBase):
+    """Stream worker for structured data format conversions (csv/json/xml/yaml)."""
 
-    queue_name = "convertor:data"
+    CAPABILITIES: dict[str, Any] = {
+        "routing_keys": ["data"],
+        "matrix": SUPPORTED,
+    }
 
-    async def process_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        import asyncio
+    def convert(self, job: dict[str, Any]) -> tuple[str, str, str]:
+        conv_id: int = job["conversionId"]
+        src = Path(job["_localInput"])
+        target_fmt: str = job["targetFormat"].lower().lstrip(".")
+        src_fmt = str(job["sourceFormat"]).lower().lstrip(".")
 
-        input_path_raw: str = task["input_path"]
-        output_format: str = task["output_format"].lower().lstrip(".")
-
-        src = safe_share_path(input_path_raw, SHARE_DIR)
         if not src.is_file():
             raise FileNotFoundError(f"input file not found: {src}")
 
-        in_format = src.suffix.lower().lstrip(".")
-        if in_format not in SUPPORTED:
-            raise ValueError(f"unsupported input format: {in_format}")
+        if src_fmt not in SUPPORTED:
+            raise ValueError(f"unsupported input format: {src_fmt}")
 
-        # Normalise yml → yaml for lookup
-        canon_in = "yaml" if in_format == "yml" else in_format
-        canon_out = "yaml" if output_format == "yml" else output_format
-
-        allowed = {("yaml" if f == "yml" else f) for f in SUPPORTED[in_format]}
+        # Normalise yml → yaml for the conversion-pair check.
+        canon_out = "yaml" if target_fmt == "yml" else target_fmt
+        allowed = {("yaml" if f == "yml" else f) for f in SUPPORTED[src_fmt]}
         if canon_out not in allowed:
-            raise ValueError(f"unsupported conversion: {in_format} -> {output_format}")
+            raise ValueError(f"unsupported conversion: {src_fmt} -> {target_fmt}")
 
-        out_path = src.with_suffix(f".{output_format}")
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
 
-        data = await asyncio.to_thread(_read_data, src)
-        await asyncio.to_thread(_write_data, data, out_path)
+        data = _read_data(src)
+        _write_data(data, out_path)
 
         if not out_path.exists():
             raise RuntimeError("data conversion produced no output file")
 
+        mime = _MIME.get(target_fmt, "application/octet-stream")
         logger.info(
-            "converted %s -> %s (task id=%s)", src.name, out_path.name, task.get("id")
+            "converted %s -> %s (conversionId=%s)", src.name, out_path.name, conv_id
         )
-        return {"status": "ok", "output_path": str(out_path)}
+        return str(out_path), mime, target_fmt
 
 
 if __name__ == "__main__":
-    configure_logging()
-    worker = DataWorker()
-    worker.run()
+    DataWorker().run()

@@ -1,4 +1,4 @@
-### Image воркер — валидация stream-consumer/S3 + растровая матрица (OCR — open question)
+### Image воркер — реализовать OCR (tesseract) + валидация растровой матрицы
 
 **Критичность:** High
 
@@ -6,35 +6,33 @@
 - feature
 
 **Описание:**
-Image-воркер (`workers/image/worker.py`) — единственный, уже переведённый на KeyDB Streams (vertical slice через `workers/common/stream_consumer.py`). Содержит реальную растровую конвертацию через Pillow. Файлы теперь только в S3 (`${S3_BUCKET_PREFIX}-inputs` / `-results`), общий том `/shared-files` удалён (storage-input-to-s3, 2026-06-20). Карточка — про подтверждение работы на Streams/S3 и валидацию растровой матрицы, плюс фиксация нерешённого вопроса по OCR.
+Image-воркер (`workers/image/worker.py`) — эталонный воркер: Streams-consumer (через `workers/common/stream_consumer.py`) + S3 I/O уже сделаны и **полностью прошиты в рантайме** (есть S3_*-env и сеть `default`). Содержит реальную растровую конвертацию через Pillow. Единственный реальный остаток scope — **OCR**: провалидировать растровую матрицу и реализовать OCR (tesseract) inline.
 
 **Проблема:**
-- Нужно подтвердить, что image-воркер по-прежнему корректно работает после перевода хранилища на S3 (вход/выход через `-inputs`/`-results`, не `/shared-files`).
-- Растровые конвертации Pillow не провалидированы против матрицы `docs/plan.md`.
-- **OCR не имеет владельца:** в image-Dockerfile установлены `tesseract` + `pytesseract`, но image-воркер маршрутизирует OCR в ai-воркер (`conv.ai`), а реализации OCR нет нигде. Конфликт ответственности.
+- **OCR не реализован нигде:** `pytesseract` стоит в requirements, но **никогда не импортируется**; image-воркер роутит OCR в ai-воркер (`conv.ai`). Нужно реализовать OCR inline в image-воркере и убрать роут в ai.
+- Растровые конвертации Pillow не провалидированы против матрицы форматов `ROADMAP.md` (справочные данные).
 
 **Влияние:**
-Если image-воркер не валиден на S3 — ломается уже мигрированный slice. OCR заявлен в матрице (jpg/png/pdf/tiff → txt/md/docx), но фактически не реализуем без решения по владельцу.
+OCR заявлен в матрице (jpg/png/pdf/tiff → txt/md/docx) и входит в MVP — без реализации в image-воркере функция не работает.
+
+**Контекст (уже сделано в коде):**
+- Streams-consumer + S3 I/O — уже подключены и прошиты в рантайме (S3_*-env + сеть `default`); старый Redis-LISTS транспорт удалён. Это эталонный воркер, runtime-wiring не требуется.
 
 **Решение:**
-- Подтвердить, что stream-consumer + S3 I/O работают: вход из `-inputs`, результат в `-results`.
-- Провалидировать растровые Pillow-конвертации против матрицы `docs/plan.md` (jpg/png/gif/bmp/webp/tiff/ico/pdf).
-- Решить вопрос владельца OCR (см. Open questions) и зафиксировать решение.
-- SVG/HEIC/AVIF — отложены (MVP-deferred), в scope не входят.
+- **Реализовать OCR в image-воркере** через `pytesseract` (jpg/png/pdf/tiff → txt/md/docx), убрать роут OCR в `conv.ai`.
+- Провалидировать растровые Pillow-конвертации против матрицы форматов `ROADMAP.md` (jpg/png/gif/bmp/webp/tiff/ico/pdf).
+- SVG/HEIC/AVIF — отложены в Стадию 7 (MVP-deferred), в scope не входят.
 
 **Критерии приёмки:**
-- Image-воркер подтверждённо работает на KeyDB Streams + S3 (вход из `-inputs`, результат в `-results`).
-- Растровая матрица Pillow провалидирована против `docs/plan.md`.
+- **OCR реализован в image-воркере** через `pytesseract` (jpg/png/pdf/tiff → txt/md/docx); роут в `conv.ai` удалён; покрыт тестом.
+- Растровая матрица Pillow провалидирована против матрицы форматов `ROADMAP.md`.
 - `pytest workers/tests` зелёный (включая существующий `test_image_worker_stream.py`).
 - `make docker-check` проходит.
-- Решение по владельцу OCR зафиксировано в Decisions (реализация OCR — в рамках выбранной карточки/воркера).
-
-**Open questions:**
-- **Владелец OCR не определён.** `tesseract` + `pytesseract` стоят в image-Dockerfile, но image-воркер роутит OCR в ai-воркер (`conv.ai`), реализации нет нигде. Выбрать: реализовать OCR inline в image-воркере (tesseract уже на месте) **или** в ai-воркере. От решения зависит, где появляется код OCR и куда уходит маршрут `conv.ai`.
 
 **Decisions:**
 - Выделено из эпика [[docs-workers-conversion-validation]] при груминге 2026-06-20 (split per-worker).
-- Image-воркер — уже на stream-consumer (эталон миграции для остальных); миграция Streams здесь не требуется, только валидация на S3.
-- SVG/HEIC/AVIF отложены как MVP-deferred.
+- Image-воркер — эталон: Streams + S3 уже сделаны и прошиты в рантайме; миграция/wiring здесь не требуется (снято из scope при ре-груминге 2026-06-20).
+- **OCR: владелец — image-воркер, в MVP (Стадия 1)** (решение пользователя 2026-06-20). tesseract уже в его образе; роут в ai-воркер убирается.
+- SVG/HEIC/AVIF отложены в Стадию 7 (MVP-deferred).
 
 Siblings: [[validate-ffmpeg-worker]] · [[validate-data-worker]] · [[validate-libreoffice-worker]] · [[validate-ai-worker]]

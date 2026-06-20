@@ -43,7 +43,7 @@ final class ConversionResultPersisterTest extends TestCase
 
     public function testMissingConversionIdThrows(): void
     {
-        $em = $this->createStub(EntityManagerInterface::class);
+        $em        = $this->createStub(EntityManagerInterface::class);
         $persister = $this->makePersister($this->makeRegistry($em));
 
         $this->expectException(\RuntimeException::class);

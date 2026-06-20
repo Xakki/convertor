@@ -13,7 +13,9 @@ import logging
 import os
 import signal
 import socket
+import tempfile
 import time
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -21,7 +23,7 @@ from typing import Any
 import redis
 
 from workers.common.logging_config import configure_logging
-from workers.common.s3 import put_file
+from workers.common.s3 import get_file, put_file
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +34,11 @@ REDIS_DB = int(os.getenv("REDIS_DB", "2"))
 # Empty password → no AUTH; never inject "default:@" with empty pw.
 _REDIS_PASSWORD: str | None = os.getenv("REDIS_PASSWORD", "") or None
 
-# --- Shared-files mount ---------------------------------------------------
-SHARE_DIR = Path(os.getenv("SHARE_DIR", "/shared-files")).resolve()
+# --- Writable work dir (inputs/outputs live here as tmp files) ------------
+# Defaults to the system tmp dir; the non-root Dockerfile provides a writable
+# WORK_DIR. Inputs no longer come from a shared volume — they are pulled from
+# S3 by the base class before convert() runs.
+WORK_DIR = Path(os.getenv("WORK_DIR", tempfile.gettempdir())).resolve()
 
 # --- S3 / output ----------------------------------------------------------
 S3_BUCKET_PREFIX = os.getenv("S3_BUCKET_PREFIX", "convertor")
@@ -269,79 +274,131 @@ class StreamConsumerBase(ABC):
         })
         self._redis.expire(status_key, _STATUS_TTL)
 
-        # --- Convert ------------------------------------------------------
+        # --- Download input from S3, convert, commit; always clean tmp ----
+        local_input: str | None = None
+        local_output: str | None = None
         try:
-            local_path, output_mime, target_ext = self.convert(job)
-        except Exception as exc:
-            logger.exception(
-                "convert failed — leaving unacked for retry",
-                extra={"conversionId": conv_id, "error": str(exc)},
+            # (0) Download S3 input → unique tmp file (preserve source ext)
+            try:
+                local_input = self._download_input(job)
+            except Exception as exc:
+                logger.exception(
+                    "input download failed — leaving unacked for retry",
+                    extra={"conversionId": conv_id, "error": str(exc)},
+                )
+                self._redis.hset(status_key, mapping={
+                    "error": str(exc),
+                    "updatedAt": _now_ms(),
+                })
+                self._redis.expire(status_key, _STATUS_TTL)
+                # Leave entry unacked; XAUTOCLAIM will reclaim after _IDLE_MS.
+                return
+
+            job["_localInput"] = local_input
+
+            # --- Convert --------------------------------------------------
+            try:
+                local_output, output_mime, target_ext = self.convert(job)
+            except Exception as exc:
+                logger.exception(
+                    "convert failed — leaving unacked for retry",
+                    extra={"conversionId": conv_id, "error": str(exc)},
+                )
+                self._redis.hset(status_key, mapping={
+                    "error": str(exc),
+                    "updatedAt": _now_ms(),
+                })
+                self._redis.expire(status_key, _STATUS_TTL)
+                # Leave entry unacked; XAUTOCLAIM will reclaim after _IDLE_MS.
+                return
+
+            # --- Ordered commit (§S3-sink): S3 → HSET → XADD → XACK ------
+            bucket = f"{S3_BUCKET_PREFIX}-results"
+            ts = time.gmtime()
+            s3_key = (
+                f"results/{ts.tm_year}/{ts.tm_mon:02d}-{ts.tm_mday:02d}"
+                f"/{conv_id}.{target_ext}"
             )
+            finish_ms = _now_ms()
+
+            # (1) S3 PUT — deterministic key → safe to retry/overwrite
+            try:
+                s3_meta = put_file(local_output, bucket, s3_key, output_mime)
+            except Exception as exc:
+                logger.exception(
+                    "S3 upload failed — leaving unacked for retry",
+                    extra={"conversionId": conv_id, "error": str(exc)},
+                )
+                self._redis.hset(status_key, mapping={"error": str(exc), "updatedAt": _now_ms()})
+                self._redis.expire(status_key, _STATUS_TTL)
+                return
+
+            # (2) HSET completed
             self._redis.hset(status_key, mapping={
-                "error": str(exc),
-                "updatedAt": _now_ms(),
+                "state": "completed",
+                "outputBucket": bucket,
+                "outputKey": s3_key,
+                "outputMime": output_mime,
+                "outputSize": s3_meta["size"],
+                "finishedAt": finish_ms,
+                "updatedAt": finish_ms,
             })
             self._redis.expire(status_key, _STATUS_TTL)
-            # Leave entry unacked; XAUTOCLAIM will reclaim after _IDLE_MS.
-            return
 
-        # --- Ordered commit (§S3-sink): S3 → HSET → XADD → XACK ---------
-        bucket = f"{S3_BUCKET_PREFIX}-results"
-        ts = time.gmtime()
-        s3_key = (
-            f"results/{ts.tm_year}/{ts.tm_mon:02d}/{ts.tm_mday:02d}"
-            f"/{conv_id}.{target_ext}"
-        )
-        finish_ms = _now_ms()
-
-        # (1) S3 PUT — deterministic key → safe to retry/overwrite
-        try:
-            s3_meta = put_file(local_path, bucket, s3_key, output_mime)
-        except Exception as exc:
-            logger.exception(
-                "S3 upload failed — leaving unacked for retry",
-                extra={"conversionId": conv_id, "error": str(exc)},
-            )
-            self._redis.hset(status_key, mapping={"error": str(exc), "updatedAt": _now_ms()})
-            self._redis.expire(status_key, _STATUS_TTL)
-            return
-
-        # (2) HSET completed
-        self._redis.hset(status_key, mapping={
-            "state": "completed",
-            "outputBucket": bucket,
-            "outputKey": s3_key,
-            "outputMime": output_mime,
-            "outputSize": s3_meta["size"],
-            "finishedAt": finish_ms,
-            "updatedAt": finish_ms,
-        })
-        self._redis.expire(status_key, _STATUS_TTL)
-
-        # (3) XADD result event (§5 pinned shape; field=data, raw JSON)
-        result_body = {
-            "conversionId": conv_id,
-            "state": "completed",
-            "outputBucket": bucket,
-            "outputKey": s3_key,
-            "outputMime": output_mime,
-            "outputSize": s3_meta["size"],
-            "error": None,
-            "processingMs": finish_ms - start_ms,
-        }
-        self._redis.xadd("conv.result", {"data": json.dumps(result_body)})
-
-        # (4) XACK
-        self._redis.xack(stream, _GROUP, entry_id)
-        logger.info(
-            "conversion completed",
-            extra={
+            # (3) XADD result event (§5 pinned shape; field=data, raw JSON)
+            result_body = {
                 "conversionId": conv_id,
-                "s3Bucket": bucket,
-                "s3Key": s3_key,
+                "state": "completed",
+                "outputBucket": bucket,
+                "outputKey": s3_key,
+                "outputMime": output_mime,
+                "outputSize": s3_meta["size"],
+                "error": None,
                 "processingMs": finish_ms - start_ms,
-            },
-        )
+            }
+            self._redis.xadd("conv.result", {"data": json.dumps(result_body)})
+
+            # (4) XACK
+            self._redis.xack(stream, _GROUP, entry_id)
+            logger.info(
+                "conversion completed",
+                extra={
+                    "conversionId": conv_id,
+                    "s3Bucket": bucket,
+                    "s3Key": s3_key,
+                    "processingMs": finish_ms - start_ms,
+                },
+            )
+        finally:
+            # Clean tmp input + output on every exit (success or failure).
+            # Retries regenerate both (re-download + re-convert).
+            self._cleanup_tmp(local_input)
+            self._cleanup_tmp(local_output)
+
+    # ------------------------------------------------------------------
+    # Input download / tmp cleanup
+    # ------------------------------------------------------------------
+
+    def _download_input(self, job: dict) -> str:
+        """Download s3://{inputBucket}/{inputKey} to a unique WORK_DIR tmp file.
+
+        Preserves the source extension so suffix-based logic keeps working.
+        """
+        bucket = job["inputBucket"]
+        key = job["inputKey"]
+        ext = Path(key).suffix  # includes leading dot, or "" if none
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        dest = WORK_DIR / f"in-{uuid.uuid4().hex}{ext}"
+        return get_file(bucket, key, str(dest))
+
+    @staticmethod
+    def _cleanup_tmp(path: str | None) -> None:
+        if not path:
+            return
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            logger.warning("failed to remove tmp file", extra={"path": path}, exc_info=True)
 
     # ------------------------------------------------------------------
     # PEL / XAUTOCLAIM

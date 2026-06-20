@@ -1,40 +1,39 @@
-### Data воркер — миграция на stream-consumer + S3 + валидация матрицы данных
+### Data воркер — добавить toml + валидация матрицы данных на S3
 
 **Критичность:** High
 
 **TAGS:**
 - feature
-- tech-debt
 
 **Описание:**
-Data-воркер (`workers/data/worker.py`) уже содержит реальную логику конвертации csv/json/xml/yaml (не заглушка), но всё ещё читает задачи из Redis-LISTS, а не из KeyDB Streams. Образец миграции — image-воркер (на `stream_consumer`). Файлы теперь только в S3 (`${S3_BUCKET_PREFIX}-inputs` / `-results`), общий том `/shared-files` удалён (storage-input-to-s3, 2026-06-20).
+Data-воркер (`workers/data/worker.py`) уже Streams-consumer (через `workers/common/stream_consumer.py`: XREADGROUP, группа `convertor`, стрим `conv.<routing_key>`, вход из S3 `{prefix}-inputs`, результат в `{prefix}-results`) и содержит реальную логику конвертации csv/json/xml/yaml. Перевод на Streams + S3 уже сделан в коде. Осталось: добавить `toml` и провалидировать матрицу данных end-to-end на реальных датасетах через S3.
 
 **Проблема:**
-- Воркер на Redis-LISTS — не получает задачи в новой очередной модели (PHP пишет в KeyDB Streams). Контракт рассинхронизирован.
-- I/O ещё рассчитан на `/shared-files`, которого больше нет.
-- Матрица данных (csv/json/xml/yaml) из `docs/plan.md` не провалидирована end-to-end на реальных датасетах через S3.
+- `toml` НЕ реализован: в коде фигурирует только как намеренно-неподдерживаемый кейс в тесте. В `SUPPORTED` отсутствует и на вход, и на выход.
+- Матрица данных (csv/json/xml/yaml/toml) из матрицы форматов `ROADMAP.md` (справочные данные) не провалидирована end-to-end на реальных датасетах через S3.
 
 **Влияние:**
-Без миграции воркер не работает в проде (не видит задач). Без валидации — заявленные конвертации данных могут не работать на реальных файлах.
+Без `toml` заявленный формат не работает. Без валидации — конвертации данных могут не работать на реальных файлах.
+
+**Контекст (уже сделано в коде):**
+- Streams-consumer + S3 I/O — уже подключены (`stream_consumer.py`); старый Redis-LISTS транспорт и `base_worker.py`/`keydb_client.py` удалены. Это done-контекст, не задача.
 
 **Решение:**
-- Перевести data-воркер с Redis-LISTS на KeyDB Streams (`workers/common/stream_consumer.py`), по образцу image-воркера.
-- Перевести I/O на S3: вход из `-inputs`, результат в `-results` (через `workers/common/s3.py`).
-- Провалидировать матрицу csv/json/xml/yaml на реальных датасетах с S3 in/out.
+- **Добавить `toml` в `SUPPORTED`** (вход+выход) наравне с csv/json/xml/yaml: парсинг `tomllib` (stdlib 3.11+), запись `tomli-w`.
+- Провалидировать матрицу csv/json/xml/yaml/toml на реальных датасетах с S3 in/out.
+
+**Зависимости:**
+- Runtime-валидация через S3 блокируется [[finish-worker-compose-wiring]]: `worker-data` сейчас на сети `backend` (`internal:true`, без NAT) и без S3_*-env — в коде мигрирован, но до S3 в рантайме не дотягивается.
 
 **Критерии приёмки:**
-- Воркер потребляет задачи из KeyDB Streams (stream-consumer подключён), Redis-LISTS больше не используется.
-- I/O идёт через S3: вход из `-inputs`, результат в `-results`; `/shared-files` не используется.
-- Матрица csv/json/xml/yaml провалидирована на реальных датасетах через S3.
+- `toml` поддержан на вход и выход; матрица csv/json/xml/yaml/toml провалидирована на реальных датасетах через S3.
 - `pytest workers/tests` зелёный.
 - `make docker-check` проходит.
 
-**Open questions:**
-- **`toml` в матрице, но не в SUPPORTED.** Матрица `docs/plan.md` (строка 16) включает `toml` во входных форматах данных; текущий `SUPPORTED` воркера — только `csv/json/xml/yaml`. Решить: добавить поддержку `toml` или убрать его из матрицы.
-
 **Decisions:**
 - Выделено из эпика [[docs-workers-conversion-validation]] при груминге 2026-06-20 (split per-worker).
-- Миграция Redis-LISTS → KeyDB Streams делается внутри этой же карточки (не отдельной prereq-картой).
-- Unit-тесты data-воркера (полная матрица + round-trip + malformed) покрываются отдельно в [[worker-conversion-tests]]; здесь — часть про Streams/S3 + валидацию на реальных датасетах.
+- Миграция Redis-LISTS → KeyDB Streams + S3 — **уже сделана в коде** (снято из scope при ре-груминге 2026-06-20).
+- **`toml` — добавить полную поддержку (вход+выход)** (решение пользователя 2026-06-20); входит в MVP (Стадия 1).
+- Unit-тесты data-воркера (полная матрица + round-trip + malformed) покрываются отдельно в [[worker-conversion-tests]]; здесь — `toml` + валидация на реальных датасетах.
 
 Siblings: [[validate-ffmpeg-worker]] · [[validate-image-worker]] · [[validate-libreoffice-worker]] · [[validate-ai-worker]]

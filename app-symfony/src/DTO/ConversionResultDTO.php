@@ -13,5 +13,6 @@ class ConversionResultDTO
         public readonly ConversionStatus $status,
         public readonly ?string $outputPath = null,
         public readonly ?string $errorMessage = null,
-    ) {}
+    ) {
+    }
 }

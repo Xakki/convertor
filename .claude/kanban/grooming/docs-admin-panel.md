@@ -6,7 +6,7 @@
 - feature
 
 **Description:**
-From `docs/plan.md` phase 5: admin UI is skeletal, backend incomplete.
+From `ROADMAP.md` (Стадия 3): admin UI is skeletal, backend incomplete.
 
 **Problem / scope:**
 - Stats dashboard: API for conversion stats, user counts, revenue.

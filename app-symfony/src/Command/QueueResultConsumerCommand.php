@@ -33,9 +33,9 @@ use Symfony\Component\Console\Output\OutputInterface;
 )]
 final class QueueResultConsumerCommand extends Command
 {
-    private const STREAM = 'conv.result';
+    private const STREAM     = 'conv.result';
     private const STREAM_DLQ = 'conv.result.dead';
-    private const GROUP = 'convertor';
+    private const GROUP      = 'convertor';
 
     public function __construct(
         private readonly RedisConnectionFactory $redisFactory,
@@ -55,10 +55,10 @@ final class QueueResultConsumerCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $redis = $this->redisFactory->create();
-        $consumer = (string) $input->getOption('consumer');
+        $redis     = $this->redisFactory->create();
+        $consumer  = (string) $input->getOption('consumer');
         $timeLimit = (int) $input->getOption('time-limit');
-        $deadline = $timeLimit > 0 ? time() + $timeLimit : null;
+        $deadline  = $timeLimit > 0 ? time() + $timeLimit : null;
 
         $this->ensureGroup($redis);
         $output->writeln(sprintf('<info>Consuming %s as %s/%s</info>', self::STREAM, self::GROUP, $consumer));
@@ -67,7 +67,7 @@ final class QueueResultConsumerCommand extends Command
             /** @var array<string, array<string, array<string, string>>>|false $messages */
             $messages = $redis->xReadGroup(self::GROUP, $consumer, [self::STREAM => '>'], 10, 5000);
 
-            if (!is_array($messages) || !isset($messages[self::STREAM])) {
+            if (! is_array($messages) || ! isset($messages[self::STREAM])) {
                 continue;
             }
 
@@ -96,7 +96,7 @@ final class QueueResultConsumerCommand extends Command
             // MKSTREAM so the group exists even before the first worker writes.
             $redis->xGroup('CREATE', self::STREAM, self::GROUP, '0', true);
         } catch (\RedisException $e) {
-            if (!str_contains($e->getMessage(), 'BUSYGROUP')) {
+            if (! str_contains($e->getMessage(), 'BUSYGROUP')) {
                 throw $e;
             }
         }
@@ -137,7 +137,7 @@ final class QueueResultConsumerCommand extends Command
     private function resetEmIfClosed(): void
     {
         $em = $this->registry->getManager();
-        if ($em instanceof EntityManagerInterface && !$em->isOpen()) {
+        if ($em instanceof EntityManagerInterface && ! $em->isOpen()) {
             $this->registry->resetManager();
             $this->logger->info('EntityManager reset after close', ['stream' => self::STREAM]);
         }

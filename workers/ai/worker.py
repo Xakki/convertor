@@ -7,20 +7,31 @@ Providers (set via AI_STT_PROVIDER / AI_TTS_PROVIDER env):
   claude  — Anthropic Claude (STT via vision/audio, TTS not supported → fallback local)
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import logging
 import os
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
-from workers.common.base_worker import SHARE_DIR, BaseWorker
-from workers.common.logging_config import configure_logging
-from workers.common.safe_path import safe_share_path
+from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
 
 logger = logging.getLogger(__name__)
+
+# MIME types for output formats (STT text + TTS audio)
+_MIME: dict[str, str] = {
+    "txt": "text/plain",
+    "srt": "application/x-subrip",
+    "vtt": "text/vtt",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "ogg": "audio/ogg",
+}
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 TTS_ENGINE = os.getenv("TTS_ENGINE", "espeak")
@@ -340,19 +351,23 @@ async def _text_to_speech(src: Path, output_format: str, out_path: Path) -> None
 # Worker
 # ---------------------------------------------------------------------------
 
-class AiWorker(BaseWorker):
-    queue_name = "convertor:ai"
+class AiWorker(StreamConsumerBase):
+    """Stream worker for AI conversions (STT / TTS via subType) — conv.ai."""
 
-    async def process_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        input_path_raw: str = task["input_path"]
-        output_format: str = task["output_format"].lower().lstrip(".")
-        sub_type: str = task.get("sub_type", "").lower()
+    CAPABILITIES: dict[str, Any] = {
+        "routing_keys": ["ai"],
+        "matrix": {},
+    }
 
-        src = safe_share_path(input_path_raw, SHARE_DIR)
+    def convert(self, job: dict[str, Any]) -> tuple[str, str, str]:
+        conv_id: int = job["conversionId"]
+        src = Path(job["_localInput"])
+        output_format: str = job["targetFormat"].lower().lstrip(".")
+        in_format = str(job["sourceFormat"]).lower().lstrip(".")
+        sub_type: str = (job.get("subType") or "").lower()
+
         if not src.is_file():
             raise FileNotFoundError(f"input file not found: {src}")
-
-        in_format = src.suffix.lower().lstrip(".")
 
         if not sub_type:
             if in_format in _STT_INPUTS and output_format in _STT_OUTPUTS:
@@ -360,33 +375,38 @@ class AiWorker(BaseWorker):
             elif in_format in _TTS_INPUTS and output_format in _TTS_OUTPUTS:
                 sub_type = "tts"
             else:
-                raise ValueError(f"cannot auto-detect sub_type for {in_format} -> {output_format}")
+                raise ValueError(f"cannot auto-detect subType for {in_format} -> {output_format}")
 
-        out_path = src.with_suffix(f".{output_format}")
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{output_format}"
 
         if sub_type == "stt":
             if in_format not in _STT_INPUTS:
                 raise ValueError(f"unsupported STT input: {in_format}")
             if output_format not in _STT_OUTPUTS:
                 raise ValueError(f"unsupported STT output: {output_format}")
-            await _speech_to_text(src, output_format, out_path)
+            asyncio.run(_speech_to_text(src, output_format, out_path))
 
         elif sub_type == "tts":
             if in_format not in _TTS_INPUTS:
                 raise ValueError(f"unsupported TTS input: {in_format}")
             if output_format not in _TTS_OUTPUTS:
                 raise ValueError(f"unsupported TTS output: {output_format}")
-            await _text_to_speech(src, output_format, out_path)
+            asyncio.run(_text_to_speech(src, output_format, out_path))
 
         else:
-            raise ValueError(f"unknown sub_type: {sub_type!r}")
+            raise ValueError(f"unknown subType: {sub_type!r}")
 
         if not out_path.exists():
             raise RuntimeError("AI conversion produced no output file")
 
-        return {"status": "ok", "output_path": str(out_path)}
+        mime = _MIME.get(output_format, "application/octet-stream")
+        logger.info(
+            "AI converted %s -> %s (conversionId=%s, subType=%s)",
+            src.name, out_path.name, conv_id, sub_type,
+        )
+        return str(out_path), mime, output_format
 
 
 if __name__ == "__main__":
-    configure_logging()
     AiWorker().run()

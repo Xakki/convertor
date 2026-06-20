@@ -23,7 +23,8 @@ class AuthController extends AbstractController
         private readonly JWTTokenManagerInterface $jwtManager,
         private readonly ValidatorInterface $validator,
         private readonly LoggerInterface $logger,
-    ) {}
+    ) {
+    }
 
     #[Route('/telegram', methods: ['POST'])]
     public function telegram(Request $request): JsonResponse
@@ -34,7 +35,7 @@ class AuthController extends AbstractController
             id: (string) ($data['id'] ?? ''),
             firstName: (string) ($data['first_name'] ?? ''),
             lastName: $data['last_name'] ?? null,
-            username: $data['username'] ?? null,
+            username: $data['username']  ?? null,
             photoUrl: $data['photo_url'] ?? null,
             authDate: isset($data['auth_date']) ? (int) $data['auth_date'] : null,
             hash: $data['hash'] ?? null,
@@ -45,11 +46,11 @@ class AuthController extends AbstractController
             return $this->json(['error' => (string) $errors], Response::HTTP_BAD_REQUEST);
         }
 
-        if (!$this->telegramAuthService->verify($dto)) {
+        if (! $this->telegramAuthService->verify($dto)) {
             return $this->json(['error' => 'Invalid Telegram auth data'], Response::HTTP_UNAUTHORIZED);
         }
 
-        $user = $this->telegramAuthService->findOrCreateUser($dto);
+        $user  = $this->telegramAuthService->findOrCreateUser($dto);
         $token = $this->jwtManager->create($user);
 
         return $this->json(['token' => $token]);
@@ -58,10 +59,10 @@ class AuthController extends AbstractController
     #[Route('/sms/request', methods: ['POST'])]
     public function smsRequest(Request $request): JsonResponse
     {
-        $data = json_decode($request->getContent(), true) ?? [];
-        $phone = $data['phone'] ?? null;
+        $data  = json_decode($request->getContent(), true) ?? [];
+        $phone = $data['phone']                            ?? null;
 
-        if (!$phone) {
+        if (! $phone) {
             return $this->json(['error' => 'Phone number required'], Response::HTTP_BAD_REQUEST);
         }
 
@@ -74,11 +75,11 @@ class AuthController extends AbstractController
     #[Route('/sms/verify', methods: ['POST'])]
     public function smsVerify(Request $request): JsonResponse
     {
-        $data = json_decode($request->getContent(), true) ?? [];
-        $phone = $data['phone'] ?? null;
-        $code = $data['code'] ?? null;
+        $data  = json_decode($request->getContent(), true) ?? [];
+        $phone = $data['phone']                            ?? null;
+        $code  = $data['code']                             ?? null;
 
-        if (!$phone || !$code) {
+        if (! $phone || ! $code) {
             return $this->json(['error' => 'Phone and code required'], Response::HTTP_BAD_REQUEST);
         }
 

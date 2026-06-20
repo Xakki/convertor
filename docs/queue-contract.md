@@ -143,7 +143,9 @@ configured), so the JSON keys are the property names verbatim.
 ```json
 {
   "conversionId": 123,
-  "inputPath": "input/2026/06/19/ab12cd34.pdf",
+  "inputBucket": "convertor-inputs",
+  "inputKey": "inputs/2026/06/19/ab12cd34.pdf",
+  "originalFilename": "invoice.pdf",
   "sourceFormat": "pdf",
   "targetFormat": "docx",
   "category": "document",
@@ -155,9 +157,11 @@ configured), so the JSON keys are the property names verbatim.
 
 | Field          | Type            | Notes |
 |----------------|-----------------|-------|
-| `conversionId` | int             | Conversion entity PK; deterministic S3 key + status key. |
-| `inputPath`    | string          | Path under `/shared-files` (e.g. `input/Y/m/d/<hex>.<ext>`). |
-| `sourceFormat` | string          | Source format (lowercased extension / registry virtual key). |
+| `conversionId`     | int             | Conversion entity PK; deterministic S3 key + status key. |
+| `inputBucket`      | string          | S3 bucket holding the input object (`${S3_BUCKET_PREFIX}-inputs`). |
+| `inputKey`         | string          | S3 object key of the input (`inputs/Y/m/d/<hex>.<ext>`; random basename, never the user filename). |
+| `originalFilename` | string          | The user's original upload filename (display/metadata only — NOT used for the S3 key). |
+| `sourceFormat`     | string          | Source format (lowercased extension / registry virtual key). |
 | `targetFormat` | string          | Target format. **Renamed from `outputFormat`** for contract parity. |
 | `category`     | string          | `FileCategory` value: document/image/audio/video/data/markup/archive. |
 | `isAi`         | bool            | AI job flag. Routing key = `isAi ? 'ai' : category`. |
@@ -238,7 +242,7 @@ Result body:
   "conversionId": 123,
   "state": "completed",
   "outputBucket": "convertor-results",
-  "outputKey": "results/2026/06/19/123.docx",
+  "outputKey": "results/2026/06-19/123.docx",
   "outputMime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "outputSize": 48213,
   "error": null,

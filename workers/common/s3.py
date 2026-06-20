@@ -31,6 +31,30 @@ def _make_client() -> Any:
     )
 
 
+def get_file(bucket: str, key: str, dest_path: str) -> str:
+    """Download bucket/key to dest_path; return dest_path."""
+    global _client
+    if _client is None:
+        _client = _make_client()
+
+    dest = Path(dest_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    resp = _client.get_object(Bucket=bucket, Key=key)
+    body = resp["Body"]
+    try:
+        with dest.open("wb") as fh:
+            for chunk in body.iter_chunks(chunk_size=1024 * 1024):
+                fh.write(chunk)
+    except BaseException:
+        # Mid-stream failure leaves a partial file; remove it so the caller's
+        # finally (which only sees the returned path) can't orphan it.
+        dest.unlink(missing_ok=True)
+        raise
+    finally:
+        body.close()
+    return str(dest)
+
+
 def put_file(local_path: str, bucket: str, key: str, content_type: str) -> dict[str, Any]:
     """Upload local_path to bucket/key; return {bucket, key, size, mime}."""
     global _client

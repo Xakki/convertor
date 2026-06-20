@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Storage;
 
 use AsyncAws\S3\Input\GetObjectRequest;
+use AsyncAws\S3\Input\PutObjectRequest;
 use AsyncAws\S3\S3Client;
 use Symfony\Component\HttpFoundation\HeaderUtils;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -12,7 +13,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 /**
  * Thin wrapper around the S3 result bucket. All async-aws API usage is confined
  * here so the rest of the app stays library-agnostic. Result bucket =
- * `{S3_BUCKET_PREFIX}-results`; objects are keyed `results/{Y}/{m}/{d}/{id}.{ext}`
+ * `{S3_BUCKET_PREFIX}-results`; objects are keyed `results/{Y}/{m}-{d}/{id}.{ext}`
  * (the worker emits the exact key in the result event — we store and reuse it).
  */
 final class S3Storage
@@ -20,11 +21,40 @@ final class S3Storage
     public function __construct(
         private readonly S3Client $client,
         private readonly string $bucketPrefix,
-    ) {}
+    ) {
+    }
 
     public function resultsBucket(): string
     {
         return $this->bucketPrefix . '-results';
+    }
+
+    public function inputsBucket(): string
+    {
+        return $this->bucketPrefix . '-inputs';
+    }
+
+    /**
+     * PUT an object into the given bucket. Body may be a string (content) or a
+     * stream/resource (e.g. fopen() of the upload tmp file). Forces the async
+     * result to resolve so bucket/auth errors surface synchronously here —
+     * before the caller dispatches a message that references the object.
+     *
+     * @param string|resource $body
+     */
+    public function putObject(string $bucket, string $key, $body, ?string $contentType = null): void
+    {
+        $input = [
+            'Bucket' => $bucket,
+            'Key'    => $key,
+            'Body'   => $body,
+        ];
+
+        if ($contentType !== null) {
+            $input['ContentType'] = $contentType;
+        }
+
+        $this->client->putObject(new PutObjectRequest($input))->resolve();
     }
 
     /**

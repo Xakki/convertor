@@ -1,13 +1,20 @@
-"""FFmpeg audio/video conversion worker."""
+"""FFmpeg audio/video conversion worker — Phase 1, XREADGROUP-based.
+
+Consumes streams conv.audio + conv.video (consumer group convertor). Reads the
+local input the base class downloaded from S3 (job['_localInput']), runs ffmpeg
+into a tmp output under WORK_DIR, and returns (out_path, mime, target_ext) for
+the base class to upload to the results bucket.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
-from workers.common.base_worker import SHARE_DIR, BaseWorker
-from workers.common.logging_config import configure_logging
-from workers.common.safe_path import safe_share_path
+from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +36,23 @@ CODEC_MAP: dict[str, str] = {
     "webm": "libvpx-vp9",
 }
 
+# MIME types for output formats
+_MIME: dict[str, str] = {
+    "mp3":  "audio/mpeg",
+    "wav":  "audio/wav",
+    "ogg":  "audio/ogg",
+    "flac": "audio/flac",
+    "aac":  "audio/aac",
+    "m4a":  "audio/mp4",
+    "opus": "audio/opus",
+    "wma":  "audio/x-ms-wma",
+    "mp4":  "video/mp4",
+    "avi":  "video/x-msvideo",
+    "mkv":  "video/x-matroska",
+    "mov":  "video/quicktime",
+    "webm": "video/webm",
+}
+
 # Timeout by output category (seconds)
 _AUDIO_FORMATS: set[str] = {"mp3", "wav", "ogg", "flac", "aac", "m4a", "opus", "wma"}
 _VIDEO_FORMATS: set[str] = {"mp4", "avi", "mkv", "mov", "webm"}
@@ -46,7 +70,7 @@ SUPPORTED: dict[str, set[str]] = {
     "m4a":  _AUDIO_FORMATS,
     "opus": _AUDIO_FORMATS,
     "wma":  _AUDIO_FORMATS,
-    # video → video
+    # video → video / video → audio
     "mp4":  _VIDEO_FORMATS | {"mp3", "wav", "ogg", "flac"},
     "avi":  _VIDEO_FORMATS | {"mp3", "wav", "ogg", "flac"},
     "mkv":  _VIDEO_FORMATS | {"mp3", "wav", "ogg", "flac"},
@@ -95,40 +119,43 @@ async def run_ffmpeg(
     logger.debug("ffmpeg stdout: %s", out_b.decode("utf-8", "replace"))
 
 
-class FfmpegWorker(BaseWorker):
-    """Queue worker for audio and video format conversions via FFmpeg."""
+class FfmpegWorker(StreamConsumerBase):
+    """Stream worker for audio and video format conversions via FFmpeg."""
 
-    queue_name = "convertor:media"
+    CAPABILITIES: dict[str, Any] = {
+        "routing_keys": ["audio", "video"],
+        "matrix": SUPPORTED,
+    }
 
-    async def process_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        input_path_raw: str = task["input_path"]
-        output_format: str = task["output_format"].lower().lstrip(".")
+    def convert(self, job: dict[str, Any]) -> tuple[str, str, str]:
+        conv_id: int = job["conversionId"]
+        src = Path(job["_localInput"])
+        target_fmt: str = job["targetFormat"].lower().lstrip(".")
+        src_fmt = str(job["sourceFormat"]).lower().lstrip(".")
 
-        src = safe_share_path(input_path_raw, SHARE_DIR)
         if not src.is_file():
             raise FileNotFoundError(f"input file not found: {src}")
 
-        in_format = src.suffix.lower().lstrip(".")
-        if in_format not in SUPPORTED:
-            raise ValueError(f"unsupported input format: {in_format}")
-        if output_format not in SUPPORTED[in_format]:
-            raise ValueError(f"unsupported conversion: {in_format} -> {output_format}")
+        if src_fmt not in SUPPORTED:
+            raise ValueError(f"unsupported input format: {src_fmt}")
+        if target_fmt not in SUPPORTED[src_fmt]:
+            raise ValueError(f"unsupported conversion: {src_fmt} -> {target_fmt}")
 
-        out_path = src.with_suffix(f".{output_format}")
-        timeout = _VIDEO_TIMEOUT if output_format in _VIDEO_FORMATS else _AUDIO_TIMEOUT
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
+        timeout = _VIDEO_TIMEOUT if target_fmt in _VIDEO_FORMATS else _AUDIO_TIMEOUT
 
-        await run_ffmpeg(src, out_path, timeout)
+        asyncio.run(run_ffmpeg(src, out_path, timeout))
 
         if not out_path.exists():
             raise RuntimeError("ffmpeg produced no output file")
 
+        mime = _MIME.get(target_fmt, "application/octet-stream")
         logger.info(
-            "converted %s -> %s (task id=%s)", src.name, out_path.name, task.get("id")
+            "converted %s -> %s (conversionId=%s)", src.name, out_path.name, conv_id
         )
-        return {"status": "ok", "output_path": str(out_path)}
+        return str(out_path), mime, target_fmt
 
 
 if __name__ == "__main__":
-    configure_logging()
-    worker = FfmpegWorker()
-    worker.run()
+    FfmpegWorker().run()

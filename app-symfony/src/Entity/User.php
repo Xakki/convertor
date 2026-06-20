@@ -47,7 +47,7 @@ class User implements UserInterface
 
     public function __construct()
     {
-        $this->createdAt = new \DateTimeImmutable();
+        $this->createdAt    = new \DateTimeImmutable();
         $this->quotaResetAt = new \DateTimeImmutable();
     }
 
@@ -64,6 +64,7 @@ class User implements UserInterface
     public function setTelegramId(?string $telegramId): self
     {
         $this->telegramId = $telegramId;
+
         return $this;
     }
 
@@ -75,6 +76,7 @@ class User implements UserInterface
     public function setPhone(?string $phone): self
     {
         $this->phone = $phone;
+
         return $this;
     }
 
@@ -86,6 +88,7 @@ class User implements UserInterface
     public function setEmail(?string $email): self
     {
         $this->email = $email;
+
         return $this;
     }
 
@@ -97,6 +100,7 @@ class User implements UserInterface
     public function setPlan(string $plan): self
     {
         $this->plan = $plan;
+
         return $this;
     }
 
@@ -108,12 +112,14 @@ class User implements UserInterface
     public function setDailyConversions(int $dailyConversions): self
     {
         $this->dailyConversions = $dailyConversions;
+
         return $this;
     }
 
     public function incrementDailyConversions(): self
     {
         $this->dailyConversions++;
+
         return $this;
     }
 
@@ -125,12 +131,14 @@ class User implements UserInterface
     public function setDailyAiConversions(int $dailyAiConversions): self
     {
         $this->dailyAiConversions = $dailyAiConversions;
+
         return $this;
     }
 
     public function incrementDailyAiConversions(): self
     {
         $this->dailyAiConversions++;
+
         return $this;
     }
 
@@ -142,6 +150,7 @@ class User implements UserInterface
     public function setQuotaResetAt(\DateTimeImmutable $quotaResetAt): self
     {
         $this->quotaResetAt = $quotaResetAt;
+
         return $this;
     }
 
@@ -158,6 +167,7 @@ class User implements UserInterface
     public function setIsActive(bool $isActive): self
     {
         $this->isActive = $isActive;
+
         return $this;
     }
 
@@ -166,7 +176,9 @@ class User implements UserInterface
         return ['ROLE_USER'];
     }
 
-    public function eraseCredentials(): void {}
+    public function eraseCredentials(): void
+    {
+    }
 
     public function getUserIdentifier(): string
     {

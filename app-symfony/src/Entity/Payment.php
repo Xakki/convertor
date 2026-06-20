@@ -61,6 +61,7 @@ class Payment
     public function setUser(User $user): self
     {
         $this->user = $user;
+
         return $this;
     }
 
@@ -72,6 +73,7 @@ class Payment
     public function setAmount(float $amount): self
     {
         $this->amount = $amount;
+
         return $this;
     }
 
@@ -83,6 +85,7 @@ class Payment
     public function setCurrency(string $currency): self
     {
         $this->currency = $currency;
+
         return $this;
     }
 
@@ -94,6 +97,7 @@ class Payment
     public function setGateway(PaymentGateway $gateway): self
     {
         $this->gateway = $gateway;
+
         return $this;
     }
 
@@ -105,6 +109,7 @@ class Payment
     public function setStatus(PaymentStatus $status): self
     {
         $this->status = $status;
+
         return $this;
     }
 
@@ -116,6 +121,7 @@ class Payment
     public function setExternalId(?string $externalId): self
     {
         $this->externalId = $externalId;
+
         return $this;
     }
 
@@ -129,6 +135,7 @@ class Payment
     public function setMetadata(array $metadata): self
     {
         $this->metadata = $metadata;
+
         return $this;
     }
 

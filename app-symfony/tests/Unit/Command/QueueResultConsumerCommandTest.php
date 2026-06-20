@@ -35,7 +35,7 @@ final class QueueResultConsumerCommandTest extends TestCase
         $conversion->method('getStatus')->willReturn(ConversionStatus::Processing);
 
         // em1: find() succeeds once; flush() throws → EM closes.
-        $em1 = $this->createStub(EntityManagerInterface::class);
+        $em1       = $this->createStub(EntityManagerInterface::class);
         $findCalls = 0;
         $em1->method('find')->willReturnCallback(function () use ($conversion, &$findCalls) {
             if (++$findCalls > 1) {
@@ -57,7 +57,7 @@ final class QueueResultConsumerCommandTest extends TestCase
         // Calls: 1 (persist msg1) → em1, 2 (resetEmIfClosed check) → em1 (isOpen=false → reset),
         //        3+ (persist msg2) → em2.
         $getManagerCount = 0;
-        $registry = $this->createMock(ManagerRegistry::class);
+        $registry        = $this->createMock(ManagerRegistry::class);
         $registry->method('getManager')->willReturnCallback(
             function () use ($em1, $em2, &$getManagerCount) {
                 return ++$getManagerCount <= 2 ? $em1 : $em2;

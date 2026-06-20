@@ -16,10 +16,6 @@ services:
         arguments:
             $telegramBotToken: '%env(TELEGRAM_BOT_TOKEN)%'
 
-    App\Service\Conversion\ConversionManager:
-        arguments:
-            $shareDir: '%env(SHARE_DIR)%'
-
     App\Service\Queue\RedisConnectionFactory:
         arguments:
             $dsn: '%env(REDIS_DSN)%'

@@ -32,7 +32,6 @@ x-app-env: &_app_env
     STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
     CRYPTOMUS_MERCHANT_ID: ${CRYPTOMUS_MERCHANT_ID}
     CRYPTOMUS_API_KEY: ${CRYPTOMUS_API_KEY}
-    SHARE_DIR: ${SHARE_DIR:-/shared-files}
     # S3 result sink + download proxy (shared apis3 MinIO; secrets via .env.local).
     S3_ENDPOINT: ${S3_ENDPOINT}
     S3_KEY: ${S3_KEY}
@@ -80,8 +79,6 @@ services:
             - ./docker/php/${DOCKER_ENV}/zz-docker.conf:/usr/local/etc/php-fpm.d/zz-docker.conf:ro
             - ./docker/php/supervisor.app.ini:/etc/supervisor.d/supervisor.app.ini:ro
             - php-socket:/run/sock
-            # uploads land here (SHARE_DIR); workers read the same volume
-            - shared-files:/shared-files
         command: "composer deploy"
         environment:
             <<: *_app_env
@@ -107,7 +104,6 @@ services:
             - ./app-symfony:/app-symfony
             - ./docker/php/${DOCKER_ENV}/php-cron.ini:/usr/local/etc/php/conf.d/app.ini:ro
             - ./docker/php/supervisor.app.ini:/etc/supervisor.d/supervisor.app.ini:ro
-            - shared-files:/shared-files
         environment:
             <<: *_app_env
             ENABLED_SUPERVISORD: "1"
@@ -229,8 +225,6 @@ services:
         restart: unless-stopped
         stop_grace_period: 30s
         stop_signal: SIGTERM
-        volumes:
-            - shared-files:/shared-files
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
@@ -239,7 +233,6 @@ services:
             # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
             # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
-            SHARE_DIR: ${SHARE_DIR:-/shared-files}
         depends_on:
             keydb:
                 condition: service_healthy
@@ -261,8 +254,6 @@ services:
         restart: unless-stopped
         stop_grace_period: 30s
         stop_signal: SIGTERM
-        volumes:
-            - shared-files:/shared-files
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
@@ -271,7 +262,6 @@ services:
             # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
             # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
-            SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.ffmpeg.worker
         depends_on:
             keydb:
@@ -294,8 +284,6 @@ services:
         restart: unless-stopped
         stop_grace_period: 30s
         stop_signal: SIGTERM
-        volumes:
-            - shared-files:/shared-files
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
@@ -304,7 +292,6 @@ services:
             # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
             # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
-            SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.image.worker
             REDIS_PORT: ${REDIS_PORT:-6379}
             # Image worker uploads results to S3 + emits the result event.
@@ -340,7 +327,6 @@ services:
         stop_grace_period: 60s
         stop_signal: SIGTERM
         volumes:
-            - shared-files:/shared-files
             - whisper-models:/home/app/.cache/huggingface
         environment:
             APP_ENV: ${APP_ENV}
@@ -350,7 +336,6 @@ services:
             # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
             # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
-            SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.ai.worker
             WHISPER_MODEL: ${WHISPER_MODEL:-base}
         depends_on:
@@ -374,8 +359,6 @@ services:
         restart: unless-stopped
         stop_grace_period: 30s
         stop_signal: SIGTERM
-        volumes:
-            - shared-files:/shared-files
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
@@ -384,7 +367,6 @@ services:
             # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
             # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
-            SHARE_DIR: ${SHARE_DIR:-/shared-files}
             WORKER_MODULE: workers.data.worker
         depends_on:
             keydb:
@@ -412,8 +394,6 @@ volumes:
         name: "${COMPOSE_PROJECT_NAME}-mariadb-data"
     keydb-data:
         name: "${COMPOSE_PROJECT_NAME}-keydb-data"
-    shared-files:
-        name: "${COMPOSE_PROJECT_NAME}-shared-files"
     php-socket:
         name: "${COMPOSE_PROJECT_NAME}-php-socket"
     whisper-models:

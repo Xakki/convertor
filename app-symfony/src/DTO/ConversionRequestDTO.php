@@ -12,12 +12,11 @@ class ConversionRequestDTO
         #[Assert\NotBlank]
         #[Assert\Length(max: 20)]
         public readonly string $fromFormat,
-
         #[Assert\NotBlank]
         #[Assert\Length(max: 20)]
         public readonly string $toFormat,
-
         #[Assert\NotBlank]
         public readonly string $filePath,
-    ) {}
+    ) {
+    }
 }

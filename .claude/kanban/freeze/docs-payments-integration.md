@@ -8,7 +8,7 @@
 - feature
 
 **Description:**
-From `docs/plan.md` phase 4 (skeleton only): three payment gateways per project CLAUDE.md — Telegram Stars, Stripe Checkout (KZ card), Cryptomus (USDT/BTC, RU-accessible).
+From `ROADMAP.md` (Стадия 6, skeleton only): three payment gateways per project CLAUDE.md — Telegram Stars, Stripe Checkout (KZ card), Cryptomus (USDT/BTC, RU-accessible).
 
 **Problem / scope:**
 - Telegram Stars: bot invoice → `successful_payment` webhook, signature verify.
@@ -33,7 +33,6 @@ Implement each gateway behind a common payment abstraction; verify webhooks; rec
 - Test/sandbox credentials availability for Stripe/Cryptomus?
 - Credit model: per-conversion credits, subscription tiers, or both?
 - Split into one card per gateway when moving to todo?
-- **YooMoney** (RU, RUB, ~3.5%) присутствует в платёжной таблице `docs/plan.md` (строка 226) рядом с Telegram Stars/Stripe/Cryptomus, но не в текущем scope. Включать YooMoney или нет при разморозке?
 
 **Decisions:**
-- (to be filled during grooming)
+- **MVP-платёж — только Telegram Stars** (2026-06-20, см. [[ROADMAP]] стадия 6). Stripe/Cryptomus — позже, вне MVP. YooMoney исключён из планов.

@@ -83,6 +83,7 @@ class Conversion
     public function setUser(User $user): self
     {
         $this->user = $user;
+
         return $this;
     }
 
@@ -94,6 +95,7 @@ class Conversion
     public function setInputFile(FileStorage $inputFile): self
     {
         $this->inputFile = $inputFile;
+
         return $this;
     }
 
@@ -105,6 +107,7 @@ class Conversion
     public function setOutputFile(?FileStorage $outputFile): self
     {
         $this->outputFile = $outputFile;
+
         return $this;
     }
 
@@ -116,6 +119,7 @@ class Conversion
     public function setFromFormat(string $fromFormat): self
     {
         $this->fromFormat = $fromFormat;
+
         return $this;
     }
 
@@ -127,6 +131,7 @@ class Conversion
     public function setToFormat(string $toFormat): self
     {
         $this->toFormat = $toFormat;
+
         return $this;
     }
 
@@ -138,6 +143,7 @@ class Conversion
     public function setCategory(FileCategory $category): self
     {
         $this->category = $category;
+
         return $this;
     }
 
@@ -149,6 +155,7 @@ class Conversion
     public function setStatus(ConversionStatus $status): self
     {
         $this->status = $status;
+
         return $this;
     }
 
@@ -160,6 +167,7 @@ class Conversion
     public function setErrorMessage(?string $errorMessage): self
     {
         $this->errorMessage = $errorMessage;
+
         return $this;
     }
 
@@ -171,6 +179,7 @@ class Conversion
     public function setProcessingMs(?int $processingMs): self
     {
         $this->processingMs = $processingMs;
+
         return $this;
     }
 
@@ -182,6 +191,7 @@ class Conversion
     public function setIsAi(bool $isAi): self
     {
         $this->isAi = $isAi;
+
         return $this;
     }
 

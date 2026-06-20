@@ -7,7 +7,7 @@
 - tech-debt
 
 **Description:**
-From `docs/plan.md` phase 6 (not started): production-readiness items.
+From `ROADMAP.md` (Стадия 6, not started): production-readiness items.
 
 **Problem / scope (S3 storage split out → [[storage-input-to-s3]]):**
 - Rate limiting: KeyDB-backed, per-IP and per-user.

@@ -17,12 +17,15 @@ class ConversionMessage
      */
     public function __construct(
         public readonly int $conversionId,
-        public readonly string $inputPath,
+        public readonly string $inputBucket,
+        public readonly string $inputKey,
+        public readonly string $originalFilename,
         public readonly string $sourceFormat,
         public readonly string $targetFormat,
         public readonly string $category,
         public readonly bool $isAi = false,
         public readonly ?string $subType = null,
         public readonly array $options = [],
-    ) {}
+    ) {
+    }
 }

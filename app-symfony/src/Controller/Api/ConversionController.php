@@ -28,7 +28,8 @@ class ConversionController extends AbstractController
         private readonly ConversionRepository $conversionRepository,
         private readonly QuotaService $quotaService,
         private readonly S3Storage $s3,
-    ) {}
+    ) {
+    }
 
     #[Route('/convert', methods: ['POST'])]
     public function convert(Request $request, #[CurrentUser] ?User $user): JsonResponse
@@ -37,14 +38,14 @@ class ConversionController extends AbstractController
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
         }
 
-        $file = $request->files->get('file');
+        $file     = $request->files->get('file');
         $toFormat = $request->request->get('to_format');
 
         if ($file === null) {
             return $this->json(['error' => 'File required'], Response::HTTP_BAD_REQUEST);
         }
 
-        if (!$toFormat) {
+        if (! $toFormat) {
             return $this->json(['error' => 'to_format required'], Response::HTTP_BAD_REQUEST);
         }
 
@@ -116,7 +117,7 @@ class ConversionController extends AbstractController
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
         }
 
-        $limit = min((int) $request->query->get('limit', 20), 100);
+        $limit  = min((int) $request->query->get('limit', 20), 100);
         $offset = (int) $request->query->get('offset', 0);
 
         $conversions = $this->conversionRepository->findByUser($user, $limit, $offset);

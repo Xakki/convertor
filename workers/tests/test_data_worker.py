@@ -1,38 +1,12 @@
-"""Tests for DataWorker: csv→json, json→yaml, and round-trip conversions."""
+"""Tests for DataWorker.convert() — Phase 1 stream-based worker."""
 
-import asyncio
 import json
-import sys
-import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Stub out redis / requests so we can import workers without those packages
-# ---------------------------------------------------------------------------
-if "redis" not in sys.modules:
-    redis_stub = types.ModuleType("redis")
-    redis_stub.Redis = MagicMock()
-    sys.modules["redis"] = redis_stub
-
-if "requests" not in sys.modules:
-    req_stub = types.ModuleType("requests")
-    req_stub.Session = MagicMock(return_value=MagicMock())
-    adapters_stub = types.ModuleType("requests.adapters")
-    adapters_stub.HTTPAdapter = MagicMock()
-    sys.modules["requests"] = req_stub
-    sys.modules["requests.adapters"] = adapters_stub
-
-if "urllib3" not in sys.modules:
-    sys.modules["urllib3"] = types.ModuleType("urllib3")
-    sys.modules["urllib3.util"] = types.ModuleType("urllib3.util")
-    retry_stub = types.ModuleType("urllib3.util.retry")
-    retry_stub.Retry = MagicMock()
-    sys.modules["urllib3.util.retry"] = retry_stub
-
-from workers.data.worker import DataWorker, _read_data, _write_data  # noqa: E402
+from workers.data.worker import DataWorker, _read_data, _write_data
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,8 +18,41 @@ SAMPLE_RECORDS = [
 ]
 
 
+def _make_job(conv_id: int, input_path: Path, src_fmt: str, tgt_fmt: str) -> dict:
+    """Build a job dict. input_path is the local file convert() reads
+    (base class injects it as _localInput after the S3 download)."""
+    return {
+        "conversionId": conv_id,
+        "inputBucket": "convertor-inputs",
+        "inputKey": f"inputs/{Path(input_path).name}",
+        "_localInput": str(input_path),
+        "originalFilename": Path(input_path).name,
+        "sourceFormat": src_fmt,
+        "targetFormat": tgt_fmt,
+        "category": "data",
+        "isAi": False,
+        "subType": None,
+        "options": [],
+    }
+
+
+def _worker(tmp_path: Path) -> DataWorker:
+    """Return a DataWorker with redis + WORK_DIR mocked."""
+    import workers.common.stream_consumer as sc_mod
+    import workers.data.worker as dw_mod
+
+    mock_redis = MagicMock()
+    with patch.object(sc_mod, "REDIS_HOST", "localhost"), \
+         patch("workers.common.stream_consumer.redis.Redis", return_value=mock_redis):
+        worker = DataWorker()
+
+    patch.object(dw_mod, "WORK_DIR", tmp_path).start()
+    patch.object(sc_mod, "WORK_DIR", tmp_path).start()
+    return worker
+
+
 # ---------------------------------------------------------------------------
-# Unit tests for _read_data / _write_data (no I/O to KeyDB needed)
+# Unit tests for _read_data / _write_data (format helpers)
 # ---------------------------------------------------------------------------
 
 class TestReadWrite:
@@ -110,34 +117,6 @@ class TestReadWrite:
         assert out_xml.exists()
         assert "<root>" in out_xml.read_text(encoding="utf-8")
 
-    def test_csv_to_json(self, tmp_path: Path) -> None:
-        import pandas as pd
-
-        csv_file = tmp_path / "input.csv"
-        pd.DataFrame(SAMPLE_RECORDS).to_csv(csv_file, index=False)
-
-        data = _read_data(csv_file)
-        out_json = tmp_path / "output.json"
-        _write_data(data, out_json)
-
-        result = json.loads(out_json.read_text(encoding="utf-8"))
-        assert len(result) == 2
-        assert result[0]["name"] == "Alice"
-
-    def test_json_to_yaml(self, tmp_path: Path) -> None:
-        import yaml
-
-        json_file = tmp_path / "input.json"
-        json_file.write_text(json.dumps(SAMPLE_RECORDS), encoding="utf-8")
-
-        data = _read_data(json_file)
-        out_yaml = tmp_path / "output.yaml"
-        _write_data(data, out_yaml)
-
-        result = yaml.safe_load(out_yaml.read_text(encoding="utf-8"))
-        assert isinstance(result, list)
-        assert result[0]["city"] == "Moscow"
-
     def test_unsupported_input_raises(self, tmp_path: Path) -> None:
         bad_file = tmp_path / "file.toml"
         bad_file.write_text("key = 'value'", encoding="utf-8")
@@ -151,85 +130,78 @@ class TestReadWrite:
 
 
 # ---------------------------------------------------------------------------
-# Integration-style test through DataWorker.process_task
+# DataWorker.convert() — new wire contract
 # ---------------------------------------------------------------------------
 
-class TestDataWorkerProcessTask:
-    @pytest.fixture()
-    def worker(self, tmp_path: Path) -> DataWorker:
-        with patch("workers.common.base_worker.QueueClient"):
-            w = DataWorker()
-        # Override SHARE_DIR so safe_share_path resolves correctly
-        with patch("workers.data.worker.SHARE_DIR", tmp_path):
-            yield w, tmp_path
-
-    @pytest.mark.asyncio
-    async def test_csv_to_json_via_process_task(self, tmp_path: Path) -> None:
+class TestDataConvert:
+    def test_csv_to_json(self, tmp_path: Path) -> None:
         import pandas as pd
 
-        csv_file = tmp_path / "data.csv"
-        pd.DataFrame(SAMPLE_RECORDS).to_csv(csv_file, index=False)
+        src = tmp_path / "data.csv"
+        pd.DataFrame(SAMPLE_RECORDS).to_csv(src, index=False)
+        worker = _worker(tmp_path)
 
-        with patch("workers.common.base_worker.QueueClient"):
-            w = DataWorker()
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(_make_job(1, src, "csv", "json"))
 
-        with patch("workers.data.worker.SHARE_DIR", tmp_path):
-            result = await w.process_task(
-                {
-                    "id": "t-csv-json",
-                    "input_path": str(csv_file),
-                    "output_format": "json",
-                    "callback_url": None,
-                }
-            )
-
-        assert result["status"] == "ok"
-        out = Path(result["output_path"])
-        assert out.exists()
-        loaded = json.loads(out.read_text(encoding="utf-8"))
+        assert Path(out_path).exists()
+        assert ext == "json"
+        assert mime == "application/json"
+        loaded = json.loads(Path(out_path).read_text(encoding="utf-8"))
         assert loaded[0]["name"] == "Alice"
 
-    @pytest.mark.asyncio
-    async def test_json_to_yaml_via_process_task(self, tmp_path: Path) -> None:
+    def test_json_to_yaml(self, tmp_path: Path) -> None:
         import yaml
 
-        json_file = tmp_path / "data.json"
-        json_file.write_text(json.dumps(SAMPLE_RECORDS), encoding="utf-8")
+        src = tmp_path / "data.json"
+        src.write_text(json.dumps(SAMPLE_RECORDS), encoding="utf-8")
+        worker = _worker(tmp_path)
 
-        with patch("workers.common.base_worker.QueueClient"):
-            w = DataWorker()
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(_make_job(2, src, "json", "yaml"))
 
-        with patch("workers.data.worker.SHARE_DIR", tmp_path):
-            result = await w.process_task(
-                {
-                    "id": "t-json-yaml",
-                    "input_path": str(json_file),
-                    "output_format": "yaml",
-                    "callback_url": None,
-                }
-            )
-
-        assert result["status"] == "ok"
-        out = Path(result["output_path"])
-        assert out.exists()
-        loaded = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert Path(out_path).exists()
+        assert ext == "yaml"
+        assert mime == "application/x-yaml"
+        loaded = yaml.safe_load(Path(out_path).read_text(encoding="utf-8"))
         assert loaded[1]["name"] == "Bob"
 
-    @pytest.mark.asyncio
-    async def test_unsupported_format_raises(self, tmp_path: Path) -> None:
-        txt_file = tmp_path / "data.txt"
-        txt_file.write_text("hello", encoding="utf-8")
+    def test_output_placed_in_work_dir_with_conv_id(self, tmp_path: Path) -> None:
+        src = tmp_path / "data.json"
+        src.write_text(json.dumps(SAMPLE_RECORDS), encoding="utf-8")
+        worker = _worker(tmp_path)
 
-        with patch("workers.common.base_worker.QueueClient"):
-            w = DataWorker()
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, ext = worker.convert(_make_job(42, src, "json", "csv"))
 
-        with patch("workers.data.worker.SHARE_DIR", tmp_path):
+        name = Path(out_path).name
+        assert Path(out_path).parent == tmp_path
+        assert name.startswith("out-42-")
+        assert name.endswith(f".{ext}")
+
+
+class TestDataConvertErrors:
+    def test_unsupported_source_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "data.txt"
+        src.write_text("hello", encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
             with pytest.raises(ValueError, match="unsupported input format"):
-                await w.process_task(
-                    {
-                        "id": "t-bad",
-                        "input_path": str(txt_file),
-                        "output_format": "json",
-                        "callback_url": None,
-                    }
-                )
+                worker.convert(_make_job(3, src, "txt", "json"))
+
+    def test_unsupported_conversion_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "data.yaml"
+        src.write_text("[]", encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="unsupported conversion"):
+                worker.convert(_make_job(4, src, "yaml", "yml"))
+
+    def test_missing_input_raises(self, tmp_path: Path) -> None:
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            with pytest.raises(FileNotFoundError):
+                worker.convert(_make_job(5, tmp_path / "missing.json", "json", "csv"))

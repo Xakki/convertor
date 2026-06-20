@@ -33,9 +33,13 @@ def _make_fields(body: dict, key_type: str = "str", value_type: str = "str") -> 
 
 
 def test_parse_entry_str_key_str_value():
-    job = _parse_entry(_make_fields({"conversionId": 1, "inputPath": "input/a.jpg"}, "str", "str"))
+    job = _parse_entry(_make_fields(
+        {"conversionId": 1, "inputBucket": "convertor-inputs", "inputKey": "inputs/a.jpg"},
+        "str", "str",
+    ))
     assert job["conversionId"] == 1
-    assert job["inputPath"] == "input/a.jpg"
+    assert job["inputBucket"] == "convertor-inputs"
+    assert job["inputKey"] == "inputs/a.jpg"
 
 
 def test_parse_entry_bytes_key_str_value():
@@ -59,7 +63,9 @@ def test_parse_entry_str_key_bytes_value():
 def test_parse_entry_all_job_fields():
     body = {
         "conversionId": 99,
-        "inputPath": "input/2026/06/19/abc.png",
+        "inputBucket": "convertor-inputs",
+        "inputKey": "inputs/2026/06/19/abc.png",
+        "originalFilename": "abc.png",
         "sourceFormat": "png",
         "targetFormat": "jpg",
         "category": "image",
@@ -94,7 +100,9 @@ class _StubWorker(StreamConsumerBase):
 def _make_entry_fields(conv_id: int) -> dict:
     body = {
         "conversionId": conv_id,
-        "inputPath": f"input/2026/06/19/{conv_id}.png",
+        "inputBucket": "convertor-inputs",
+        "inputKey": f"inputs/2026/06/19/{conv_id}.png",
+        "originalFilename": f"{conv_id}.png",
         "sourceFormat": "png",
         "targetFormat": "jpg",
         "category": "image",
@@ -115,7 +123,7 @@ def test_idempotency_guard_skips_when_completed():
     mock_redis.hgetall.return_value = {
         "state": "completed",
         "outputBucket": "convertor-results",
-        "outputKey": "results/2026/06/19/42.jpg",
+        "outputKey": "results/2026/06-19/42.jpg",
         "outputMime": "image/jpeg",
         "outputSize": "98765",
     }
@@ -139,7 +147,7 @@ def test_idempotency_guard_re_emits_result_event_when_completed():
     mock_redis.hgetall.return_value = {
         "state": "completed",
         "outputBucket": "convertor-results",
-        "outputKey": "results/2026/06/19/42.jpg",
+        "outputKey": "results/2026/06-19/42.jpg",
         "outputMime": "image/jpeg",
         "outputSize": "98765",
     }
@@ -156,7 +164,7 @@ def test_idempotency_guard_re_emits_result_event_when_completed():
     assert data["conversionId"] == 42
     assert data["state"] == "completed"
     assert data["outputBucket"] == "convertor-results"
-    assert data["outputKey"] == "results/2026/06/19/42.jpg"
+    assert data["outputKey"] == "results/2026/06-19/42.jpg"
     assert data["outputMime"] == "image/jpeg"
     assert data["outputSize"] == 98765  # int, not string
 
@@ -182,9 +190,12 @@ def test_idempotency_guard_proceeds_when_not_completed():
 
     worker.convert = fake_convert
 
-    worker._process_entry("conv.image", "1234-0", _make_entry_fields(43))
+    with patch.object(worker, "_download_input", return_value="/tmp/in.png"):
+        worker._process_entry("conv.image", "1234-0", _make_entry_fields(43))
 
     assert len(convert_called) == 1, "convert() should have been called once"
+    # Base class must inject the downloaded local input path into the job.
+    assert convert_called[0]["_localInput"] == "/tmp/in.png"
     # Entry must NOT be acked (left for retry)
     mock_redis.xack.assert_not_called()
 
@@ -202,7 +213,8 @@ def test_idempotency_guard_proceeds_when_pending():
         raise RuntimeError("stop here")
 
     worker.convert = fake_convert
-    worker._process_entry("conv.image", "9999-0", _make_entry_fields(44))
+    with patch.object(worker, "_download_input", return_value="/tmp/in.png"):
+        worker._process_entry("conv.image", "9999-0", _make_entry_fields(44))
 
     assert len(convert_calls) == 1
 
@@ -220,7 +232,8 @@ def test_idempotency_guard_proceeds_when_no_status():
         raise RuntimeError("stop here")
 
     worker.convert = fake_convert
-    worker._process_entry("conv.image", "8888-0", _make_entry_fields(45))
+    with patch.object(worker, "_download_input", return_value="/tmp/in.png"):
+        worker._process_entry("conv.image", "8888-0", _make_entry_fields(45))
 
     assert len(convert_calls) == 1
 
@@ -246,6 +259,98 @@ def test_dlq_after_max_retries():
     dead_call_args = [c for c in mock_redis.xadd.call_args_list if c.args[0] == "conv.dead"]
     assert len(dead_call_args) == 1, "should emit one entry to conv.dead"
     convert_spy.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# Input download + tmp cleanup (input always pulled from S3; both tmp removed)
+# --------------------------------------------------------------------------
+
+def test_input_downloaded_and_both_tmp_cleaned_on_success(tmp_path):
+    """Success path: input is downloaded, output uploaded, both tmp removed."""
+    import workers.common.stream_consumer as sc_mod
+
+    mock_redis = MagicMock()
+    mock_redis.hget.return_value = None
+    mock_redis.xpending_range.return_value = [{"times_delivered": 1}]
+
+    worker = _StubWorker(mock_redis)
+
+    # Real tmp files on disk so we can assert they get unlinked.
+    in_file = tmp_path / "in-abc.png"
+    in_file.write_bytes(b"input")
+    out_file = tmp_path / "out-1.jpg"
+    out_file.write_bytes(b"output")
+
+    seen = {}
+
+    def fake_convert(job):
+        seen["localInput"] = job["_localInput"]
+        return str(out_file), "image/jpeg", "jpg"
+
+    worker.convert = fake_convert
+
+    with patch.object(sc_mod, "get_file", return_value=str(in_file)) as mock_get, \
+         patch.object(sc_mod, "put_file", return_value={"size": 6}) as mock_put, \
+         patch.object(sc_mod, "WORK_DIR", tmp_path):
+        worker._process_entry("conv.image", "1234-0", _make_entry_fields(1))
+
+    # Downloaded from the job's inputBucket/inputKey
+    bucket, key, dest = mock_get.call_args.args
+    assert bucket == "convertor-inputs"
+    assert key == "inputs/2026/06/19/1.png"
+    assert seen["localInput"] == str(in_file)
+    mock_put.assert_called_once()
+    mock_redis.xack.assert_called_once_with("conv.image", _GROUP, "1234-0")
+    # Both tmp files cleaned
+    assert not in_file.exists()
+    assert not out_file.exists()
+
+
+def test_input_tmp_cleaned_on_convert_failure(tmp_path):
+    """Failure path: convert raises → input tmp still removed, no ack."""
+    import workers.common.stream_consumer as sc_mod
+
+    mock_redis = MagicMock()
+    mock_redis.hget.return_value = None
+    mock_redis.xpending_range.return_value = [{"times_delivered": 1}]
+
+    worker = _StubWorker(mock_redis)
+
+    in_file = tmp_path / "in-xyz.png"
+    in_file.write_bytes(b"input")
+
+    def boom(job):
+        raise RuntimeError("convert exploded")
+
+    worker.convert = boom
+
+    with patch.object(sc_mod, "get_file", return_value=str(in_file)), \
+         patch.object(sc_mod, "WORK_DIR", tmp_path):
+        worker._process_entry("conv.image", "1234-0", _make_entry_fields(2))
+
+    # Not acked (left for retry), input tmp cleaned
+    mock_redis.xack.assert_not_called()
+    assert not in_file.exists()
+
+
+def test_download_failure_is_retryable_and_no_convert(tmp_path):
+    """Download raises → error recorded, convert never called, not acked."""
+    import workers.common.stream_consumer as sc_mod
+
+    mock_redis = MagicMock()
+    mock_redis.hget.return_value = None
+    mock_redis.xpending_range.return_value = [{"times_delivered": 1}]
+
+    worker = _StubWorker(mock_redis)
+    convert_spy = MagicMock(side_effect=AssertionError("convert must not run"))
+    worker.convert = convert_spy
+
+    with patch.object(sc_mod, "get_file", side_effect=RuntimeError("s3 down")), \
+         patch.object(sc_mod, "WORK_DIR", tmp_path):
+        worker._process_entry("conv.image", "1234-0", _make_entry_fields(3))
+
+    convert_spy.assert_not_called()
+    mock_redis.xack.assert_not_called()
 
 
 # --------------------------------------------------------------------------

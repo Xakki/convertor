@@ -51,6 +51,7 @@ class FileStorage
     public function setOriginalName(string $originalName): self
     {
         $this->originalName = $originalName;
+
         return $this;
     }
 
@@ -62,6 +63,7 @@ class FileStorage
     public function setStoragePath(string $storagePath): self
     {
         $this->storagePath = $storagePath;
+
         return $this;
     }
 
@@ -73,6 +75,7 @@ class FileStorage
     public function setMimeType(string $mimeType): self
     {
         $this->mimeType = $mimeType;
+
         return $this;
     }
 
@@ -84,6 +87,7 @@ class FileStorage
     public function setSizeBytes(int $sizeBytes): self
     {
         $this->sizeBytes = $sizeBytes;
+
         return $this;
     }
 
@@ -100,6 +104,7 @@ class FileStorage
     public function setExpiresAt(?\DateTimeImmutable $expiresAt): self
     {
         $this->expiresAt = $expiresAt;
+
         return $this;
     }
 }

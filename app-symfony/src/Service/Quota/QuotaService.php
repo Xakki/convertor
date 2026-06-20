@@ -23,7 +23,8 @@ class QuotaService
 
     public function __construct(
         private readonly EntityManagerInterface $em,
-    ) {}
+    ) {
+    }
 
     public function checkAndDecrement(User $user, bool $isAi): void
     {
@@ -64,19 +65,19 @@ class QuotaService
         $limits = $this->planLimits[$user->getPlan()] ?? $this->planLimits['free'];
 
         return [
-            'conversions'    => $limits['conversions'] === -1
+            'conversions' => $limits['conversions'] === -1
                 ? -1
                 : max(0, $limits['conversions'] - $user->getDailyConversions()),
             'ai_conversions' => $limits['ai_conversions'] === -1
                 ? -1
                 : max(0, $limits['ai_conversions'] - $user->getDailyAiConversions()),
-            'plan'           => $user->getPlan(),
+            'plan' => $user->getPlan(),
         ];
     }
 
     public function resetIfNeeded(User $user): void
     {
-        $now = new \DateTimeImmutable();
+        $now     = new \DateTimeImmutable();
         $resetAt = $user->getQuotaResetAt();
 
         if ($resetAt->format('Y-m-d') < $now->format('Y-m-d')) {

@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
-from workers.common.safe_path import safe_share_path
-from workers.common.stream_consumer import SHARE_DIR, StreamConsumerBase
+from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
 
 logger = logging.getLogger(__name__)
 
@@ -87,28 +87,29 @@ class ImageWorker(StreamConsumerBase):
     def convert(self, job: dict[str, Any]) -> tuple[str, str, str]:
         """Convert image as described by *job*.
 
-        Returns (local_output_path, output_mime, target_ext).
+        Reads the local input path the base class prepared in job['_localInput']
+        (downloaded from S3), writes the output to a tmp file under WORK_DIR, and
+        returns (local_output_path, output_mime, target_ext) for the base class
+        to upload to the results bucket. Both tmp files are cleaned by the base.
+
         Raises ValueError for unsupported conversions, FileNotFoundError for
         missing input, RuntimeError if Pillow produces no output.
         """
         conv_id: int = job["conversionId"]
-        input_path: str = job["inputPath"]
+        src = Path(job["_localInput"])
         target_fmt: str = job["targetFormat"].lower().lstrip(".")
+        src_ext = str(job["sourceFormat"]).lower().lstrip(".")
 
-        src = safe_share_path(input_path, SHARE_DIR)
         if not src.is_file():
             raise FileNotFoundError(f"input not found: {src}")
-
-        src_ext = src.suffix.lower().lstrip(".")
 
         if src_ext not in _MATRIX:
             raise ValueError(f"unsupported source format: {src_ext!r}")
         if target_fmt not in _MATRIX[src_ext]:
             raise ValueError(f"unsupported conversion: {src_ext} → {target_fmt}")
 
-        out_dir = SHARE_DIR / "output"
-        out_dir.mkdir(exist_ok=True)
-        out_path = out_dir / f"{conv_id}.{target_fmt}"
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
 
         _do_convert(src, out_path, target_fmt)
 

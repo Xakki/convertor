@@ -29,9 +29,14 @@ def _make_jpg(tmp_path: Path, name: str = "input.jpg") -> Path:
 
 
 def _make_job(conv_id: int, input_path: Path, src_ext: str, tgt_fmt: str) -> dict:
+    """Build a job dict. input_path is the local file convert() reads
+    (base class injects it as _localInput after the S3 download)."""
     return {
         "conversionId": conv_id,
-        "inputPath": str(input_path),
+        "inputBucket": "convertor-input",
+        "inputKey": f"input/{Path(input_path).name}",
+        "_localInput": str(input_path),
+        "originalFilename": Path(input_path).name,
         "sourceFormat": src_ext,
         "targetFormat": tgt_fmt,
         "category": "image",
@@ -42,7 +47,7 @@ def _make_job(conv_id: int, input_path: Path, src_ext: str, tgt_fmt: str) -> dic
 
 
 def _worker_with_share(tmp_path: Path) -> ImageWorker:
-    """Return an ImageWorker with SHARE_DIR and redis mocked."""
+    """Return an ImageWorker with WORK_DIR and redis mocked."""
     from unittest.mock import MagicMock
     import workers.common.stream_consumer as sc_mod
     import workers.image.worker as iw_mod
@@ -54,9 +59,9 @@ def _worker_with_share(tmp_path: Path) -> ImageWorker:
          patch("workers.common.stream_consumer.redis.Redis", return_value=mock_redis):
         worker = ImageWorker()
 
-    # Redirect SHARE_DIR so safe_share_path and output dir resolve inside tmp_path
-    patch.object(iw_mod, "SHARE_DIR", tmp_path).start()
-    patch.object(sc_mod, "SHARE_DIR", tmp_path).start()
+    # Redirect WORK_DIR so output tmp files resolve inside tmp_path
+    patch.object(iw_mod, "WORK_DIR", tmp_path).start()
+    patch.object(sc_mod, "WORK_DIR", tmp_path).start()
     return worker
 
 
@@ -70,7 +75,7 @@ class TestImageConvert:
         src = _make_png(tmp_path)
         worker = _worker_with_share(tmp_path)
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(1, src, "png", "jpg")
             out_path, mime, ext = worker.convert(job)
 
@@ -85,7 +90,7 @@ class TestImageConvert:
         src = _make_jpg(tmp_path)
         worker = _worker_with_share(tmp_path)
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(2, src, "jpg", "webp")
             out_path, mime, ext = worker.convert(job)
 
@@ -99,7 +104,7 @@ class TestImageConvert:
         src = _make_png(tmp_path)
         worker = _worker_with_share(tmp_path)
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(3, src, "png", "bmp")
             out_path, mime, ext = worker.convert(job)
 
@@ -111,7 +116,7 @@ class TestImageConvert:
         src = _make_png(tmp_path)
         worker = _worker_with_share(tmp_path)
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(4, src, "png", "pdf")
             out_path, mime, ext = worker.convert(job)
 
@@ -119,26 +124,28 @@ class TestImageConvert:
         assert ext == "pdf"
         assert mime == "application/pdf"
 
-    def test_output_placed_in_output_subdir(self, tmp_path):
+    def test_output_placed_in_work_dir(self, tmp_path):
         src = _make_png(tmp_path)
         worker = _worker_with_share(tmp_path)
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(7, src, "png", "jpg")
             out_path, _, _ = worker.convert(job)
 
-        assert Path(out_path).parent == tmp_path / "output"
+        assert Path(out_path).parent == tmp_path
 
-    def test_output_filename_uses_conv_id(self, tmp_path):
+    def test_output_filename_includes_conv_id_and_ext(self, tmp_path):
         src = _make_png(tmp_path)
         worker = _worker_with_share(tmp_path)
         conv_id = 42
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(conv_id, src, "png", "jpg")
             out_path, _, ext = worker.convert(job)
 
-        assert Path(out_path).name == f"{conv_id}.{ext}"
+        name = Path(out_path).name
+        assert name.startswith(f"out-{conv_id}-")
+        assert name.endswith(f".{ext}")
 
     def test_existing_example_jpg(self, tmp_path):
         """Use the example_files/image.jpg shipped with the test suite."""
@@ -152,7 +159,7 @@ class TestImageConvert:
         shutil.copy(example, src)
         worker = _worker_with_share(tmp_path)
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(10, src, "jpg", "png")
             out_path, mime, ext = worker.convert(job)
 
@@ -172,7 +179,7 @@ class TestImageConvertErrors:
         fake_src = tmp_path / "doc.svg"
         fake_src.write_bytes(b"<svg/>")
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(5, fake_src, "svg", "png")
             with pytest.raises(ValueError, match="unsupported source format"):
                 worker.convert(job)
@@ -181,7 +188,7 @@ class TestImageConvertErrors:
         src = _make_png(tmp_path)
         worker = _worker_with_share(tmp_path)
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(6, src, "png", "mp3")
             with pytest.raises(ValueError, match="unsupported conversion"):
                 worker.convert(job)
@@ -189,7 +196,7 @@ class TestImageConvertErrors:
     def test_missing_input_raises(self, tmp_path):
         worker = _worker_with_share(tmp_path)
 
-        with patch("workers.image.worker.SHARE_DIR", tmp_path):
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
             job = _make_job(8, tmp_path / "nonexistent.jpg", "jpg", "png")
             with pytest.raises(FileNotFoundError):
                 worker.convert(job)

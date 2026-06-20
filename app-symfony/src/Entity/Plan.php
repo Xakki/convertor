@@ -46,6 +46,7 @@ class Plan
     public function setName(string $name): self
     {
         $this->name = $name;
+
         return $this;
     }
 
@@ -57,6 +58,7 @@ class Plan
     public function setDailyLimit(int $dailyLimit): self
     {
         $this->dailyLimit = $dailyLimit;
+
         return $this;
     }
 
@@ -68,6 +70,7 @@ class Plan
     public function setDailyAiLimit(int $dailyAiLimit): self
     {
         $this->dailyAiLimit = $dailyAiLimit;
+
         return $this;
     }
 
@@ -79,6 +82,7 @@ class Plan
     public function setMaxFileSizeMb(int $maxFileSizeMb): self
     {
         $this->maxFileSizeMb = $maxFileSizeMb;
+
         return $this;
     }
 
@@ -90,6 +94,7 @@ class Plan
     public function setPriceUsd(float $priceUsd): self
     {
         $this->priceUsd = $priceUsd;
+
         return $this;
     }
 
@@ -101,6 +106,7 @@ class Plan
     public function setPriceStars(int $priceStars): self
     {
         $this->priceStars = $priceStars;
+
         return $this;
     }
 }

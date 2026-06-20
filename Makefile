@@ -64,6 +64,9 @@ pull: ## Pull latest base images
 ps: ## Show running containers
 	$(DC) ps
 
+docker-check:  ## Check docker config
+	@$(DC) config -q
+
 ##@ Logs
 
 .PHONY: logs
@@ -124,11 +127,11 @@ phpstan: ## Run PHPStan static analysis
 
 .PHONY: cs
 cs: ## Fix code style with php-cs-fixer
-	docker exec $(PHP_CONT) php vendor/bin/php-cs-fixer fix
+	docker exec $(PHP_CONT) php vendor/bin/php-cs-fixer fix --allow-risky=yes
 
 .PHONY: cs-check
 cs-check: ## Check code style with php-cs-fixer (no changes)
-	docker exec $(PHP_CONT) php vendor/bin/php-cs-fixer fix --dry-run --diff
+	docker exec $(PHP_CONT) php vendor/bin/php-cs-fixer fix --dry-run --diff --allow-risky=yes
 
 ##@ Queue / Workers
 

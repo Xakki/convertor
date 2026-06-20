@@ -15,12 +15,13 @@ class TelegramAuthService
         private readonly UserRepository $userRepository,
         private readonly EntityManagerInterface $em,
         private readonly string $telegramBotToken,
-    ) {}
+    ) {
+    }
 
     public function verify(TelegramAuthDTO $dto): bool
     {
-        $checkString = $this->buildCheckString($dto);
-        $secretKey = hash('sha256', $this->telegramBotToken, true);
+        $checkString  = $this->buildCheckString($dto);
+        $secretKey    = hash('sha256', $this->telegramBotToken, true);
         $expectedHash = hash_hmac('sha256', $checkString, $secretKey);
 
         return hash_equals($expectedHash, $dto->hash ?? '');

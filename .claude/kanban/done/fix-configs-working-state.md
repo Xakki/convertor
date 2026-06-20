@@ -7,7 +7,7 @@
 - tech-debt
 
 **Description:**
-Audit of compose/env/Makefile/Symfony config found several confirmed breakages plus missing init steps (Phase 1 of `docs/plan.md`). This card collects everything required to make `docker compose up` start a healthy stack end-to-end. Downstream cards depend on it: [[smoke-run-verify]], and all docs-phase cards build on a running MVP.
+Audit of compose/env/Makefile/Symfony config found several confirmed breakages plus missing init steps (Phase 1 of `ROADMAP.md` — базовый boot). This card collects everything required to make `docker compose up` start a healthy stack end-to-end. Downstream cards depend on it: [[smoke-run-verify]], and all docs-phase cards build on a running MVP.
 
 **Problem (confirmed by inspection):**
 - `docker-compose.yml` nginx mounts `./app-back/public` and `./app-back/storage` (lines 172-173), but the app lives in `app-symfony/` → mount targets a non-existent dir.
@@ -17,7 +17,7 @@ Audit of compose/env/Makefile/Symfony config found several confirmed breakages p
 - `.env` has empty critical secrets: `JWT_SECRET_KEY`, `JWT_PUBLIC_KEY`, `TELEGRAM_BOT_TOKEN`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CRYPTOMUS_*`, `DOCKER_USER/PASS`, `MACHINE_NAME=change_me`.
 - `app-symfony/vendor/` not installed; JWT keypair (`config/jwt/*.pem`) likely missing.
 
-**Phase 1 init steps (from docs/plan.md):**
+**Phase 1 init steps (from `ROADMAP.md` — базовый boot):**
 - `composer install` in `app-symfony`.
 - `php bin/console lexik:jwt:generate-keypair`.
 - `make init` (migrations/seeds/startup) — after Makefile fixes.

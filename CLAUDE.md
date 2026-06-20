@@ -36,7 +36,7 @@ SaaS-сервис конвертации файлов всех форматов.
 ## Queue Architecture
 - Каждый тип конвертации — отдельный KeyDB queue channel
 - Имена каналов: `conversion.documents`, `conversion.images`, `conversion.audio`, `conversion.video`, `conversion.ai`
-- Воркеры: Python скрипты, читают из KeyDB (redis-py), пишут результат в shared-files
+- **Воркеры — ТОЛЬКО KeyDB Streams (consumer groups) + S3 in/out.** Никаких Redis-list очередей и общего тома `/shared-files`. Жёсткое правило для всех воркеров без исключений.
 - PHP side: только ставит задачу + обновляет статус по callback/polling
 
 ## Authentication
@@ -57,9 +57,13 @@ SaaS-сервис конвертации файлов всех форматов.
 - Max size: 50MB free, 500MB paid (Nginx limit_req + PHP проверка)
 
 ## Docker
+- **Все `docker compose` команды — ТОЛЬКО через Makefile-таргеты** (`make docker-check`, `make up`,
+  `make down`, `make build`, `make logs`…). Не дёргать `docker compose ...` напрямую. Нет нужного
+  таргета — добавить в Makefile, не запускать руками. `make docker-check` = `docker compose config -q`.
 - docker-compose.yml — основной, docker/limits.yml — лимиты для прода
 - Каждый воркер — отдельный контейнер
-- Shared volume: /shared-files/ монтируется во все сервисы
+- Файлы (вход и результат) — только в S3 (`${S3_BUCKET_PREFIX}-inputs` / `-results`); общего volume
+  `/shared-files` больше нет (убран задачей storage-input-to-s3 2026-06-20)
 - KeyDB — единственный instance, несколько баз (0: cache, 1: sessions, 2: queues)
 
 ## Secrets / env
@@ -75,7 +79,7 @@ SaaS-сервис конвертации файлов всех форматов.
 - Alpine.js для интерактивных компонентов (drag & drop, модалки)
 
 ## Key Files
-- `.claude/info/plan.md` — мастер-план с таблицей форматов и фазами
-- `.claude/info/progress.md` — текущий прогресс реализации
+- `ROADMAP.md` — **канонический порядок выполнения MVP (7 стадий, приоритеты) + справочные данные (матрица форматов, лимиты, API, UI). Сверяться при планировании/старте задач.**
+- `.claude/kanban/` — kanban-карточки задач (источник статуса реализации).
 - `.env` — конфигурация (не коммитить секреты)
 - `Makefile` — основные команды (build, test, migrate, queue)
