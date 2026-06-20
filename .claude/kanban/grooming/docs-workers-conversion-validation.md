@@ -1,47 +1,51 @@
-### Validate & complete conversion workers (docs phases 2–3)
+### Эпик: валидация и допил воркеров конвертации (umbrella)
 
-**Criticality:** High
+**Критичность:** High
 
 **TAGS:**
 - feature
+- epic
 
-**Description:**
-From `docs/plan.md` + `docs/progress.md`: extended (phase 2) and AI (phase 3) conversions are scaffolded but not validated end-to-end. Phase-1 init is handled separately in [[fix-configs-working-state]]; this card starts at phase 2.
+**Описание:**
+Зонтичная карточка для приведения воркеров конвертации к рабочему состоянию end-to-end. Актуальное состояние (по результатам разведки 2026-06-20): воркеры **в основном реализованы**, а не заглушки — ffmpeg/image/data/ai/libreoffice содержат реальную логику конвертации. Эпик теперь = **валидация end-to-end + per-worker миграция на Streams/S3 + добивание пробелов**, а не «написать конвертацию с нуля».
 
-**Problem / scope:**
-Phase 2 (extended, "in progress" per docs):
-- FFmpeg worker — real audio/video conversions, codec deps in Docker.
-  - **3gp input support:** add `"3gp"` to `SUPPORTED` in `workers/ffmpeg/worker.py` (вход 3gp → mp4 уже маппится на `libx264`). Покрыть **integration-тестом 3gp→mp4** (реальный ffmpeg, маркер `integration`). Фикстура готова: `workers/tests/example_files/video.3gp` укорочена до 41KB (h263+aac, 3s). Перенесено сюда из [[worker-conversion-tests]] (там unit-only), решение от 2026-06-20.
-- Image worker (Pillow/ImageMagick) — format conversions + versions.
-- Data worker — CSV/JSON/XML/YAML with real datasets.
-- Tesseract OCR — image→text.
-- Pandoc markup worker — md/rst/latex/html/wiki (incl. possible MarkItDown integration).
+Ключевые факты текущего состояния:
+- Файлы теперь только в S3 (`${S3_BUCKET_PREFIX}-inputs` / `-results`); общий том `/shared-files` удалён (задача storage-input-to-s3, 2026-06-20). Все воркеры работают с S3 in/out.
+- Только **image-воркер** мигрирован на KeyDB Streams (vertical slice, эталон). ffmpeg/data/ai всё ещё на Redis-LISTS. **LibreOffice** — вообще HTTP-прокси, не consumer очереди.
+- ffmpeg-воркер не объявляет `3gp` в `SUPPORTED` (хотя 3gp→mp4 уже маппится на `libx264`).
+- OCR не имеет владельца: tesseract/pytesseract стоят в image-Dockerfile, но роут идёт в ai-воркер (`conv.ai`), реализации нет.
+- Все `docker compose` команды — только через Makefile-таргеты (`make up`, `make docker-check`, …), не напрямую.
 
-Phase 3 (AI, not started):
-- faster-whisper STT model setup + test.
-- Coqui/local TTS setup + test.
-- AI conversion quota tracking in QuotaService.
-- **worker-ai egress blocker (found in review):** `ai.Dockerfile` does NOT pre-bake the Whisper model — it downloads from HuggingFace on first run, but `worker-ai` sits on the `backend` network which is `internal: true` (no egress) → download fails silently (healthcheck only does `import faster_whisper`). Fix: pre-bake the model into the image, or grant worker-ai controlled egress.
+**Влияние:**
+Ширина продукта (матрица форматов в `docs/plan.md`) не подтверждена; часть заявленных конвертаций может молча не работать. Воркеры на Redis-LISTS не получают задачи в новой очередной модели (PHP пишет в Streams).
 
-Note: depends on [[fix-queue-php-worker-mismatch]] — until the queue contract is fixed, no worker (incl. these) actually receives jobs.
+**Решение:**
+Раздробить эпик per-worker. Каждая subcard валидирует свой воркер против матрицы `docs/plan.md` и (где нужно) мигрирует его с Redis-LISTS на KeyDB Streams и на S3 in/out. Зонтичная карточка трекает прогресс и держит сквозные решения.
 
-**Impact:**
-Core product breadth (the format matrix in plan.md) is unverified; advertised conversions may not work.
+**Критерии приёмки (на уровне эпика):**
+- Все 5 subcard'ов закрыты.
+- Каждый воркер потребляет задачи из KeyDB Streams (где применимо) и работает с S3 in/out.
+- Матрица форматов `docs/plan.md` (за вычетом MVP-deferred) провалидирована end-to-end.
+- `pytest workers/tests` зелёный; `make docker-check` проходит.
 
-**Recommendation:**
-Validate each worker against the plan.md format matrix; wire missing engines; cover with the suite from [[worker-conversion-tests]].
+**Subcards:**
+- [[validate-ffmpeg-worker]] — миграция на Streams, добавить `3gp`, валидация audio/video, integration 3gp→mp4.
+- [[validate-image-worker]] — валидация stream-consumer/S3 + растровая матрица; open question по владельцу OCR.
+- [[validate-data-worker]] — миграция на Streams + S3 + валидация csv/json/xml/yaml на реальных датасетах.
+- [[validate-libreoffice-worker]] — решить модель (Streams-consumer vs HTTP) + S3 + валидация doc/pdf/markup.
+- [[validate-ai-worker]] — гибридный backend (внешний default + local fallback), фикс egress Whisper, миграция на Streams, квоты, STT/TTS.
 
-**Acceptance Criteria:**
-- Each phase-2 worker performs a real conversion for its advertised formats.
-- AI STT + TTS produce valid output locally (or documented external-provider path).
-- AI quota tracked separately.
-- Covered by tests ([[worker-conversion-tests]]).
+**MVP-deferred (вне scope сейчас, трекаются в [[post-mvp-conversion-formats]] — backlog-карточка, заведена по просьбе пользователя 2026-06-20):**
+- Архивы (zip/tar/gz/bz2/7z).
+- CAD/DWG.
+- Доп. форматы изображений (SVG/HEIC/AVIF).
+- Разметка rst/latex/wiki.
+- MarkItDown (doc→markdown).
 
-**Open questions:**
-- Confirm the authoritative format matrix (plan.md) — any formats to drop/defer for MVP?
-- AI: bundle local models (whisper/TTS) vs rely on external APIs (OpenAI/Gemini/Claude keys)? Resource budget?
-- Adopt Microsoft MarkItDown for doc→markdown, or stick with pandoc?
-- Split this into per-worker cards when moving to todo, or keep as one epic?
-
-**Decisions:**
-- (to be filled during grooming)
+**Decisions (зафиксировано с пользователем 2026-06-20):**
+- **Split per-worker.** Эпик становится umbrella/tracking-карточкой; вся работа — в 5 per-worker subcard'ах выше.
+- **Миграция Redis-LISTS → KeyDB Streams (stream-consumer)** делается ВНУТРИ карточки соответствующего воркера, не отдельной prereq-картой.
+- **AI backend = гибрид.** Внешние провайдеры (OpenAI/Gemini/Claude + g4f через `aip.xakki.ru`, см. [[add-open-ai]]) — по умолчанию; local whisper/espeak — fallback. Локальному fallback всё ещё нужен фикс egress модели Whisper (pre-bake в образ ИЛИ контролируемый egress на сети `backend` `internal:true`).
+- **MVP-deferred** (см. секцию выше) — вне scope сейчас, но теперь трекаются в backlog-карточке [[post-mvp-conversion-formats]] (заведена по просьбе пользователя 2026-06-20): архивы, CAD/DWG, доп. форматы изображений (SVG/HEIC/AVIF), разметка rst/latex/wiki, MarkItDown.
+- Docs→markdown остаётся на **pandoc**; MarkItDown отложен (зафиксировано в [[add-open-ai]]).
+- Связанная карточка unit-тестов: [[worker-conversion-tests]].
