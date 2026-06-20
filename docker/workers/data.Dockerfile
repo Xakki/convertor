@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir \
     redis \
     aiohttp \
     structlog \
+    boto3 \
     pandas \
     pyyaml \
     lxml \

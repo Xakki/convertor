@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir \
     redis \
     aiohttp \
     structlog \
+    boto3 \
     faster-whisper \
     pyttsx3
 

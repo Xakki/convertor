@@ -1,0 +1,36 @@
+.git
+.gitignore
+.dockerignore
+
+# Python bytecode
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Tests and docs
+**/tests
+docs/
+*.md
+
+# Env / secrets
+.env
+.env.*
+.env.local
+
+# Node
+node_modules/
+app-front/node_modules/
+app-front/dist/
+
+# PHP build artifacts
+app-symfony/var/
+app-symfony/vendor/
+
+# AI / Claude tooling
+.claude/
+
+# Backups and misc
+backup/
+*.log
+.DS_Store

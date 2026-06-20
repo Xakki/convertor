@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     redis \
     aiohttp \
-    structlog
+    structlog \
+    boto3
 
 WORKDIR /app
 
