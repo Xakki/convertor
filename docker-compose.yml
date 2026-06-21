@@ -67,8 +67,8 @@ services:
         <<: *_app_base
         container_name: "${COMPOSE_PROJECT_NAME}-php"
         hostname: ${COMPOSE_PROJECT_NAME}-php
-        # Override anchor's [default]: php also joins backend to reach the
-        # libreoffice HTTP worker (WORKER_LIBREOFFICE_URL) + keydb/workers there.
+        # Override anchor's [default]: php also joins backend to reach
+        # keydb + the stream workers there.
         networks:
             - default
             - backend
@@ -233,16 +233,27 @@ services:
             # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
             # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
+            WORKER_MODULE: workers.libreoffice.worker
+            REDIS_PORT: ${REDIS_PORT:-6379}
+            # Worker pulls input from S3 + uploads results to S3.
+            S3_ENDPOINT: ${S3_ENDPOINT}
+            S3_KEY: ${S3_KEY}
+            S3_SECRET: ${S3_SECRET}
+            S3_REGION: ${S3_REGION}
+            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
+            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
         depends_on:
             keydb:
                 condition: service_healthy
         healthcheck:
-            test: ["CMD", "python3", "-c", "import redis; r=redis.Redis(host='keydb', password='${REDIS_PASSWORD}', db=2); r.ping()"]
+            test: ["CMD", "soffice", "--version"]
             interval: 30s
             timeout: 10s
             retries: 3
-            start_period: 15s
+            start_period: 20s
+        # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend = reach keydb.
         networks:
+            - default
             - backend
 
     worker-ffmpeg:
