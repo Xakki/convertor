@@ -37,6 +37,7 @@ SaaS-сервис конвертации файлов всех форматов.
 - Каждый тип конвертации — отдельный KeyDB queue channel
 - Имена каналов: `conversion.documents`, `conversion.images`, `conversion.audio`, `conversion.video`, `conversion.ai`
 - **Воркеры — ТОЛЬКО KeyDB Streams (consumer groups) + S3 in/out.** Никаких Redis-list очередей и общего тома `/shared-files`. Жёсткое правило для всех воркеров без исключений.
+- **Воркеры flag-agnostic: валидируют ТОЛЬКО форматы (входные данные + конвертацию source→target) и выполняют её. Флаги (`ocr`, `subType` и пр.) воркер НЕ читает.** Выбор поведения — из пары (sourceFormat, targetFormat) (напр. растр→txt/md/docx = OCR; audio→text = STT; text→audio = TTS). Какой именно stream получит задачу — решает БЭК/API: для неоднозначных пар (один (from→to) умеют несколько воркеров, напр. `pdf→txt`: document-extract vs image-OCR) в API есть флаг, выбирающий доступный stream (первый экземпляр — `ocr`→`Conversion::isOcr`→`streamFor()`). AI — в крайнем случае.
 - PHP side: только ставит задачу + обновляет статус по callback/polling
 
 ## Authentication

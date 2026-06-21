@@ -27,6 +27,7 @@ AI-воркер (`workers/ai/worker.py`) уже Streams-consumer (через `wo
 - Починить egress модели Whisper для локального fallback: либо **pre-bake модель в `ai.Dockerfile`**, либо дать `worker-ai` контролируемый egress.
 - Включить **GPU** для faster-whisper (сейчас pinned `device="cpu", compute_type="int8"`) — конфиг устройства/типа вычислений.
 - **Снять `pytest.skip` и написать AI-тесты** (`test_ai_worker.py`): моки SDK/движков, выбор провайдера и fallback-to-local.
+- **Сделать ai-воркер flag-agnostic** (принцип в `CLAUDE.md` → Queue Architecture): сейчас `workers/ai/worker.py:367` читает `job.get("subType")` и ветвится по нему — нарушение. Убрать чтение `subType`; режим STT/TTS выводить ТОЛЬКО из пары форматов (audio→{txt,srt,vtt}=STT; {txt,md}→audio=TTS), бросать ошибку, если пара не выводится. После этого `subType` в `ConversionMessage`/`resolveSubType` на бэке становится мёртвым — вычистить отдельно (вне scope, отметить).
 - Провалидировать STT (mp3/wav/ogg/m4a/opus → txt/srt/vtt) и TTS (txt/md → mp3/wav/ogg) против матрицы форматов `ROADMAP.md` (справочные данные).
 
 **Зависимости:**
@@ -37,6 +38,7 @@ AI-воркер (`workers/ai/worker.py`) уже Streams-consumer (через `wo
 - GPU задействован для faster-whisper (device/compute_type конфигурируемы, не жёсткий cpu/int8).
 - Egress модели Whisper починен (pre-bake в образ ИЛИ контролируемый egress); локальный fallback реально работает.
 - `test_ai_worker.py` рабочий (skip снят), AI-логика покрыта тестами.
+- ai-воркер flag-agnostic: не читает `subType`, STT/TTS выводится из форматов (покрыто тестом).
 - STT и TTS провалидированы против матрицы форматов `ROADMAP.md`.
 - `pytest workers/tests` зелёный.
 - `make docker-check` проходит.
@@ -46,5 +48,6 @@ AI-воркер (`workers/ai/worker.py`) уже Streams-consumer (через `wo
 - Миграция Redis-LISTS → KeyDB Streams + S3 и **гибридный backend (Стадия 2)** — **уже сделаны в коде** (сняты из scope при ре-груминге 2026-06-20).
 - Backend AI — гибрид: внешние провайдеры (incl. g4f через [[add-open-ai]]) по умолчанию, local whisper/espeak — fallback (решение 2026-06-20).
 - Unit-тесты ai-воркера (моки SDK/движков) изначально планировались в [[worker-conversion-tests]]; здесь — снятие skip и написание AI-тестов + runtime-wiring/GPU/egress + валидация STT/TTS.
+- **Принцип flag-agnostic воркеров** (решение пользователя 2026-06-21): воркеры не читают флаги, выбор поведения — из форматов; stream выбирает бэк. ai-воркер (`worker.py:367` читает `subType`) приводится в соответствие здесь. Выявлено при [[validate-image-worker]].
 
 Siblings: [[validate-ffmpeg-worker]] · [[validate-image-worker]] · [[validate-data-worker]] · [[validate-libreoffice-worker]]
