@@ -7,6 +7,11 @@
 >
 > Легенда карточек: `[[slug]]` → `.claude/kanban/**/<slug>.md`.
 > «(карточки нет — завести)» = работа запланирована, но kanban-карточки ещё нет.
+>
+> **Чекбоксы:** `[x]` — сделано (карточка в `kanban/done/`), `[ ]` — в работе/в очереди.
+> **Приоритеты внутри стадии:** **P0** — блокер/критично, **P1** — высокий, **P2** — обычный.
+> ❄️ — заморожено (`kanban/freeze/`, ждёт разморозки).
+> Статус актуализирован: **2026-06-21**.
 
 ---
 
@@ -14,31 +19,35 @@
 
 **Цель:** текущие конвертации реально работают через REST API, документированы и покрыты тестами.
 
-> **Реальность (аудит 2026-06-20):** код опережает план. Воркеры image/ffmpeg/data/ai **уже на KeyDB
-> Streams + S3 в коде** (старый list-транспорт удалён); PHP тоже на Streams; Telegram-login + JWT + квота
-> работают. «Миграция на Streams» как задача — закрыта. Остались точечные дыры (ниже).
+> **Реальность (актуализация 2026-06-21):** воркеры image/ffmpeg/data/libreoffice **на KeyDB Streams + S3**
+> (старый list-транспорт и HTTP-прокси удалены); PHP тоже на Streams; Telegram-login + JWT + квота работают.
+> Документы (`conv.document`) теперь потребляются libreoffice-consumer'ом — ядро продукта запущено.
+> «Миграция на Streams» и валидация конвертаций воркеров — закрыты. Остались харднинг, баг-фиксы и тесты.
 
-- 🔴 **[[finish-worker-compose-wiring]]** — ffmpeg/data/ai мигрированы в коде, но в compose без S3-env и на
-  `internal:true` сети → в рантайме не достучатся до S3. **Блокер стадии.**
-- 🔴 **[[validate-libreoffice-worker]]** — libreoffice всё ещё HTTP-прокси, не consumer; задачи на
-  документы/разметку (`conv.document`) **никто не потребляет** → документы (ядро продукта) не работают. Топ-приоритет.
-- **Точечные дыры конвертаций:** [[validate-ffmpeg-worker]] (3gp), [[validate-data-worker]] (toml),
-  [[validate-image-worker]] (OCR — не реализован). [[validate-ai-worker]] — Стадия 2.
-- **[[api-openapi-swagger]]** — `/api/doc` + аннотации (бандл есть, документация пустая).
-- **Тесты:** [[worker-conversion-tests]] (unit воркеров; нет `conftest.py`/`pytest.ini`),
-  [[api-integration-tests]] (реальный прогон файлов через эндпоинты + замер скорости).
-- **[[backend-hardening-bugs]]** — рантайм-баги из аудита (Archive без транспорта, Telegram replay,
-  download getChunks, возврат квоты, refresh-token).
-- **Сопутствующее:** [[upload-mime-size-validation]] (валидация загрузки), [[smoke-run-verify]] (e2e-гейт).
+**Сделано (миграция + валидация воркеров):**
+- [x] **[[finish-worker-compose-wiring]]** — ffmpeg/data/ai в compose с S3-env и egress (сеть `default`); e2e зелёные.
+- [x] **[[validate-libreoffice-worker]]** — libreoffice переведён на Streams-consumer `conv.document` + S3; doc/pdf/md проверены.
+- [x] **[[validate-image-worker]]** — OCR (tesseract) реализован inline + capability-роутинг + OCR-флаг (API/UI).
+- [x] **[[validate-ffmpeg-worker]]** — 3gp (вход) + integration-тест 3gp→mp4 на реальном ffmpeg.
+- [x] **[[validate-data-worker]]** — toml (вход/выход) + матрица csv/json/xml/yaml/toml на S3.
+
+**В работе (приоритет ↓):**
+- [ ] **P0 — [[backend-hardening-bugs]]** — security/рантайм-баги аудита: Telegram replay (нет окна `auth_date`),
+  возврат квоты при фейле, Archive-dispatch без stream, download getChunks, refresh-token.
+- [ ] **P1 — [[csv-xml-writer-hardening]]** — корректный `*→csv` для всех источников (CSV-writer теряет поля; xml→csv; типизация XML).
+- [ ] **P1 — [[upload-mime-size-validation]]** — MIME-allowlist + max-size на `POST /convert` до S3-PUT.
+- [ ] **P2 — [[api-openapi-swagger]]** — `/api/doc` + аннотации (бандл есть, документация пустая).
+- [ ] **P2 — [[worker-conversion-tests]]** — unit воркеров (`conftest.py`/`pytest.ini`, моки subprocess/SDK).
+- [ ] **P2 — [[api-integration-tests]]** — реальный прогон файлов через эндпоинты + замер скорости.
+- [ ] **P2 — [[smoke-run-verify]]** — финальный e2e-гейт (стек healthy + 1 конвертация на категорию + логи/тесты).
 
 **Условия:** без авторизации по токену, без лимитов.
 **Exit:** каждый реализованный эндпоинт отдаёт корректный результат на реальном файле (вкл. документы);
 swagger полон; unit зелёные; интеграционные с замером скорости зелёные.
 
-> ⚠️ **На совместный груминг (спросить пользователя):** [[validate-image-worker]],
-> [[validate-libreoffice-worker]], [[validate-data-worker]], [[validate-ai-worker]] — грумим далее
-> вместе. Открытые вопросы: владелец OCR, LibreOffice (Streams vs HTTP), toml в data,
-> MVP-приоритет Таблиц/Презентаций.
+> ℹ️ Валидация воркеров image/libreoffice/data/ffmpeg завершена (см. ✅ выше). Остаётся
+> [[validate-ai-worker]] (Стадия 2). Stage-7-форматы (Таблицы/Презентации/epub-вход) вынесены
+> в [[stage7-libreoffice-extra-formats]].
 
 ---
 
@@ -46,12 +55,13 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** воркеры запускаются по одной команде и обрабатывают задачи; AI работает на видеокарте.
 
-- **Запуск отдельных воркеров одной командой** (в Docker), обработка задач из очереди — [[distributed-workers]].
-- **Механика Streams** (подписка/распределение уже реализованы) — доделки: целостная документация,
-  лаг-метрики в Prometheus, drift-тест «routing-key без consumer»: [[stream-subscription-distribution]].
-- **AI-контейнер с использованием видеокарты (GPU)** — [[validate-ai-worker]] (гибрид: внешние API/g4f
-  default + local fallback; фикс egress Whisper) + [[add-open-ai]] (g4f-бэкенд).
-- **Расширение конвертаций с учётом AI** и проверка работоспособности.
+- [ ] **P1 — [[validate-ai-worker]]** — AI-контейнер на GPU: runtime-wiring, egress модели (Whisper), STT/TTS,
+  AI-тесты. Гибрид: внешние API/g4f default + local fallback.
+- [ ] **P1 — [[distributed-workers]]** — запуск воркеров отдельными контейнерами на любом хосте (только Redis
+  Streams через TLS SNI + S3; без app-стека и `/shared-files`).
+- [ ] **P2 — [[stream-subscription-distribution]]** — механика Streams: документация, лаг-метрики (XPENDING) в
+  Prometheus/Grafana, drift-тест «routing-key без consumer».
+- [ ] **P2 — [[add-open-ai]]** — g4f-бэкенд (MarkItDown, STT/TTS, text→image) поверх aip.xakki.ru.
 
 **Exit:** воркеры (включая GPU-AI) поднимаются одной командой, забирают и выполняют задачи; AI-конвертации проверены.
 
@@ -61,8 +71,8 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** появляется админ и доступ к API через токены.
 
-- **Админ-пользователь** + панель — [[docs-admin-panel]].
-- **Работа API через токены** (выпуск/проверка API-токенов, поверх текущего JWT). *(карточки нет — завести)*
+- [ ] **P1 — [[docs-admin-panel]]** — админ-пользователь + панель (stats, user-management, очереди, логи).
+- [ ] **P1 — Работа API через токены** — выпуск/проверка API-токенов поверх текущего JWT. *(карточки нет — завести)*
 
 **Exit:** админ заходит в панель; API-запросы авторизуются по токену.
 
@@ -72,7 +82,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** бот выполняет конвертацию, включая загрузку больших файлов.
 
-- **Телеграм-бот конвертации** + загрузка больших файлов (обход лимита Bot API на размер). *(карточки нет — завести)*
+- [ ] **P1 — Телеграм-бот конвертации** + загрузка больших файлов (обход лимита Bot API на размер). *(карточки нет — завести)*
 
 **Exit:** через бота можно сконвертировать файл, в т.ч. большой.
 
@@ -82,9 +92,11 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** публичная страница с загрузкой/конвертацией и историей.
 
-- **Авторизация/регистрация:** Google / GitHub OAuth — [[backlog-auth-providers]]; вход через бота (по ссылке).
-- **Лендинг + форма загрузки файла + опции конвертации.** *(карточки нет — завести)*
-- **История конвертаций** со ссылками на файлы (S3 presign). *(карточки нет — завести)*
+- [ ] **P1 — [[upload-conversion-ui]]** — страница загрузки/конвертации (drag&drop, выбор формата из реестра,
+  OCR-тоггл, статус через HTMX, ссылка на скачивание).
+- [ ] **P1 — Лендинг** (публичная страница над формой загрузки). *(карточки нет — завести)*
+- [ ] **P2 — История конвертаций** со ссылками на файлы (S3 presign). *(карточки нет — завести)*
+- [ ] ❄️ **P2 — [[backlog-auth-providers]]** — Google / GitHub OAuth (заморожено; Telegram + SMS уже есть).
 
 **Exit:** пользователь логинится (google/github/бот), грузит файл, видит результат и историю.
 
@@ -94,9 +106,9 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** вводятся лимиты на конвертацию и платная разблокировка.
 
-- **Лимиты на конвертацию** (QuotaService → enforcement). *(карточки нет — завести)*; часть — в [[docs-prod-polish]].
-- **Оплата — только Telegram Stars** — [[docs-payments-integration]] (разморозить; Stripe/Cryptomus/YooMoney
-  вне MVP, YooMoney исключён).
+- [ ] **P1 — Лимиты на конвертацию** (QuotaService → enforcement). *(карточки нет — завести)*; часть — в [[docs-prod-polish]].
+- [ ] ❄️ **P1 — [[docs-payments-integration]]** — оплата только Telegram Stars (заморожено, ждёт разморозки;
+  Stripe/Cryptomus вне MVP, YooMoney исключён).
 
 **Exit:** лимиты применяются; оплата звёздами повышает лимит/кредиты.
 
@@ -106,11 +118,13 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** добиваем оставшуюся матрицу форматов.
 
-- [[post-mvp-conversion-formats]] — Архивы (zip/tar/gz/bz2/7z), CAD/DWG, доп. изображения (SVG/HEIC/AVIF),
-  разметка rst/latex/wiki, MarkItDown.
-- **Таблицы (Calc) / Презентации (Impress) / PDF→jpg постранично** — отложены сюда (решение 2026-06-20),
-  тот же движок soffice, см. [[validate-libreoffice-worker]].
-- **Расширение data-воркера** (лёгкие форматы, тот же движок pandas/stdlib) — кандидаты:
+- [ ] ❄️ **[[post-mvp-conversion-formats]]** — зонтик: Архивы (zip/tar/gz/bz2/7z), CAD/DWG, доп. изображения
+  (SVG/HEIC/AVIF), разметка rst/latex/wiki, MarkItDown (заморожено).
+- [ ] **[[stage7-libreoffice-extra-formats]]** — доп-форматы soffice: epub-вход, Таблицы (Calc) / Презентации
+  (Impress) / PDF→jpg постранично, разметка rst/latex/wiki (решение 2026-06-20).
+- [ ] **[[archive-input-fanout]]** — распаковка архива на входе → fan-out файлов в отдельные очереди по target-формату
+  (batch-распаковка, не конвертация формата архива).
+- [ ] **Расширение data-воркера** (лёгкие форматы, тот же движок pandas/stdlib) — кандидаты:
   - **TSV** и иные разделители (`;`, `|`) ↔ csv/json — тривиально через pandas.
   - **NDJSON / JSON Lines** ↔ csv/json.
   - **INI / .env / .properties** ↔ json/yaml.
@@ -126,12 +140,14 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 ## Сквозное / инфраструктура (вне нумерации стадий)
 
-- [[fluent-logging-setup]] — логирование (done).
-- [[optimize-worker-dockerfiles]] — оптимизация образов воркеров (done).
-- [[fix-configs-working-state]], [[fix-queue-php-worker-mismatch]] — базовый boot + контракт очереди (done).
-- [[storage-input-to-s3]] — файлы в S3 (in/out), `/shared-files` убран.
-- [[docs-prod-polish]] — rate limiting, авто-очистка 24ч, метрики, SMS (частично пересекается со стадиями 6).
-- [[docs-workers-conversion-validation]] — зонтик-трекер воркер-валидации (umbrella, не исполняется напрямую).
+- [x] **[[fluent-logging-setup]]** — логирование (fluent-bit → Graylog, JSON-логи).
+- [x] **[[optimize-worker-dockerfiles]]** — оптимизация образов воркеров (multi-stage, non-root, pinned).
+- [x] **[[fix-configs-working-state]]**, **[[fix-queue-php-worker-mismatch]]** — базовый boot + контракт очереди (Streams).
+- [x] **[[storage-input-to-s3]]** — файлы в S3 (in/out), `/shared-files` убран.
+- [ ] **[[docs-workers-conversion-validation]]** — зонтик воркер-валидации (umbrella в grooming; per-worker карточки все в done).
+- [ ] **[[docs-prod-polish]]** — rate limiting, авто-очистка 24ч, метрики, SMS (пересекается со Стадией 6).
+- [ ] **[[extract-worker-common-helpers]]** — DRY: общие хелперы воркеров в `workers/common` (subprocess-runner, MIME-таблицы).
+- [ ] **[[align-document-stream-matrix-dlq]]** — выровнять матрицу `conv.document` (PHP-реестр vs воркер) + fast-DLQ перманентных ошибок.
 
 ---
 
