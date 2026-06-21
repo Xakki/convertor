@@ -1,0 +1,12 @@
+# E2E test overlay — mirrors proxy-service/docker/docker-compose.e2e.yml.
+# Injects the test S3 key prefix into the workers so their GENERATED output
+# objects land under ${S3_PREFIX} (e.g. test_results/...). Activated only on the
+# `make test-e2e` path via COMPOSE_FILE in .env.test; never part of prod compose.
+services:
+    worker-ffmpeg:
+        environment:
+            S3_PREFIX: ${S3_PREFIX:-}
+
+    worker-data:
+        environment:
+            S3_PREFIX: ${S3_PREFIX:-}

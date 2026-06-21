@@ -9,7 +9,14 @@ include .env
 -include .env.local
 export
 
+# Don't leak .env's COMPOSE_FILE into recipe shells: it would shadow the
+# COMPOSE_FILE that `--env-file .env.test` supplies for the test/e2e path
+# (adds docker/docker-compose.e2e.yml). Plain `docker compose` still reads
+# COMPOSE_FILE from the auto-loaded .env in cwd.
+unexport COMPOSE_FILE
+
 DC         = docker compose
+COMPOSE_TEST = docker compose --env-file .env.test
 PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
 
@@ -118,8 +125,8 @@ test-php: ## Run PHPUnit tests
 	docker exec $(PHP_CONT) php vendor/bin/phpunit
 
 .PHONY: test-python
-test-python: ## Run pytest for all workers
-	PYTHONPATH=. pytest workers/tests/ -v
+test-python: ## Run pytest for all workers (excludes e2e — see test-e2e)
+	PYTHONPATH=. pytest workers/tests/ -m "not e2e" -v
 
 .PHONY: test-image-ocr
 test-image-ocr: build-image ## Run OCR integration tests inside worker-image (real tesseract+poppler)
@@ -128,6 +135,19 @@ test-image-ocr: build-image ## Run OCR integration tests inside worker-image (re
 	    -u root $(COMPOSE_PROJECT_NAME)/worker-image:latest \
 	    -c "pip install --no-cache-dir --quiet pytest && \
 	        python3 -m pytest workers/tests -m integration -v"
+
+.PHONY: test-e2e
+test-e2e: ## Real S3 in/out e2e for ffmpeg + data workers (run `make up` first)
+	$(COMPOSE_TEST) up -d --force-recreate --no-deps worker-ffmpeg worker-data
+	$(COMPOSE_TEST) run --rm --no-deps --user $(PUID):$(PGID) \
+	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
+	    --entrypoint sh worker-ffmpeg \
+	    -c "pip install --no-cache-dir --quiet --user pytest && \
+	        python3 -m pytest workers/tests/test_workers_e2e.py -m e2e -p no:cacheprovider -ra -v"; \
+	    rc=$$?; \
+	    echo "[test-e2e] restoring workers to base config…"; \
+	    $(DC) up -d --force-recreate --no-deps worker-ffmpeg worker-data >/dev/null; \
+	    exit $$rc
 
 .PHONY: phpstan
 phpstan: ## Run PHPStan static analysis

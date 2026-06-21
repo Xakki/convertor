@@ -42,6 +42,11 @@ WORK_DIR = Path(os.getenv("WORK_DIR", tempfile.gettempdir())).resolve()
 
 # --- S3 / output ----------------------------------------------------------
 S3_BUCKET_PREFIX = os.getenv("S3_BUCKET_PREFIX", "convertor")
+# Key prefix for worker-GENERATED objects (default "" = prod no-op). Isolates
+# e2e test output under its own namespace (e.g. "test_"); mirrors proxy-service's
+# S3 storage prefix. Input keys are NOT prefixed — they belong to the producer
+# (PHP/API) which owns where the object was uploaded.
+S3_PREFIX = os.getenv("S3_PREFIX", "")
 
 # --- Consumer loop knobs (overridable via env) ----------------------------
 _BLOCK_MS = int(os.getenv("CONSUMER_BLOCK_MS", "5000"))
@@ -316,7 +321,7 @@ class StreamConsumerBase(ABC):
             bucket = f"{S3_BUCKET_PREFIX}-results"
             ts = time.gmtime()
             s3_key = (
-                f"results/{ts.tm_year}/{ts.tm_mon:02d}-{ts.tm_mday:02d}"
+                f"{S3_PREFIX}results/{ts.tm_year}/{ts.tm_mon:02d}-{ts.tm_mday:02d}"
                 f"/{conv_id}.{target_ext}"
             )
             finish_ms = _now_ms()

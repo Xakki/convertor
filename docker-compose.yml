@@ -263,6 +263,14 @@ services:
             # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
             WORKER_MODULE: workers.ffmpeg.worker
+            REDIS_PORT: ${REDIS_PORT:-6379}
+            # Worker pulls input from S3 + uploads results to S3.
+            S3_ENDPOINT: ${S3_ENDPOINT}
+            S3_KEY: ${S3_KEY}
+            S3_SECRET: ${S3_SECRET}
+            S3_REGION: ${S3_REGION}
+            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
+            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
         depends_on:
             keydb:
                 condition: service_healthy
@@ -272,7 +280,9 @@ services:
             timeout: 5s
             retries: 3
             start_period: 10s
+        # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend = reach keydb.
         networks:
+            - default
             - backend
 
     worker-image:
@@ -311,7 +321,7 @@ services:
             retries: 3
             start_period: 10s
         # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend =
-        # reach keydb. Other workers get `default` too when migrated (Phase 4).
+        # reach keydb. All workers are on `default` now (Phase 4 migration done).
         networks:
             - default
             - backend
@@ -338,6 +348,14 @@ services:
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
             WORKER_MODULE: workers.ai.worker
             WHISPER_MODEL: ${WHISPER_MODEL:-base}
+            REDIS_PORT: ${REDIS_PORT:-6379}
+            # Worker pulls input from S3 + uploads results to S3.
+            S3_ENDPOINT: ${S3_ENDPOINT}
+            S3_KEY: ${S3_KEY}
+            S3_SECRET: ${S3_SECRET}
+            S3_REGION: ${S3_REGION}
+            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
+            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
         depends_on:
             keydb:
                 condition: service_healthy
@@ -347,7 +365,10 @@ services:
             timeout: 15s
             retries: 3
             start_period: 30s
+        # default = egress to S3 + first-boot whisper model pull from HuggingFace
+        # (pre-bake handled in [[validate-ai-worker]]); backend = reach keydb.
         networks:
+            - default
             - backend
 
     worker-data:
@@ -368,6 +389,14 @@ services:
             # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
             WORKER_MODULE: workers.data.worker
+            REDIS_PORT: ${REDIS_PORT:-6379}
+            # Worker pulls input from S3 + uploads results to S3.
+            S3_ENDPOINT: ${S3_ENDPOINT}
+            S3_KEY: ${S3_KEY}
+            S3_SECRET: ${S3_SECRET}
+            S3_REGION: ${S3_REGION}
+            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
+            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
         depends_on:
             keydb:
                 condition: service_healthy
@@ -377,7 +406,9 @@ services:
             timeout: 10s
             retries: 3
             start_period: 10s
+        # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend = reach keydb.
         networks:
+            - default
             - backend
 
 networks:

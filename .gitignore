@@ -1,6 +1,7 @@
 .idea
 .env
 .env.*
+!/.env.test
 /.claude/worktrees/
 /shared-files/*
 !/shared-files/.gitkeep
