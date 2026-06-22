@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Service\Quota;
 
+use App\Entity\Plan;
 use App\Entity\User;
 use App\Repository\PlanRepository;
 use App\Service\Quota\QuotaService;
@@ -55,5 +56,39 @@ final class QuotaServiceTest extends TestCase
 
         self::assertSame(0, $user->getDailyConversions());
         self::assertSame(0, $user->getDailyAiConversions());
+    }
+
+    public function testMaxUploadBytesUsesPlanFileSize(): void
+    {
+        $plan = (new Plan())->setName('pro')->setMaxFileSizeMb(500);
+
+        $planRepo = $this->createStub(PlanRepository::class);
+        $planRepo->method('findByName')->willReturn($plan);
+
+        $service = new QuotaService($this->createStub(EntityManagerInterface::class), $planRepo);
+
+        self::assertSame(500 * 1024 * 1024, $service->maxUploadBytes(new User()));
+    }
+
+    public function testMaxUploadBytesFallsBackToFreeWhenPlanMissing(): void
+    {
+        $planRepo = $this->createStub(PlanRepository::class);
+        $planRepo->method('findByName')->willReturn(null);
+
+        $service = new QuotaService($this->createStub(EntityManagerInterface::class), $planRepo);
+
+        self::assertSame(50 * 1024 * 1024, $service->maxUploadBytes(new User()));
+    }
+
+    public function testMaxUploadBytesFallsBackWhenPlanSizeNonPositive(): void
+    {
+        $plan = (new Plan())->setName('free')->setMaxFileSizeMb(0);
+
+        $planRepo = $this->createStub(PlanRepository::class);
+        $planRepo->method('findByName')->willReturn($plan);
+
+        $service = new QuotaService($this->createStub(EntityManagerInterface::class), $planRepo);
+
+        self::assertSame(50 * 1024 * 1024, $service->maxUploadBytes(new User()));
     }
 }

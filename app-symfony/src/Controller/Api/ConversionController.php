@@ -14,6 +14,7 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
@@ -66,6 +67,11 @@ class ConversionController extends AbstractController
             return $this->json(['error' => $e->getMessage()], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (TooManyRequestsHttpException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_TOO_MANY_REQUESTS);
+        } catch (HttpException $e) {
+            // Size (413) + content-type (415) gates from ConversionManager. The
+            // specific catches above already handled 422/429; this maps the
+            // remaining HTTP exceptions to their own status code.
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
         }
     }
 

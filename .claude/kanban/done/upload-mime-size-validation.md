@@ -32,3 +32,23 @@ Project CLAUDE.md (`File Handling`) mandates: "валидация MIME + рас�
   still passes through to S3.
 
 **Related:** [[storage-input-to-s3]] (input→S3 move that exposed this gap).
+
+**Execution Log:**
+- MIME validation: category-level (по `FileCategory`, не exact) — exact-match массово ложно
+  отклонял бы (OOXML/ODF/epub→`application/zip`, text/data/markup→`text/plain`, CAD→`octet-stream`).
+  Реализовано `match($category)` в `ConversionManager::assertMimeAllowed()`: image→`image/`;
+  audio→`audio/,video/` (audio-воркер извлекает звук из видео); video→`video/`;
+  document/markup/data→`application/`+`text/`; archive→`application/`; OCR-override (категория Image)
+  →`image/`+`application/` (pdf). Реальный MIME — через `UploadedFile::getMimeType()` (finfo, не
+  client header). Mismatch → 415 (`UnsupportedMediaTypeHttpException`).
+- Size limit: `QuotaService::maxUploadBytes(User)` читает `Plan::maxFileSizeMb` (fallback
+  `FREE_MAX_UPLOAD_MB`=50MB при отсутствии плана / mb<=0). Oversize → 413 (`HttpException(413)`,
+  отдельного класса в Symfony 7 нет).
+- Порядок в `createConversion()`: формат → archive-reject → size → MIME → quota check → S3 PUT →
+  dispatch → charge. Все reject'ы — до quota/S3 side-effects.
+- nginx: `client_max_body_size 512M` + PHP upload/post 512M **только** в location `\.php$`
+  (prod+dev), глобальный include не трогали (не открывать body-cap всем эндпоинтам). Per-plan
+  enforcement (50MB free / 500MB paid) — в PHP.
+- Review: APPROVE-WITH-NITS (блокеров нет). Внесены 2 нита: прямой `expects(once())->putObject` на
+  happy-path (AC#3) + переформулирован вводящий в заблуждение комментарий о порядке size/mime.
+- QA: phpstan [OK], cs-check чистый, PHPUnit 37/37 (137 assertions) OK.

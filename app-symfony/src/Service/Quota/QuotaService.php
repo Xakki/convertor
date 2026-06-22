@@ -19,6 +19,13 @@ class QuotaService
      */
     private const FREE_FALLBACK = ['conversions' => 2, 'ai_conversions' => 1];
 
+    /**
+     * Last-resort max upload size (MB) used only when the resolved plan row is
+     * missing or carries a non-positive `maxFileSizeMb` (mirrors the free tier:
+     * 50 MB free / 500 MB paid, enforced from the `plans` table).
+     */
+    private const FREE_MAX_UPLOAD_MB = 50;
+
     public function __construct(
         private readonly EntityManagerInterface $em,
         private readonly PlanRepository $planRepository,
@@ -111,6 +118,24 @@ class QuotaService
             $user->setQuotaResetAt($now);
             $this->em->flush();
         }
+    }
+
+    /**
+     * Per-plan max upload size in bytes, read from the `plans` table
+     * (`maxFileSizeMb`). Falls back to the `free` plan, then to
+     * {@see FREE_MAX_UPLOAD_MB} when the row is missing or non-positive.
+     */
+    public function maxUploadBytes(User $user): int
+    {
+        $plan = $this->planRepository->findByName($user->getPlan())
+            ?? $this->planRepository->findByName('free');
+
+        $mb = $plan?->getMaxFileSizeMb() ?? 0;
+        if ($mb <= 0) {
+            $mb = self::FREE_MAX_UPLOAD_MB;
+        }
+
+        return $mb * 1024 * 1024;
     }
 
     /**

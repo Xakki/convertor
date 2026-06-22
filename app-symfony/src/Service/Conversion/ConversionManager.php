@@ -17,7 +17,9 @@ use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
+use Symfony\Component\HttpKernel\Exception\UnsupportedMediaTypeHttpException;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Stamp\TransportNamesStamp;
 
@@ -61,13 +63,19 @@ class ConversionManager
             throw new UnprocessableEntityHttpException('Archive conversions are not supported yet.');
         }
 
-        $this->quotaService->check($user, $isAi);
-
         // Read metadata BEFORE the upload is consumed — keep size/mime from the
-        // live tmp upload.
+        // live tmp upload. getMimeType() sniffs the real bytes (finfo), NOT the
+        // client-sent Content-Type header.
         $originalName = $file->getClientOriginalName() ?: 'upload';
         $mimeType     = $file->getMimeType() ?? 'application/octet-stream';
-        $sizeBytes    = $file->getSize();
+        $sizeBytes    = (int) $file->getSize();
+
+        // Size and content-type gates, grouped BEFORE any quota/S3 side-effect:
+        // both precede check()/charge()/storeInput().
+        $this->assertWithinSizeLimit($user, $sizeBytes);
+        $this->assertMimeAllowed($mimeType, $category, $ocr);
+
+        $this->quotaService->check($user, $isAi);
 
         $storagePath = $this->storeInput($file, $fromFormat, $mimeType);
 
@@ -103,6 +111,60 @@ class ConversionManager
         $this->quotaService->charge($user, $isAi);
 
         return $conversion;
+    }
+
+    /**
+     * Per-plan upload size gate (HTTP 413). Cheap getSize() check kept ahead of
+     * the byte-sniffing MIME check and all quota/S3 work.
+     */
+    private function assertWithinSizeLimit(User $user, int $sizeBytes): void
+    {
+        $maxBytes = $this->quotaService->maxUploadBytes($user);
+
+        if ($sizeBytes > $maxBytes) {
+            $maxMb = intdiv($maxBytes, 1024 * 1024);
+
+            throw new HttpException(413, "File exceeds the {$maxMb} MB upload limit for your plan.");
+        }
+    }
+
+    /**
+     * Category-level MIME gate (HTTP 415). Verifies the finfo-sniffed type
+     * against the source category's allowed family prefixes — e.g. a .png whose
+     * bytes are a PHP script sniffs as text/x-php ∉ image/* and is rejected. A
+     * text file that is technically a script is fine for text/document
+     * categories: it is stored & fed to a converter, never executed.
+     *
+     * OCR forces category=Image but its source set includes pdf, so the OCR
+     * branch also accepts application/* (still rejects text/x-php scripts).
+     */
+    private function assertMimeAllowed(string $mimeType, FileCategory $category, bool $ocr): void
+    {
+        // Category-level allowlist (NOT exact-per-format): zip-based docx/odt/epub
+        // all sniff as application/zip and every text/data/markup format sniffs as
+        // text/plain, so an exact map would over-reject valid uploads. `audio` also
+        // allows video/* because the audio worker owns video→audio extraction
+        // (e.g. mp4→mp3 feeds a video/* file into an Audio-category conversion).
+        $prefixes = $ocr
+            ? ['image/', 'application/']
+            : match ($category) {
+                FileCategory::Image                      => ['image/'],
+                FileCategory::Audio                      => ['audio/', 'video/'],
+                FileCategory::Video                      => ['video/'],
+                FileCategory::Document                   => ['application/', 'text/'],
+                FileCategory::Markup, FileCategory::Data => ['text/', 'application/'],
+                FileCategory::Archive                    => ['application/'],
+            };
+
+        foreach ($prefixes as $prefix) {
+            if (str_starts_with($mimeType, $prefix)) {
+                return;
+            }
+        }
+
+        throw new UnsupportedMediaTypeHttpException(
+            "File content type \"{$mimeType}\" is not allowed for a {$category->value} conversion.",
+        );
     }
 
     public function dispatch(Conversion $conversion): void
