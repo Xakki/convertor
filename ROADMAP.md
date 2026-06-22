@@ -32,7 +32,7 @@
 - [x] **[[validate-data-worker]]** — toml (вход/выход) + матрица csv/json/xml/yaml/toml на S3.
 
 **В работе (приоритет ↓):**
-- [ ] **P0 — [[backend-hardening-bugs]]** — security/рантайм-баги аудита: Telegram replay (нет окна `auth_date`),
+- [x] **P0 — [[backend-hardening-bugs]]** — security/рантайм-баги аудита: Telegram replay (нет окна `auth_date`),
   возврат квоты при фейле, Archive-dispatch без stream, download getChunks, refresh-token.
 - [ ] **P1 — [[csv-xml-writer-hardening]]** — корректный `*→csv` для всех источников (CSV-writer теряет поля; xml→csv; типизация XML).
 - [ ] **P1 — [[upload-mime-size-validation]]** — MIME-allowlist + max-size на `POST /convert` до S3-PUT.

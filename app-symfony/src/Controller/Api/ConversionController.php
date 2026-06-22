@@ -16,6 +16,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
+use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Security\Http\Attribute\CurrentUser;
 
@@ -51,8 +52,9 @@ class ConversionController extends AbstractController
         }
 
         try {
+            // createConversion now enqueues (dispatch) + charges quota internally,
+            // so the whole charge→submit→enqueue path is atomic in one place.
             $conversion = $this->conversionManager->createConversion($user, $file, strtolower((string) $toFormat), $ocr);
-            $this->conversionManager->dispatch($conversion);
 
             return $this->json([
                 'conversion_id' => $conversion->getId(),
@@ -60,6 +62,8 @@ class ConversionController extends AbstractController
             ], Response::HTTP_ACCEPTED);
         } catch (\InvalidArgumentException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+        } catch (UnprocessableEntityHttpException $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (TooManyRequestsHttpException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_TOO_MANY_REQUESTS);
         }

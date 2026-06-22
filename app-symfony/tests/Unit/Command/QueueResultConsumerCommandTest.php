@@ -9,6 +9,7 @@ use App\Entity\Conversion;
 use App\Enum\ConversionStatus;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Queue\RedisConnectionFactory;
+use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
 use PHPUnit\Framework\TestCase;
@@ -66,7 +67,7 @@ final class QueueResultConsumerCommandTest extends TestCase
         $registry->expects($this->once())->method('resetManager');
 
         // -- Persister (real, driven by mocked registry) --------------------------
-        $persister = new ConversionResultPersister($registry, 'test-results', new NullLogger());
+        $persister = new ConversionResultPersister($registry, 'test-results', new NullLogger(), $this->createStub(QuotaService::class));
 
         // -- Redis mock -----------------------------------------------------------
         $redis = $this->createMock(\Redis::class);

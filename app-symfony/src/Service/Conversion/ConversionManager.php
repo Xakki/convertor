@@ -17,6 +17,7 @@ use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
+use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Stamp\TransportNamesStamp;
 
@@ -54,7 +55,13 @@ class ConversionManager
             $isAi     = $this->registry->isAi($fromFormat, $toFormat);
         }
 
-        $this->quotaService->checkAndDecrement($user, $isAi);
+        // No `conv_archive` transport exists yet (Stage 7). Reject up front with a
+        // clear 422 so dispatch() never routes to a missing stream (would 500).
+        if ($category === FileCategory::Archive) {
+            throw new UnprocessableEntityHttpException('Archive conversions are not supported yet.');
+        }
+
+        $this->quotaService->check($user, $isAi);
 
         // Read metadata BEFORE the upload is consumed — keep size/mime from the
         // live tmp upload.
@@ -84,6 +91,16 @@ class ConversionManager
 
         $this->em->persist($conversion);
         $this->em->flush();
+
+        // Enqueue + charge LAST. check() above already rejected over-limit requests;
+        // the quota increment happens only after a successful submit, so a failure
+        // in S3 upload / persist / dispatch can never leave a charge without a
+        // worker job (closes the submit-path quota leak). The worker-failure refund
+        // (ConversionResultPersister) is the complementary, mutually-exclusive path:
+        // it only ever fires for a job that was successfully enqueued here, so the
+        // two can never double-count.
+        $this->dispatch($conversion);
+        $this->quotaService->charge($user, $isAi);
 
         return $conversion;
     }

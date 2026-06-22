@@ -1,4 +1,6 @@
 parameters:
+    # Fallback so TELEGRAM_AUTH_MAX_AGE is optional in every env (24h replay window)
+    env(TELEGRAM_AUTH_MAX_AGE): '86400'
 
 services:
     _defaults:
@@ -15,6 +17,7 @@ services:
     App\Service\Auth\TelegramAuthService:
         arguments:
             $telegramBotToken: '%env(TELEGRAM_BOT_TOKEN)%'
+            $maxAuthAge: '%env(int:TELEGRAM_AUTH_MAX_AGE)%'
 
     App\Service\Queue\RedisConnectionFactory:
         arguments:

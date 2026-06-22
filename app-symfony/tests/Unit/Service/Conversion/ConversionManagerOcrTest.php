@@ -20,6 +20,7 @@ use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
+use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use Symfony\Component\Messenger\Envelope;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Stamp\TransportNamesStamp;
@@ -40,11 +41,23 @@ final class ConversionManagerOcrTest extends TestCase
 
         $quota = $this->createMock(QuotaService::class);
         // The free-vs-AI quota decision is the assertion: OCR must charge free.
+        // Both the up-front check and the post-submit charge carry the same isAi.
         $quota->expects($this->once())
-            ->method('checkAndDecrement')
+            ->method('check')
+            ->with($this->isInstanceOf(User::class), $expectAi);
+        $quota->expects($this->once())
+            ->method('charge')
             ->with($this->isInstanceOf(User::class), $expectAi);
 
+        // createConversion now enqueues internally; with no DB the auto-generated
+        // id is never assigned, so simulate persist() stamping the Conversion id
+        // (dispatch reads it while building the message).
         $em = $this->createStub(EntityManagerInterface::class);
+        $em->method('persist')->willReturnCallback(static function (object $entity): void {
+            if ($entity instanceof Conversion) {
+                (new \ReflectionProperty(Conversion::class, 'id'))->setValue($entity, 42);
+            }
+        });
 
         // S3Storage is final → build a real one over a stubbed S3Client whose
         // putObject returns a resolvable output (Result::resolve is final, so use
@@ -75,11 +88,8 @@ final class ConversionManagerOcrTest extends TestCase
 
         $file = $this->makeUpload($from);
 
+        // createConversion enqueues internally (dispatch + charge happen inside).
         $conversion = $manager->createConversion($this->makeUser(), $file, $to, $ocr);
-        // No DB → the auto-generated id is never assigned; dispatch reads it.
-        $idProp = new \ReflectionProperty(Conversion::class, 'id');
-        $idProp->setValue($conversion, 42);
-        $manager->dispatch($conversion);
 
         self::assertIsArray($captured);
         /** @var ConversionMessage $message */
@@ -161,5 +171,96 @@ final class ConversionManagerOcrTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         $manager->createConversion($this->makeUser(), $this->makeUpload('gif'), 'txt', true);
+    }
+
+    /**
+     * Submit-path quota leak guard: if the enqueue (dispatch) fails, quota must
+     * NOT be charged — no worker job exists, so the worker-failure refund will
+     * never run. check() still happens up-front; charge() must not.
+     */
+    public function testDispatchFailureLeavesQuotaUncharged(): void
+    {
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), false);
+        $quota->expects($this->never())->method('charge');
+
+        // persist() stamps the id so dispatch() reaches bus->dispatch (which throws)
+        // instead of dying earlier on an uninitialized id.
+        $em = $this->createStub(EntityManagerInterface::class);
+        $em->method('persist')->willReturnCallback(static function (object $entity): void {
+            if ($entity instanceof Conversion) {
+                (new \ReflectionProperty(Conversion::class, 'id'))->setValue($entity, 7);
+            }
+        });
+
+        $s3Client = $this->createStub(S3Client::class);
+        $s3Client->method('putObject')->willReturn(ResultMockFactory::create(PutObjectOutput::class));
+
+        $bus = $this->createStub(MessageBusInterface::class);
+        $bus->method('dispatch')->willThrowException(new \RuntimeException('transport down'));
+
+        $manager = new ConversionManager(
+            new ConversionRegistry(),
+            $this->createStub(ConversionRepository::class),
+            $quota,
+            $em,
+            $bus,
+            new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
+            new S3Storage($s3Client, 'convertor'),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $manager->createConversion($this->makeUser(), $this->makeUpload('jpg'), 'txt', false);
+    }
+
+    /**
+     * Same guarantee at the earliest post-check failure point: an S3 upload error
+     * must leave the quota uncharged.
+     */
+    public function testS3UploadFailureLeavesQuotaUncharged(): void
+    {
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->once())->method('check');
+        $quota->expects($this->never())->method('charge');
+
+        $s3Client = $this->createStub(S3Client::class);
+        $s3Client->method('putObject')->willThrowException(new \RuntimeException('S3 down'));
+
+        $manager = new ConversionManager(
+            new ConversionRegistry(),
+            $this->createStub(ConversionRepository::class),
+            $quota,
+            $this->createStub(EntityManagerInterface::class),
+            $this->createStub(MessageBusInterface::class),
+            new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
+            new S3Storage($s3Client, 'convertor'),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $manager->createConversion($this->makeUser(), $this->makeUpload('jpg'), 'txt', false);
+    }
+
+    /**
+     * Archive ordering guarantee: an archive conversion is rejected with a 422
+     * BEFORE quota is touched — neither check() nor charge() runs.
+     */
+    public function testArchiveRejectedBeforeQuotaCheck(): void
+    {
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->never())->method('check');
+        $quota->expects($this->never())->method('charge');
+
+        $manager = new ConversionManager(
+            new ConversionRegistry(),
+            $this->createStub(ConversionRepository::class),
+            $quota,
+            $this->createStub(EntityManagerInterface::class),
+            $this->createStub(MessageBusInterface::class),
+            new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
+            new S3Storage($this->createStub(S3Client::class), 'convertor'),
+        );
+
+        $this->expectException(UnprocessableEntityHttpException::class);
+        $manager->createConversion($this->makeUser(), $this->makeUpload('zip'), 'tar.gz', false);
     }
 }

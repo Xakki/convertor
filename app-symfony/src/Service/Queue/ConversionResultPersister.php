@@ -7,6 +7,7 @@ namespace App\Service\Queue;
 use App\Entity\Conversion;
 use App\Entity\FileStorage;
 use App\Enum\ConversionStatus;
+use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
 use Psr\Log\LoggerInterface;
@@ -27,6 +28,7 @@ final class ConversionResultPersister
         private readonly ManagerRegistry $registry,
         private readonly string $resultsBucket,
         private readonly LoggerInterface $logger,
+        private readonly QuotaService $quotaService,
     ) {
     }
 
@@ -63,6 +65,10 @@ final class ConversionResultPersister
             $conversion->setStatus(ConversionStatus::Failed);
             $conversion->setErrorMessage(isset($body['error']) ? (string) $body['error'] : 'Conversion failed');
             $conversion->setProcessingMs($processingMs);
+            // Refund the quota charged at submit. Pure mutation — persisted by the
+            // same $em that loaded the user, in the single flush below. The
+            // idempotency guard above ensures this runs at most once per conversion.
+            $this->quotaService->refund($conversion->getUser(), $conversion->isAi());
             $em->flush();
 
             return;

@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Service\Queue;
 
 use App\Entity\Conversion;
+use App\Entity\User;
 use App\Enum\ConversionStatus;
 use App\Service\Queue\ConversionResultPersister;
+use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
 use PHPUnit\Framework\TestCase;
@@ -14,9 +16,14 @@ use Psr\Log\NullLogger;
 
 final class ConversionResultPersisterTest extends TestCase
 {
-    private function makePersister(ManagerRegistry $registry): ConversionResultPersister
+    private function makePersister(ManagerRegistry $registry, ?QuotaService $quota = null): ConversionResultPersister
     {
-        return new ConversionResultPersister($registry, 'test-results', new NullLogger());
+        return new ConversionResultPersister(
+            $registry,
+            'test-results',
+            new NullLogger(),
+            $quota ?? $this->createStub(QuotaService::class),
+        );
     }
 
     private function makeRegistry(EntityManagerInterface $em): ManagerRegistry
@@ -75,9 +82,29 @@ final class ConversionResultPersisterTest extends TestCase
         $registry = $this->createMock(ManagerRegistry::class);
         $registry->expects($this->exactly(2))->method('getManager')->willReturn($em);
 
-        $persister = new ConversionResultPersister($registry, 'test-results', new NullLogger());
+        $persister = new ConversionResultPersister($registry, 'test-results', new NullLogger(), $this->createStub(QuotaService::class));
 
         $persister->persist(['conversionId' => 1, 'state' => 'completed', 'outputKey' => 'x.pdf']);
         $persister->persist(['conversionId' => 2, 'state' => 'completed', 'outputKey' => 'y.pdf']);
+    }
+
+    public function testFailedStateRefundsQuotaAndFlushesOnce(): void
+    {
+        $user = new User();
+
+        $conversion = $this->createStub(Conversion::class);
+        $conversion->method('getStatus')->willReturn(ConversionStatus::Processing);
+        $conversion->method('getUser')->willReturn($user);
+        $conversion->method('isAi')->willReturn(false);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('find')->willReturn($conversion);
+        $em->expects($this->once())->method('flush');
+
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->once())->method('refund')->with($user, false);
+
+        $persister = $this->makePersister($this->makeRegistry($em), $quota);
+        $persister->persist(['conversionId' => 1, 'state' => 'failed', 'error' => 'boom']);
     }
 }

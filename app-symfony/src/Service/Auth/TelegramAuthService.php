@@ -11,20 +11,50 @@ use Doctrine\ORM\EntityManagerInterface;
 
 class TelegramAuthService
 {
+    /**
+     * Small tolerance (seconds) for auth_date timestamps that sit slightly in
+     * the future due to client/server clock skew.
+     */
+    private const CLOCK_SKEW_TOLERANCE = 300;
+
     public function __construct(
         private readonly UserRepository $userRepository,
         private readonly EntityManagerInterface $em,
         private readonly string $telegramBotToken,
+        private readonly int $maxAuthAge = 86400,
     ) {
     }
 
     public function verify(TelegramAuthDTO $dto): bool
     {
+        if (! $this->isAuthDateFresh($dto->authDate)) {
+            return false;
+        }
+
         $checkString  = $this->buildCheckString($dto);
         $secretKey    = hash('sha256', $this->telegramBotToken, true);
         $expectedHash = hash_hmac('sha256', $checkString, $secretKey);
 
         return hash_equals($expectedHash, $dto->hash ?? '');
+    }
+
+    /**
+     * Reject logins whose auth_date is missing, stale (older than maxAuthAge)
+     * or implausibly far in the future — protects against hash replay.
+     */
+    private function isAuthDateFresh(?int $authDate): bool
+    {
+        if ($authDate === null) {
+            return false;
+        }
+
+        $now = time();
+
+        if ($authDate - $now > self::CLOCK_SKEW_TOLERANCE) {
+            return false;
+        }
+
+        return ($now - $authDate) <= $this->maxAuthAge;
     }
 
     public function findOrCreateUser(TelegramAuthDTO $dto): User
