@@ -50,3 +50,14 @@
 - **Сирота `.dwg`:** оставить, покрыть `xfail`/`skip` («неподдерживаемый формат» — намеренно). **`.3gp`:** не сирота — 3gp поддерживается ffmpeg; поддержка во воркере + integration-тест 3gp→mp4 вынесены в [[docs-workers-conversion-validation]] (2026-06-20).
 - **Coverage gate:** не вводим. Опционально можно подключить `pytest-cov` для отчёта, но **без** `--fail-under`.
 - **LibreOffice unittest-интеграционник:** в scope этой карточки не трогаем (он требует живой сервис → не unit). Рефактор/перенос на pytest — при необходимости отдельной задачей.
+
+**Execution Log (2026-06-23):**
+- Карточный раздел «текущее покрытие» был устаревшим: `test_ai_worker.py`/`test_ffmpeg_worker.py` уже существовали → реализация свелась к закрытию пробелов.
+- Добавлен `workers/tests/conftest.py` (общие фикстуры `build_worker`/`example_files`/`mock_redis`) + `pytest.ini` (`asyncio_mode=auto`, маркеры `integration`/`slow`/`e2e`/`drift`).
+- Ai-воркер: снят module-level `pytest.skip` (heavy-deps lazy-import внутри функций → импорт безопасен); добавлены empty-TTS error-case и STT через реальную фикстуру `story.mp3` (движок мокается).
+- Data: `TestMalformedInputs` (битые/пустые json/xml/csv/yaml) + `TestFullMatrix` — round-trip по всей `SUPPORTED` с нормализацией типов (ловит потерю полей/строк/значений).
+- Ffmpeg: error-case (ненулевой выход движка) + content-agnostic тест (0-байтовый вход проходит валидацию формата и доходит до `run_ffmpeg`).
+- Path-traversal: `test_safe_path.py` (dotdot, абсолютный вне share, sibling-prefix, symlink-escape).
+- Сирота `.dwg` — `xfail(strict, raises=ValueError)`; `story.mp3` укорочен до 12451 B (валидный MPEG layer III).
+- Ревью (2 finder-агента, high): 3 замечания по качеству тестов исправлены (round-trip-фиделити, тавтологичный ffmpeg-тест, использование фикстуры).
+- QA: `PYTHONPATH=. pytest workers/tests -m "not e2e and not integration"` → **191 passed, 10 deselected, 1 xfailed**, без внешних бинарей.

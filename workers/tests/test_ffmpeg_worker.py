@@ -166,6 +166,42 @@ class TestFfmpegConvertErrors:
             with pytest.raises(RuntimeError, match="no output"):
                 worker.convert(_make_job(8, src, "mp3", "wav"))
 
+    def test_engine_failure_propagates(self, tmp_path):
+        # A non-zero ffmpeg exit surfaces as RuntimeError from run_ffmpeg; the
+        # worker must let it propagate so the base class retries/DLQs.
+        src = _src(tmp_path, "in.mp3")
+        worker = _worker(tmp_path)
+
+        async def fake_fail(src_, out_path, timeout):
+            raise RuntimeError("ffmpeg failed: Invalid data found when processing input")
+
+        with patch("workers.ffmpeg.worker.WORK_DIR", tmp_path), \
+             patch("workers.ffmpeg.worker.run_ffmpeg", side_effect=fake_fail):
+            with pytest.raises(RuntimeError, match="ffmpeg failed"):
+                worker.convert(_make_job(9, src, "mp3", "wav"))
+
+    def test_empty_input_passes_validation_and_reaches_engine(self, tmp_path):
+        # Content-agnostic: a 0-byte file still passes worker-level format
+        # validation and is handed to run_ffmpeg with the (empty) source intact.
+        # Rejecting bad content is the engine's job, not the worker's — so here
+        # the conversion succeeds and we assert run_ffmpeg saw the empty file.
+        src = tmp_path / "empty.mp3"
+        src.write_bytes(b"")
+        worker = _worker(tmp_path)
+        seen = {}
+
+        async def fake(src_, out_path, timeout):
+            seen["src"] = Path(src_)
+            Path(out_path).write_bytes(b"converted")
+
+        with patch("workers.ffmpeg.worker.WORK_DIR", tmp_path), \
+             patch("workers.ffmpeg.worker.run_ffmpeg", side_effect=fake) as mock_ffmpeg:
+            out_path, mime, ext = worker.convert(_make_job(10, src, "mp3", "wav"))
+
+        assert mock_ffmpeg.called, "run_ffmpeg must be reached for an empty input"
+        assert seen["src"] == src
+        assert ext == "wav" and Path(out_path).exists()
+
 
 def test_matrix_mime_coverage():
     """Every target format reachable in SUPPORTED must have a MIME entry."""

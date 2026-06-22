@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from workers.data.worker import (
+    SUPPORTED,
     DataWorker,
     _read_data,
     _records_for_csv,
@@ -536,3 +537,113 @@ class TestDataConvertErrors:
         with patch("workers.data.worker.WORK_DIR", tmp_path):
             with pytest.raises(FileNotFoundError):
                 worker.convert(_make_job(5, tmp_path / "missing.json", "json", "csv"))
+
+
+# ---------------------------------------------------------------------------
+# Malformed / empty inputs — _read_data must surface a parse error (the base
+# class turns any raised exception into a retry/DLQ; here we pin the format).
+# ---------------------------------------------------------------------------
+
+class TestMalformedInputs:
+    def test_malformed_json_raises(self, tmp_path: Path) -> None:
+        bad = tmp_path / "bad.json"
+        bad.write_text('{"name": "Alice", }', encoding="utf-8")  # trailing comma
+        with pytest.raises(json.JSONDecodeError):
+            _read_data(bad)
+
+    def test_empty_json_raises(self, tmp_path: Path) -> None:
+        empty = tmp_path / "empty.json"
+        empty.write_text("", encoding="utf-8")
+        with pytest.raises(json.JSONDecodeError):
+            _read_data(empty)
+
+    def test_malformed_xml_raises(self, tmp_path: Path) -> None:
+        import xml.etree.ElementTree as ET
+
+        bad = tmp_path / "bad.xml"
+        bad.write_text("<root><item>unclosed</root>", encoding="utf-8")
+        with pytest.raises(ET.ParseError):
+            _read_data(bad)
+
+    def test_empty_csv_raises(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        empty = tmp_path / "empty.csv"
+        empty.write_text("", encoding="utf-8")
+        with pytest.raises(pd.errors.EmptyDataError):
+            _read_data(empty)
+
+    def test_malformed_yaml_raises(self, tmp_path: Path) -> None:
+        import yaml
+
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("foo: [unterminated\n  bar: : :", encoding="utf-8")
+        with pytest.raises(yaml.YAMLError):
+            _read_data(bad)
+
+    def test_malformed_json_via_convert_propagates(self, tmp_path: Path) -> None:
+        src = tmp_path / "bad.json"
+        src.write_text("{not valid", encoding="utf-8")
+        worker = _worker(tmp_path)
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            with pytest.raises(json.JSONDecodeError):
+                worker.convert(_make_job(30, src, "json", "csv"))
+
+
+# ---------------------------------------------------------------------------
+# Full declared matrix: every (src → tgt) pair in SUPPORTED converts and
+# produces a non-empty output (helper level — no worker/redis needed).
+# ---------------------------------------------------------------------------
+
+def _matrix_pairs() -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for src, targets in SUPPORTED.items():
+        for tgt in targets:
+            pairs.append((src, tgt))
+    return pairs
+
+
+def _extract_records(obj: object) -> list:
+    """Dig the list-of-records out of whatever wrapper a format imposes.
+
+    csv/json/yaml keep a top-level list; xml wraps it as {root: {item: [...]}}
+    and toml wraps a top-level array under {"rows": [...]}. Unwrap single-key
+    dicts until the row list is reached; a multi-key dict is a single row.
+    """
+    while isinstance(obj, dict) and len(obj) == 1:
+        obj = next(iter(obj.values()))
+    if isinstance(obj, dict):
+        return [obj]
+    assert isinstance(obj, list)
+    return obj
+
+
+def _norm(records: list) -> list:
+    # Compare on stringified scalars: CSV stringifies everything and XML coerces
+    # numerics, so a cross-format value match must be type-insensitive. This
+    # still catches dropped fields, swapped values, or lost rows.
+    return [{str(k): str(v) for k, v in rec.items()} for rec in records]
+
+
+class TestFullMatrix:
+    @pytest.mark.parametrize("src_fmt,tgt_fmt", _matrix_pairs())
+    def test_pair_roundtrip_preserves_records(
+        self, tmp_path: Path, src_fmt: str, tgt_fmt: str
+    ) -> None:
+        # Seed a source file in src_fmt, convert it to tgt_fmt (read+write), then
+        # read the output back and assert the records survived the round-trip.
+        # A silent corruption (dropped column, lost row, mangled value) fails here.
+        src = tmp_path / f"in.{src_fmt}"
+        _write_data(SAMPLE_RECORDS, src)
+
+        data = _read_data(src)
+        out = tmp_path / f"out.{tgt_fmt}"
+        _write_data(data, out)
+
+        assert out.exists(), f"{src_fmt}->{tgt_fmt}: no output"
+        assert out.stat().st_size > 0, f"{src_fmt}->{tgt_fmt}: empty output"
+
+        reloaded = _extract_records(_read_data(out))
+        assert _norm(reloaded) == _norm(SAMPLE_RECORDS), (
+            f"{src_fmt}->{tgt_fmt}: records changed in round-trip"
+        )

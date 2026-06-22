@@ -10,14 +10,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# worker-ai belongs to roadmap Стадия 2 — disabled for now. Skip at module level so
-# its Stage-2 deps (whisper/espeak/providers) aren't imported during collection.
-pytest.skip(
-    "worker-ai is roadmap Стадия 2 — deferred; tests disabled until then",
-    allow_module_level=True,
-)
-
-from workers.ai.worker import AiWorker  # noqa: E402
+# worker-ai heavy deps (faster_whisper/espeak/provider SDKs) are lazy-imported
+# inside the conversion functions, so importing the module here is safe and the
+# provider coroutines are mocked in every test — no Stage-2 engines are touched.
+from workers.ai.worker import AiWorker
 
 
 def _make_job(conv_id, input_path, src_fmt, tgt_fmt, sub_type=None) -> dict:
@@ -163,3 +159,35 @@ class TestAiConvertErrors:
         with patch("workers.ai.worker.WORK_DIR", tmp_path):
             with pytest.raises(FileNotFoundError):
                 worker.convert(_make_job(9, tmp_path / "nope.mp3", "mp3", "txt", "stt"))
+
+    def test_empty_tts_input_raises(self, tmp_path):
+        # _text_to_speech validates non-empty text BEFORE dispatching to any
+        # engine, so this exercises the real code path with no espeak/ffmpeg.
+        src = _src(tmp_path, "empty.txt", b"   \n  ")
+        worker = _worker(tmp_path)
+        with patch("workers.ai.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="empty"):
+                worker.convert(_make_job(10, src, "txt", "mp3", "tts"))
+
+
+# ---------------------------------------------------------------------------
+# Fixture corpus: story.mp3 must stay tiny (committed) — STT engine is mocked,
+# the worker only needs the file to exist.
+# ---------------------------------------------------------------------------
+
+class TestStoryMp3Fixture:
+    def test_story_mp3_exists_and_small(self, example_files):
+        story = example_files / "story.mp3"
+        assert story.is_file(), "story.mp3 fixture missing"
+        size = story.stat().st_size
+        assert size <= 50 * 1024, f"story.mp3 must be ≤50KB, got {size} bytes"
+
+    def test_stt_from_story_fixture(self, tmp_path, example_files):
+        # Wire the real committed fixture through convert() with STT mocked.
+        story = example_files / "story.mp3"
+        worker = _worker(tmp_path)
+        with patch("workers.ai.worker.WORK_DIR", tmp_path), _stt_mock():
+            out_path, mime, ext = worker.convert(_make_job(11, story, "mp3", "txt", "stt"))
+        assert Path(out_path).exists()
+        assert ext == "txt"
+        assert mime == "text/plain"
