@@ -23,6 +23,15 @@ x-app-env: &_app_env
     REDIS_CACHE_DB: ${REDIS_CACHE_DB:-0}
     REDIS_SESSION_DB: ${REDIS_SESSION_DB:-1}
     REDIS_QUEUE_DB: ${REDIS_QUEUE_DB:-2}
+    # Refresh-token families on KeyDB db 1 (sessions). Authoritative here; app-symfony/.env
+    # is gitignored. SameSite=lax is correct while front+API share the xakki.pro registrable
+    # domain (same-site); switch to none (+Secure +CORS credentials) only if they go cross-site.
+    REDIS_SESSIONS_DSN: redis://${REDIS_HOST:-keydb}:6379?dbindex=${REDIS_SESSION_DB:-1}
+    REFRESH_TTL: ${REFRESH_TTL:-2592000}
+    REFRESH_GRACE: ${REFRESH_GRACE:-60}
+    REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-true}
+    REFRESH_COOKIE_SAMESITE: ${REFRESH_COOKIE_SAMESITE:-lax}
+    REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-refresh_token}
     # JWT keys are file paths defined in app-symfony/.env (config/jwt/*.pem).
     # Do NOT pass JWT_SECRET_KEY/JWT_PUBLIC_KEY here: an empty compose value would
     # override the correct PEM paths (Symfony Dotenv won't override a set env var).

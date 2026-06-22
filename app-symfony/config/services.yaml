@@ -2,6 +2,14 @@ parameters:
     # Fallback so TELEGRAM_AUTH_MAX_AGE is optional in every env (24h replay window)
     env(TELEGRAM_AUTH_MAX_AGE): '86400'
 
+    # Refresh-token defaults (optional in every env). DSN = KeyDB db 1 (sessions).
+    env(REFRESH_TTL): '2592000'
+    env(REFRESH_GRACE): '60'
+    env(REFRESH_COOKIE_SECURE): 'true'
+    env(REFRESH_COOKIE_SAMESITE): 'lax'
+    env(REFRESH_COOKIE_NAME): 'refresh_token'
+    env(REDIS_SESSIONS_DSN): 'redis://keydb:6379?dbindex=1'
+
 services:
     _defaults:
         autowire: true
@@ -22,6 +30,27 @@ services:
     App\Service\Queue\RedisConnectionFactory:
         arguments:
             $dsn: '%env(REDIS_DSN)%'
+
+    # Separate connection on KeyDB db 1 (sessions) for refresh-token families.
+    # Distinct service id → distinct instance, so no db-select bleed with db 2.
+    app.redis.sessions:
+        class: App\Service\Queue\RedisConnectionFactory
+        arguments:
+            $dsn: '%env(REDIS_SESSIONS_DSN)%'
+
+    App\Service\Auth\RefreshTokenService:
+        arguments:
+            $redisFactory: '@app.redis.sessions'
+            $appSecret: '%env(APP_SECRET)%'
+            $ttl: '%env(int:REFRESH_TTL)%'
+            $grace: '%env(int:REFRESH_GRACE)%'
+
+    App\Service\Auth\RefreshCookieFactory:
+        arguments:
+            $name: '%env(REFRESH_COOKIE_NAME)%'
+            $secure: '%env(bool:REFRESH_COOKIE_SECURE)%'
+            $sameSite: '%env(REFRESH_COOKIE_SAMESITE)%'
+            $maxAge: '%env(int:REFRESH_TTL)%'
 
     AsyncAws\S3\S3Client:
         arguments:
