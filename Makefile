@@ -128,6 +128,10 @@ test-php: ## Run PHPUnit tests
 test-python: ## Run pytest for all workers (excludes e2e — see test-e2e)
 	PYTHONPATH=. pytest workers/tests/ -m "not e2e" -v
 
+.PHONY: test-drift
+test-drift: ## Routing-contract: PHP registry routing keys vs Python worker CAPABILITIES (may fail on known gaps — see .claude/kanban/grooming/)
+	PYTHONPATH=. pytest workers/tests/test_routing_drift.py -v
+
 .PHONY: test-image-ocr
 test-image-ocr: build-image ## Run OCR integration tests inside worker-image (real tesseract+poppler)
 	docker run --rm --entrypoint sh \
@@ -206,5 +210,10 @@ build-data: ## Build worker-data image
 build-php: ## PHP image is pulled from harbor (DOCKER_IMAGE_PHP), not built here
 	@echo "php image is pulled from harbor: $(DOCKER_IMAGE_PHP) — run 'make pull'. No local docker/php/Dockerfile."
 
+.PHONY: build-metrics-exporter
+build-metrics-exporter: ## Build metrics-exporter image
+	docker build -t $(COMPOSE_PROJECT_NAME)/metrics-exporter:latest \
+	    -f docker/workers/metrics_exporter.Dockerfile .
+
 .PHONY: build-workers
-build-workers: build-libreoffice build-ffmpeg build-image build-ai build-data ## Build all worker images
+build-workers: build-libreoffice build-ffmpeg build-image build-ai build-data build-metrics-exporter ## Build all worker images

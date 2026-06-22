@@ -21,7 +21,6 @@ use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpKernel\Exception\HttpException;
-use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use Symfony\Component\HttpKernel\Exception\UnsupportedMediaTypeHttpException;
 use Symfony\Component\Messenger\Envelope;
 use Symfony\Component\Messenger\MessageBusInterface;
@@ -276,8 +275,10 @@ final class ConversionManagerOcrTest extends TestCase
     }
 
     /**
-     * Archive ordering guarantee: an archive conversion is rejected with a 422
-     * BEFORE quota is touched — neither check() nor charge() runs.
+     * Unsupported-format ordering guarantee: an archive conversion (zip→tar.gz)
+     * is rejected as unsupported BEFORE quota is touched — neither check() nor
+     * charge() runs. Archive was removed from workerCapabilities() (Stage 7 deferred),
+     * so isSupported() returns false → InvalidArgumentException (→ 400 via controller).
      */
     public function testArchiveRejectedBeforeQuotaCheck(): void
     {
@@ -295,7 +296,8 @@ final class ConversionManagerOcrTest extends TestCase
             new S3Storage($this->createStub(S3Client::class), 'convertor'),
         );
 
-        $this->expectException(UnprocessableEntityHttpException::class);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unsupported conversion: zip → tar.gz');
         $manager->createConversion($this->makeUser(), $this->makeUpload('zip'), 'tar.gz', false);
     }
 

@@ -19,5 +19,10 @@
 - Скрыть archive полностью или показывать disabled/«скоро»?
 - Где источник истины для «доступных» форматов — `workerCapabilities` или отдельный флаг готовности воркера?
 
-**Decisions:**
-- (заполнить при грумминге)
+**Decisions (2026-06-22):**
+- Archive полностью убран из `workerCapabilities()` в `ConversionRegistry.php` (задача stream-subscription-distribution).
+- Побочный эффект: archive-форматы (zip→tar.gz и т.п.) теперь возвращают HTTP 400 («Unsupported conversion»)
+  вместо 422. Это корректно — пары не в реестре, контроллер ловит InvalidArgumentException.
+- Мёртвый archive-guard в `ConversionManager.php` удалён; неиспользуемый import UnprocessableEntityHttpException убран.
+- **Drift test `test_all_routing_keys_have_worker` теперь PASSED** — `archive` больше не в routingKeys.
+- Stage-7 archive WORKER (zip/tar/gz/bz2/7z converter) — по-прежнему future work, не выполнено.

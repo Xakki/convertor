@@ -41,3 +41,21 @@
 - ack/claim при падении, ретраи, DLQ, идемпотентность — уже решены в коде, фиксируем как есть.
 
 Siblings: [[distributed-workers]] · [[validate-libreoffice-worker]] · [[backend-hardening-bugs]]
+
+---
+
+## Execution Log (2026-06-22)
+
+**1. Docs** — новый `docs/queue-streams.md` (топология, группы/консьюмеры, XAUTOCLAIM-reclaim, ретраи/DLQ, идемпотентность+ordered-commit, backpressure, метрики, drift). Перелинкован с `queue-contract.md` ↔ `queue-redesign-design.md`.
+
+**2. Лаг-метрики** — отдельный экспортер-сайдкар `workers/metrics_exporter/exporter.py` (контейнер `convertor-metrics-exporter:9472`, сети `backend`+`common`, без публикации хост-порта). Метрики: `convertor_stream_length`, `_stream_group_pending`, `_stream_group_lag`, `_stream_group_consumers`, `_stream_pending_max_idle_ms`, `_dead_letter_messages`, `_exporter_scrape_errors_total`, `_exporter_up`. Lag: XINFO GROUPS `lag`/`entries-read` → XRANGE-fallback для KeyDB 6.x. Скрейп защищён (socket_timeout, per-stream try/except).
+  - Мониторинг (dockprom, `/home` commit `2540745`): scrape-job `convertor-exporter`; alert-правила `convertor.rules` (`ConvertorExporterDown`/`ConvertorDeadLetterGrowing`/`ConvertorQueueLagHigh`, label `project=convertor`); AlertManager receiver `telegram-convertor` + route `project=convertor` → канал `-1001115524886` топик `16859` (бот @StudentAssistentMonitorBot); Grafana дашборд «Convertor — KeyDB Streams» (9 панелей).
+
+**3. Drift-тест** — `workers/tests/test_routing_drift.py` (assert A: каждый routing-key реестра имеет ≥1 воркера; assert B: worker matrix ⊆ registry). Живой реестр через `dump-matrix.php --json`. `make test-drift` + в дефолтном `make test`; skip только при отсутствии PHP/docker, fail на реальном дрифте.
+  - **Сведён реальный дрифт:** archive убран из реестра (прод-баг «стрим без consumer»; API archive 422→400); добавлены `*→toml`, `3gp`-вход, `webm/flv/wmv→audio extract`, `md→{odt,rtf,txt,epub}`. golden master 306→326.
+
+**QA:** `make test` зелёный (PHP 59/59, Python 133 passed/8 skipped), PHPStan 0, CS 0. **Ревью:** APPROVE-WITH-NITS, блокеров нет; 3 нита закрыты.
+
+**Осталось (операционное, перед `ready`):**
+- Деплой контейнера экспортера: `make build-metrics-exporter && make up` (стек живой) → target `convertor-exporter` UP, метрики потекут.
+- Бот @StudentAssistentMonitorBot в канал `t.me/c/1115524886/16859` (на момент записи `getChat`=chat not found) → живой тест доставки алерта.

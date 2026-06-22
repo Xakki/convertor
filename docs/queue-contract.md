@@ -2,10 +2,15 @@
 
 Canonical wire contract that **both sides pin**. Source of truth for the
 Symfony Messenger Redis-Streams entry shape, the job body, the Redis status
-hash, and the result event. Companion to `docs/queue-redesign-design.md`
-(design rationale). If you change a field name here, update the producer
+hash, and the result event. If you change a field name here, update the producer
 (`App\Message\ConversionMessage` + `ConversionManager::dispatch`), the
 `messenger.yaml` transport, and every Python worker decoder in the same commit.
+
+> **See also:**
+> - [`docs/queue-streams.md`](queue-streams.md) — stream topology, consumer groups,
+>   reclaim, retries/DLQ, idempotency, backpressure, metrics, drift protection.
+> - [`docs/queue-redesign-design.md`](queue-redesign-design.md) — design rationale
+>   and phased implementation cards.
 
 > Phase status: **Phase 0** ships a single stream `conversions` with the JSON
 > serializer. Per-routing-key streams/transports (`conv.<key>` / `conv_<key>`)

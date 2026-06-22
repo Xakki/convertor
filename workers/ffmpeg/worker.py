@@ -54,7 +54,7 @@ _MIME: dict[str, str] = {
 }
 
 # Timeout by output category (seconds)
-_AUDIO_FORMATS: set[str] = {"mp3", "wav", "ogg", "flac", "aac", "m4a", "opus", "wma"}
+_AUDIO_FORMATS: set[str] = {"mp3", "wav", "ogg", "flac", "aac", "m4a", "opus"}
 _VIDEO_FORMATS: set[str] = {"mp4", "avi", "mkv", "mov", "webm"}
 _VIDEO_TIMEOUT = 600
 _AUDIO_TIMEOUT = 120

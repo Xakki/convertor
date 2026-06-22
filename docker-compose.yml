@@ -431,6 +431,39 @@ services:
             - default
             - backend
 
+    metrics-exporter:
+        build:
+            context: .
+            dockerfile: docker/workers/metrics_exporter.Dockerfile
+        image: ${COMPOSE_PROJECT_NAME}/metrics-exporter:latest
+        container_name: "convertor-metrics-exporter"
+        restart: unless-stopped
+        stop_grace_period: 10s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            REDIS_HOST: ${REDIS_HOST:-keydb}
+            REDIS_PORT: ${REDIS_PORT:-6379}
+            REDIS_DB: ${REDIS_QUEUE_DB:-2}
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+            CONSUMER_GROUP: ${CONSUMER_GROUP:-convertor}
+            METRICS_POLL_INTERVAL: ${METRICS_POLL_INTERVAL:-15}
+        depends_on:
+            keydb:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "curl", "-sf", "http://localhost:9472/metrics"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        # backend — reaches keydb; common — scraped by dockprom Prometheus.
+        # No host port: internal scrape only via convertor-metrics-exporter:9472.
+        networks:
+            - backend
+            - common
+
 networks:
     default:
         driver: bridge
@@ -439,6 +472,9 @@ networks:
         driver: bridge
         name: "${COMPOSE_PROJECT_NAME}-backend"
         internal: true
+    common:
+        external: true
+        name: common
 
 volumes:
     mariadb-data:

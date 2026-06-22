@@ -159,6 +159,8 @@ class ConversionRegistry
                 'isAi'  => false,
                 'pairs' => [
                     [['md', 'rst', 'latex', 'html', 'wiki'], ['md', 'rst', 'html', 'pdf', 'docx']],
+                    // md-only office targets (LibreOffice handles md→odt/rtf/txt/epub)
+                    [['md'], ['odt', 'rtf', 'txt', 'epub']],
                 ],
             ],
 
@@ -166,7 +168,7 @@ class ConversionRegistry
             'data' => [
                 'isAi'  => false,
                 'pairs' => [
-                    [['csv', 'json', 'xml', 'yaml', 'toml'], ['csv', 'json', 'xml', 'yaml']],
+                    [['csv', 'json', 'xml', 'yaml', 'toml'], ['csv', 'json', 'xml', 'yaml', 'toml']],
                 ],
             ],
 
@@ -189,25 +191,18 @@ class ConversionRegistry
                 'pairs' => [
                     [['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'opus', 'wma'],
                         ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'opus']],
-                    // video → audio (extract)
-                    [['mp4', 'avi', 'mkv', 'mov'], ['mp3', 'wav', 'ogg', 'flac']],
+                    // video → audio (extract); 3gp is input-only, never a target
+                    [['mp4', 'avi', 'mkv', 'mov', 'webm', 'flv', 'wmv', '3gp'],
+                        ['mp3', 'wav', 'ogg', 'flac']],
                 ],
             ],
 
-            // Video worker (ffmpeg)
+            // Video worker (ffmpeg); 3gp is input-only, never a target
             'video' => [
                 'isAi'  => false,
                 'pairs' => [
-                    [['mp4', 'avi', 'mkv', 'mov', 'webm', 'flv', 'wmv'],
+                    [['mp4', 'avi', 'mkv', 'mov', 'webm', 'flv', 'wmv', '3gp'],
                         ['mp4', 'avi', 'mkv', 'mov', 'webm']],
-                ],
-            ],
-
-            // Archive worker
-            'archive' => [
-                'isAi'  => false,
-                'pairs' => [
-                    [['zip', 'tar', 'gz', 'bz2', '7z'], ['zip', 'tar.gz']],
                 ],
             ],
         ];

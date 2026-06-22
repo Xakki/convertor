@@ -1,6 +1,11 @@
 # Worker/Queue Redesign — Design
 
-Status: **proposal / grooming** (decisions pending). Source card: `.claude/kanban/grooming/fix-queue-php-worker-mismatch.md`.
+Status: **implemented** (Phase 0–3 shipped; Phase 4 workers in progress). Source card: `.claude/kanban/grooming/fix-queue-php-worker-mismatch.md`.
+
+> **Operational mechanics** (topology, consumer groups, reclaim, retries/DLQ, idempotency,
+> metrics) are documented in [`docs/queue-streams.md`](queue-streams.md).
+> Wire formats are in [`docs/queue-contract.md`](queue-contract.md).
+> This document covers design rationale and phased cards only.
 
 Binding user direction (2026-06-19): keep Symfony Messenger **Redis Streams** + JSON serializer; Python workers consume Streams; converted **files → S3/MinIO**, **status → Redis** (fault-tolerant); **libreoffice → queue consumer**; workers **declare capabilities** (may overlap; multiple instances; launch deferred); client status via existing polling, sourced from Redis.
 

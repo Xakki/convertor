@@ -18,7 +18,6 @@ use App\Service\Storage\S3Storage;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpKernel\Exception\HttpException;
-use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use Symfony\Component\HttpKernel\Exception\UnsupportedMediaTypeHttpException;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Stamp\TransportNamesStamp;
@@ -55,12 +54,6 @@ class ConversionManager
             }
             $category = $this->registry->getCategory($fromFormat, $toFormat);
             $isAi     = $this->registry->isAi($fromFormat, $toFormat);
-        }
-
-        // No `conv_archive` transport exists yet (Stage 7). Reject up front with a
-        // clear 422 so dispatch() never routes to a missing stream (would 500).
-        if ($category === FileCategory::Archive) {
-            throw new UnprocessableEntityHttpException('Archive conversions are not supported yet.');
         }
 
         // Read metadata BEFORE the upload is consumed — keep size/mime from the
