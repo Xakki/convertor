@@ -6,6 +6,7 @@ namespace App\Service\Storage;
 
 use AsyncAws\S3\Input\GetObjectRequest;
 use AsyncAws\S3\Input\PutObjectRequest;
+use AsyncAws\S3\Result\GetObjectOutput;
 use AsyncAws\S3\S3Client;
 use Symfony\Component\HttpFoundation\HeaderUtils;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -58,6 +59,27 @@ final class S3Storage
     }
 
     /**
+     * Stream an object from the given bucket directly to the HTTP response.
+     * Used by the worker pull-API to proxy input files to off-server workers.
+     * Calls resolve() eagerly so S3 errors (NoSuchKey, auth) surface here —
+     * before the response is sent — letting the controller return a clean JSON error.
+     */
+    public function streamFromBucket(string $bucket, string $key): StreamedResponse
+    {
+        $output = $this->client->getObject(new GetObjectRequest([
+            'Bucket' => $bucket,
+            'Key'    => $key,
+        ]));
+
+        $output->resolve();
+
+        $response = $this->streamBody($output);
+        $response->headers->set('Content-Type', $output->getContentType() ?? 'application/octet-stream');
+
+        return $response;
+    }
+
+    /**
      * Authenticated streaming proxy: pulls the object from S3 and streams it to
      * the client (per-user access check stays in the controller).
      */
@@ -71,13 +93,7 @@ final class S3Storage
         // NOTE: verify `getChunks()` against the installed async-aws/s3 v2 at
         // deploy. If absent, the alternatives are `foreach ($output->getBody() ...)`
         // (ResultStream is iterable) or `fpassthru($output->getBody()->getContentAsResource())`.
-        $response = new StreamedResponse(static function () use ($output): void {
-            foreach ($output->getBody()->getChunks() as $chunk) {
-                echo $chunk;
-                flush();
-            }
-        });
-
+        $response = $this->streamBody($output);
         $response->headers->set('Content-Type', $mime);
         $response->headers->set(
             'Content-Disposition',
@@ -85,5 +101,15 @@ final class S3Storage
         );
 
         return $response;
+    }
+
+    private function streamBody(GetObjectOutput $output): StreamedResponse
+    {
+        return new StreamedResponse(static function () use ($output): void {
+            foreach ($output->getBody()->getChunks() as $chunk) {
+                echo $chunk;
+                flush();
+            }
+        });
     }
 }

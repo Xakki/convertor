@@ -347,11 +347,14 @@ services:
             - backend
 
     worker-ai:
+        # Remote worker — runs off-server (home WSL + GPU), NOT on saFin.
+        # profiles:[ai] = local-dev-only; the real deployment pulls the Harbor
+        # image on the home host via docker-compose.worker-ai.yml.
         profiles: ["ai"]
         build:
             context: .
             dockerfile: docker/workers/ai.Dockerfile
-        image: ${COMPOSE_PROJECT_NAME}/worker-ai:latest
+        image: ${DOCKER_IMAGE_AI:-harbor.xakki.ru/convertor/worker-ai:latest}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
         restart: unless-stopped
         stop_grace_period: 60s
@@ -361,35 +364,29 @@ services:
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
-            REDIS_HOST: ${REDIS_HOST:-keydb}
-            REDIS_PASSWORD: ${REDIS_PASSWORD}
-            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
-            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
-            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             WORKER_MODULE: workers.ai.worker
+            # Pull-API config (no KeyDB/S3 — all I/O via API)
+            API_BASE_URL: ${API_BASE_URL:-http://localhost:8080}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
+            WORKER_TYPE: ${WORKER_TYPE:-ai}
             WHISPER_MODEL: ${WHISPER_MODEL:-base}
-            REDIS_PORT: ${REDIS_PORT:-6379}
-            # Worker pulls input from S3 + uploads results to S3.
-            S3_ENDPOINT: ${S3_ENDPOINT}
-            S3_KEY: ${S3_KEY}
-            S3_SECRET: ${S3_SECRET}
-            S3_REGION: ${S3_REGION}
-            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
-            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
-        depends_on:
-            keydb:
-                condition: service_healthy
+            WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+            WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+            AI_STT_PROVIDER: ${AI_STT_PROVIDER:-local}
+            AI_TTS_PROVIDER: ${AI_TTS_PROVIDER:-local}
+            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+            GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+            CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
         healthcheck:
             test: ["CMD", "python3", "-c", "import faster_whisper; print('ok')"]
             interval: 60s
             timeout: 15s
             retries: 3
             start_period: 30s
-        # default = egress to S3 + first-boot whisper model pull from HuggingFace
-        # (pre-bake handled in [[validate-ai-worker]]); backend = reach keydb.
+        # default only: egress to pull-API + HuggingFace model download.
+        # No backend (keydb not needed) — all queue access via pull-API.
         networks:
             - default
-            - backend
 
     worker-data:
         build:

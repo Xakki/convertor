@@ -85,8 +85,8 @@ logs-%: ## Tail logs for a specific service (make logs-php)
 	$(DC) logs -f $*
 
 .PHONY: worker-logs
-worker-logs: ## Tail logs for all worker services
-	$(DC) logs -f worker-libreoffice worker-ffmpeg worker-image worker-ai worker-data
+worker-logs: ## Tail logs for on-server worker services (worker-ai is remote — see docker-compose.worker-ai.yml)
+	$(DC) logs -f worker-libreoffice worker-ffmpeg worker-image worker-data
 
 ##@ PHP / Symfony
 
@@ -197,9 +197,20 @@ build-image: ## Build worker-image image
 	    -f docker/workers/image.Dockerfile .
 
 .PHONY: build-ai
-build-ai: ## Build worker-ai image
+build-ai: ## Build worker-ai image (local tag; see push-ai to tag + push to Harbor)
 	docker build -t $(COMPOSE_PROJECT_NAME)/worker-ai:latest \
 	    -f docker/workers/ai.Dockerfile .
+
+DOCKER_IMAGE_AI ?= harbor.xakki.ru/convertor/worker-ai:latest
+
+.PHONY: push-ai
+push-ai: build-ai ## Build + tag + push worker-ai image to Harbor
+	docker tag $(COMPOSE_PROJECT_NAME)/worker-ai:latest $(DOCKER_IMAGE_AI)
+	docker push $(DOCKER_IMAGE_AI)
+
+.PHONY: worker-ai-check
+worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compose)
+	docker compose -f docker-compose.worker-ai.yml config -q
 
 .PHONY: build-data
 build-data: ## Build worker-data image

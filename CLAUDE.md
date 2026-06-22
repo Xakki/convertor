@@ -36,7 +36,8 @@ SaaS-сервис конвертации файлов всех форматов.
 ## Queue Architecture
 - Каждый тип конвертации — отдельный KeyDB queue channel
 - Имена каналов: `conversion.documents`, `conversion.images`, `conversion.audio`, `conversion.video`, `conversion.ai`
-- **Воркеры — ТОЛЬКО KeyDB Streams (consumer groups) + S3 in/out.** Никаких Redis-list очередей и общего тома `/shared-files`. Жёсткое правило для всех воркеров без исключений.
+- **Локальные (on-server) воркеры — ТОЛЬКО KeyDB Streams (consumer groups) + S3 in/out.** Никаких Redis-list очередей и общего тома `/shared-files`.
+- **Remote-воркеры (вне сервера) — через универсальный HTTP pull-API, НЕ напрямую в KeyDB/S3.** KeyDB наружу НЕ публикуется, поэтому off-server воркер (напр. AI на домашнем WSL+GPU) тянет задания по API (short-poll ~10 сек), а файлы (вход и результат) идут ЧЕРЕЗ API (не через S3 напрямую). Auth — статичный bearer-токен в конфиге воркера. API — шлюз над Streams: claim из consumer-group `conv.<type>` (lease), ack по `result`/`fail`. API задуман универсальным для всех типов воркеров. Первый потребитель — AI-воркер ([[validate-ai-worker]]).
 - **Воркеры flag-agnostic: валидируют ТОЛЬКО форматы (входные данные + конвертацию source→target) и выполняют её. Флаги (`ocr`, `subType` и пр.) воркер НЕ читает.** Выбор поведения — из пары (sourceFormat, targetFormat) (напр. растр→txt/md/docx = OCR; audio→text = STT; text→audio = TTS). Какой именно stream получит задачу — решает БЭК/API: для неоднозначных пар (один (from→to) умеют несколько воркеров, напр. `pdf→txt`: document-extract vs image-OCR) в API есть флаг, выбирающий доступный stream (первый экземпляр — `ocr`→`Conversion::isOcr`→`streamFor()`). AI — в крайнем случае.
 - PHP side: только ставит задачу + обновляет статус по callback/polling
 
@@ -62,6 +63,9 @@ SaaS-сервис конвертации файлов всех форматов.
   `make down`, `make build`, `make logs`…). Не дёргать `docker compose ...` напрямую. Нет нужного
   таргета — добавить в Makefile, не запускать руками. `make docker-check` = `docker compose config -q`.
 - docker-compose.yml — основной, docker/limits.yml — лимиты для прода
+- **Образы публикуем в наш Harbor-registry** (авторизация в консоли уже настроена). Сборка/пуш —
+  через Makefile-таргеты. Remote-воркеры (AI и пр.) пуллят образ из Harbor на своём хосте.
+- **KeyDB наружу НЕ публикуется** — доступ к очередям off-server только через HTTP pull-API (см. Queue Architecture).
 - Каждый воркер — отдельный контейнер
 - Файлы (вход и результат) — только в S3 (`${S3_BUCKET_PREFIX}-inputs` / `-results`); общего volume
   `/shared-files` больше нет (убран задачей storage-input-to-s3 2026-06-20)

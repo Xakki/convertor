@@ -1,0 +1,52 @@
+# Standalone compose for the AI worker (home WSL + GPU).
+# Pulls the Harbor image; no server-side KeyDB/S3 needed.
+#
+# Quick start:
+#   cp .env.worker-ai.example .env.worker-ai
+#   # Fill in API_BASE_URL and WORKER_API_TOKEN (and GPU settings if desired)
+#   docker compose -f docker-compose.worker-ai.yml --env-file .env.worker-ai up -d
+#
+# GPU (CUDA): install nvidia-container-toolkit, then set WHISPER_DEVICE=cuda in .env.worker-ai.
+# Whisper model: downloaded on first run; persisted in the whisper-models volume (~500 MB).
+# Image update: docker compose -f docker-compose.worker-ai.yml pull && ... up -d
+
+services:
+    worker-ai:
+        image: ${DOCKER_IMAGE_AI:-harbor.xakki.ru/convertor/worker-ai:latest}
+        container_name: "worker-ai-home"
+        restart: unless-stopped
+        stop_grace_period: 60s
+        stop_signal: SIGTERM
+        volumes:
+            - whisper-models:/home/app/.cache/huggingface
+        environment:
+            WORKER_MODULE: workers.ai.worker
+            API_BASE_URL: ${API_BASE_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            WORKER_TYPE: ${WORKER_TYPE:-ai}
+            WHISPER_MODEL: ${WHISPER_MODEL:-base}
+            WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+            WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+            AI_STT_PROVIDER: ${AI_STT_PROVIDER:-local}
+            AI_TTS_PROVIDER: ${AI_TTS_PROVIDER:-local}
+            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+            GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+            CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+        # Uncomment for CUDA GPU support (nvidia-container-toolkit required):
+        # deploy:
+        #     resources:
+        #         reservations:
+        #             devices:
+        #                 - driver: nvidia
+        #                   count: 1
+        #                   capabilities: [gpu]
+        healthcheck:
+            test: ["CMD", "python3", "-c", "import faster_whisper; print('ok')"]
+            interval: 60s
+            timeout: 15s
+            retries: 3
+            start_period: 60s
+
+volumes:
+    whisper-models:
+        name: "worker-ai-whisper-models"

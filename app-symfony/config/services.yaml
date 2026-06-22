@@ -2,6 +2,13 @@ parameters:
     # Fallback so TELEGRAM_AUTH_MAX_AGE is optional in every env (24h replay window)
     env(TELEGRAM_AUTH_MAX_AGE): '86400'
 
+    # Worker pull-API static bearer token (must be set in .env.local for prod)
+    env(WORKER_API_TOKEN): ''
+
+    # Object-key prefix for S3 results (e.g. "dev/" in dev, empty in prod).
+    # Distinct from S3_BUCKET_PREFIX which is the bucket name prefix.
+    env(S3_PREFIX): ''
+
     # Refresh-token defaults (optional in every env). DSN = KeyDB db 1 (sessions).
     env(REFRESH_TTL): '2592000'
     env(REFRESH_GRACE): '60'
