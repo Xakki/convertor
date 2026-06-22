@@ -34,7 +34,7 @@
 **В работе (приоритет ↓):**
 - [x] **P0 — [[backend-hardening-bugs]]** — security/рантайм-баги аудита: Telegram replay (нет окна `auth_date`),
   возврат квоты при фейле, Archive-dispatch без stream, download getChunks, refresh-token.
-- [ ] **P1 — [[csv-xml-writer-hardening]]** — корректный `*→csv` для всех источников (CSV-writer теряет поля; xml→csv; типизация XML).
+- [x] **P1 — [[csv-xml-writer-hardening]]** — корректный `*→csv` для всех источников (CSV-writer теряет поля; xml→csv; типизация XML).
 - [ ] **P1 — [[upload-mime-size-validation]]** — MIME-allowlist + max-size на `POST /convert` до S3-PUT.
 - [ ] **P2 — [[api-openapi-swagger]]** — `/api/doc` + аннотации (бандл есть, документация пустая).
 - [ ] **P2 — [[worker-conversion-tests]]** — unit воркеров (`conftest.py`/`pytest.ini`, моки subprocess/SDK).

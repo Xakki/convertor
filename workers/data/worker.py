@@ -38,6 +38,60 @@ _MIME: dict[str, str] = {
 }
 
 
+def _coerce_leaf(text: Any) -> Any:
+    """Coerce XML leaf text to native int/float/bool — lossless round-trips only.
+
+    Format-sensitive strings (leading zeros, "1e3", ".5") and non-finite tokens
+    (nan/inf/-inf) fail the round-trip / finiteness check and stay strings;
+    empty/whitespace-only text is returned unchanged.
+    """
+    import math
+
+    if not isinstance(text, str):
+        return text
+    s = text.strip()
+    if not s:
+        return text
+    try:
+        if str(int(s)) == s:
+            return int(s)
+    except ValueError:
+        pass
+    try:
+        f = float(s)
+        if str(f) == s and math.isfinite(f):
+            return f
+    except ValueError:
+        pass
+    if s.lower() in ("true", "false"):
+        return s.lower() == "true"
+    return text
+
+
+def _records_for_csv(data: Any) -> list:
+    """Normalise *data* to a list of records (rows) for the CSV writer.
+
+    - list                -> used as-is (header = union of record keys).
+    - dict, single key:
+        - value is a list -> unwrap to rows         ({"rows": [...]})
+        - value is a dict -> descend recursively    (XML {"root": {"item": [...]}})
+        - value is scalar -> one row (the dict)
+    - dict, multiple keys -> ONE row preserving ALL top-level fields (lossless).
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if len(data) == 1:
+            value = next(iter(data.values()))
+            if isinstance(value, list):
+                return value
+            if isinstance(value, dict):
+                return _records_for_csv(value)
+            return [data]
+        return [data]
+    raise ValueError("cannot convert to CSV: unexpected data shape")
+
+
 def _read_data(src: Path) -> Any:
     """Read data from *src* into a Python object (list/dict)."""
     ext = src.suffix.lower().lstrip(".")
@@ -64,7 +118,7 @@ def _read_data(src: Path) -> Any:
         def _elem_to_dict(elem: ET.Element) -> Any:
             children = list(elem)
             if not children and not elem.attrib:
-                return elem.text
+                return _coerce_leaf(elem.text)
             result: dict[str, Any] = {}
             if elem.attrib:
                 result.update(elem.attrib)
@@ -123,18 +177,7 @@ def _write_data(data: Any, out_path: Path) -> None:
 
     if ext == "csv":
         import pandas as pd
-        if isinstance(data, list):
-            df = pd.DataFrame(data)
-        elif isinstance(data, dict):
-            # Try to get the first list-valued key as records
-            for v in data.values():
-                if isinstance(v, list):
-                    df = pd.DataFrame(v)
-                    break
-            else:
-                df = pd.DataFrame([data])
-        else:
-            raise ValueError("cannot convert to CSV: unexpected data shape")
+        df = pd.DataFrame(_records_for_csv(data))
         df.to_csv(out_path, index=False, encoding="utf-8")
         return
 

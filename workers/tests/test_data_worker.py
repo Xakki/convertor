@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from workers.data.worker import DataWorker, _read_data, _write_data
+from workers.data.worker import (
+    DataWorker,
+    _read_data,
+    _records_for_csv,
+    _write_data,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -194,6 +199,54 @@ class TestReadWrite:
         reloaded = json.loads(out_json.read_text(encoding="utf-8"))
         assert reloaded["released"] == "2024-01-15"
 
+    def test_records_for_csv_list_passthrough(self) -> None:
+        assert _records_for_csv(SAMPLE_RECORDS) == SAMPLE_RECORDS
+
+    def test_records_for_csv_single_key_list_unwrap(self) -> None:
+        assert _records_for_csv({"rows": SAMPLE_RECORDS}) == SAMPLE_RECORDS
+
+    def test_records_for_csv_single_key_dict_descent(self) -> None:
+        # XML-shaped: {root: {item: [...]}} -> descend twice -> rows
+        nested = {"catalog": {"book": SAMPLE_RECORDS}}
+        assert _records_for_csv(nested) == SAMPLE_RECORDS
+
+    def test_records_for_csv_multi_key_one_lossless_row(self) -> None:
+        data = {"title": "Release", "version": "1.0", "owner": "Alice"}
+        rows = _records_for_csv(data)
+        assert rows == [data]
+
+    def test_records_for_csv_single_scalar_dict_one_row(self) -> None:
+        data = {"title": "Release"}
+        assert _records_for_csv(data) == [data]
+
+    def test_xml_coerces_numbers_and_bools(self, tmp_path: Path) -> None:
+        xml_content = (
+            "<catalog><book><title>A</title><price>10</price>"
+            "<code>007</code><active>true</active></book></catalog>"
+        )
+        xml_file = tmp_path / "data.xml"
+        xml_file.write_text(xml_content, encoding="utf-8")
+
+        data = _read_data(xml_file)
+        book = data["catalog"]["book"]
+        assert book["price"] == 10
+        assert isinstance(book["price"], int)
+        assert book["code"] == "007"  # leading zero -> stays string
+        assert book["active"] is True
+
+    def test_xml_non_finite_floats_stay_strings(self, tmp_path: Path) -> None:
+        # nan/inf round-trip through float() but must NOT be coerced: they corrupt
+        # downstream json/toml/csv writers (invalid JSON, silent drop, empty cell).
+        xml_content = "<row><a>nan</a><b>inf</b><c>-inf</c></row>"
+        xml_file = tmp_path / "data.xml"
+        xml_file.write_text(xml_content, encoding="utf-8")
+
+        data = _read_data(xml_file)
+        row = data["row"]
+        assert row["a"] == "nan"
+        assert row["b"] == "inf"
+        assert row["c"] == "-inf"
+
     def test_unsupported_input_raises(self, tmp_path: Path) -> None:
         bad_file = tmp_path / "file.ini"
         bad_file.write_text("key = value", encoding="utf-8")
@@ -349,6 +402,100 @@ class TestDataConvert:
             "released": datetime.date(2024, 1, 15),
             "owner": {"name": "Bob", "age": 25},
         }
+
+    def test_json_multifield_to_csv_no_column_loss(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        payload = {"title": "Release", "version": "1.0", "owner": "Alice"}
+        src = tmp_path / "data.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, ext = worker.convert(_make_job(20, src, "json", "csv"))
+
+        assert ext == "csv"
+        df = pd.read_csv(Path(out_path))
+        assert set(df.columns) == {"title", "version", "owner"}
+        assert len(df) == 1
+
+    def test_json_scalars_beside_list_to_csv_no_field_loss(self, tmp_path: Path) -> None:
+        # Defect 1: scalar siblings next to a list value must not be dropped.
+        import pandas as pd
+
+        payload = {"project": "X", "version": "1.0", "rows": SAMPLE_RECORDS}
+        src = tmp_path / "data.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, ext = worker.convert(_make_job(24, src, "json", "csv"))
+
+        assert ext == "csv"
+        df = pd.read_csv(Path(out_path))
+        assert "project" in df.columns
+        assert "version" in df.columns
+        assert len(df) == 1
+
+    def test_toml_multifield_to_csv_no_column_loss(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        src = tmp_path / "data.toml"
+        src.write_text(
+            'title = "Convertor"\nowner = "Alice"\n[meta]\nversion = "1.0"\n',
+            encoding="utf-8",
+        )
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, ext = worker.convert(_make_job(21, src, "toml", "csv"))
+
+        assert ext == "csv"
+        df = pd.read_csv(Path(out_path))
+        assert {"title", "owner", "meta"} <= set(df.columns)
+        assert df.iloc[0]["title"] == "Convertor"
+        assert df.iloc[0]["owner"] == "Alice"
+
+    def test_yaml_multifield_to_csv_no_column_loss(self, tmp_path: Path) -> None:
+        import pandas as pd
+        import yaml
+
+        payload = {"title": "Release", "version": "1.0", "owner": "Alice"}
+        src = tmp_path / "data.yaml"
+        src.write_text(yaml.dump(payload, allow_unicode=True), encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, ext = worker.convert(_make_job(22, src, "yaml", "csv"))
+
+        assert ext == "csv"
+        df = pd.read_csv(Path(out_path))
+        assert set(df.columns) == {"title", "version", "owner"}
+        assert len(df) == 1
+
+    def test_xml_to_csv_tabular(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        xml_content = (
+            "<catalog>"
+            "<book><title>A</title><price>10</price></book>"
+            "<book><title>B</title><price>20</price></book>"
+            "</catalog>"
+        )
+        src = tmp_path / "data.xml"
+        src.write_text(xml_content, encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, ext = worker.convert(_make_job(23, src, "xml", "csv"))
+
+        assert ext == "csv"
+        df = pd.read_csv(Path(out_path))
+        assert list(df.columns) == ["title", "price"]
+        assert len(df) == 2
+        assert df.iloc[0]["title"] == "A"
+        assert df.iloc[0]["price"] == 10
+        assert df.iloc[1]["title"] == "B"
 
     def test_output_placed_in_work_dir_with_conv_id(self, tmp_path: Path) -> None:
         src = tmp_path / "data.json"
