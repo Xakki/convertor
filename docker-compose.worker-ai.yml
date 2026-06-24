@@ -1,24 +1,38 @@
-# Standalone compose for the AI worker (home WSL + GPU).
-# Pulls the Harbor image; no server-side KeyDB/S3 needed.
+# AI worker for the home host (WSL + RTX GPU). Pulls a prebuilt Harbor image;
+# no server-side KeyDB/S3 needed — all I/O goes through the HTTP pull-API.
+# Two flavors are published: worker-ai:cpu and worker-ai:cuda (GPU).
 #
-# Quick start:
-#   cp .env.worker-ai.example .env.worker-ai
-#   # Fill in API_BASE_URL and WORKER_API_TOKEN (and GPU settings if desired)
+# ============================================================================
+# ## Запуск дома (docker run) — основной путь, без compose, без сборки
+# ============================================================================
+# Prereqs: `docker login harbor.xakki.ru` first; for CUDA also install
+# nvidia-container-toolkit on the host. The pull-API token goes via -e (never
+# committed). Whisper model downloads on first run into the named volume (~500 MB).
+#
+#   CPU:
+#   docker run -d --name worker-ai --restart unless-stopped -e API_BASE_URL=https://convertor.xakki.pro -e WORKER_API_TOKEN=YOUR_TOKEN -e WHISPER_MODEL=base -e WHISPER_DEVICE=cpu -e WHISPER_COMPUTE_TYPE=int8 -e AI_STT_PROVIDER=local -e AI_TTS_PROVIDER=local -v worker-ai-models:/home/app/.cache/huggingface harbor.xakki.ru/convertor/worker-ai:cpu
+#
+#   CUDA (GPU):
+#   docker run -d --name worker-ai --restart unless-stopped --gpus all -e API_BASE_URL=https://convertor.xakki.pro -e WORKER_API_TOKEN=YOUR_TOKEN -e WHISPER_MODEL=base -e WHISPER_DEVICE=cuda -e WHISPER_COMPUTE_TYPE=float16 -e AI_STT_PROVIDER=local -e AI_TTS_PROVIDER=local -v worker-ai-models:/home/app/.cache/huggingface harbor.xakki.ru/convertor/worker-ai:cuda
+#
+# Update: docker pull harbor.xakki.ru/convertor/worker-ai:cuda && docker rm -f worker-ai && <re-run the line above>
+#
+# ============================================================================
+# ## Alternative: compose
+# ============================================================================
+#   cp .env.worker-ai.example .env.worker-ai   # fill API_BASE_URL + WORKER_API_TOKEN (+ GPU vars)
 #   docker compose -f docker-compose.worker-ai.yml --env-file .env.worker-ai up -d
-#
-# GPU (CUDA): install nvidia-container-toolkit, then set WHISPER_DEVICE=cuda in .env.worker-ai.
-# Whisper model: downloaded on first run; persisted in the whisper-models volume (~500 MB).
-# Image update: docker compose -f docker-compose.worker-ai.yml pull && ... up -d
+# GPU: uncomment the `deploy.resources.devices` block below and set WHISPER_DEVICE=cuda.
 
 services:
     worker-ai:
-        image: ${DOCKER_IMAGE_AI:-harbor.xakki.ru/convertor/worker-ai:latest}
+        image: ${DOCKER_IMAGE_AI:-harbor.xakki.ru/convertor/worker-ai:cpu}
         container_name: "worker-ai-home"
         restart: unless-stopped
         stop_grace_period: 60s
         stop_signal: SIGTERM
         volumes:
-            - whisper-models:/home/app/.cache/huggingface
+            - worker-ai-models:/home/app/.cache/huggingface
         environment:
             WORKER_MODULE: workers.ai.worker
             API_BASE_URL: ${API_BASE_URL}
@@ -48,5 +62,5 @@ services:
             start_period: 60s
 
 volumes:
-    whisper-models:
-        name: "worker-ai-whisper-models"
+    worker-ai-models:
+        name: "worker-ai-models"

@@ -55,6 +55,10 @@ down: ## Stop and remove containers
 .PHONY: restart
 restart: down up ## Restart all services
 
+.PHONY: restart-php
+restart-php: ## Restart only php + cron (e.g. to reload app-symfony/.env.local)
+	$(DC) restart php cron
+
 .PHONY: build
 build: ## Build all images
 	$(DC) build
@@ -196,17 +200,32 @@ build-image: ## Build worker-image image
 	docker build -t $(COMPOSE_PROJECT_NAME)/worker-image:latest \
 	    -f docker/workers/image.Dockerfile .
 
+# AI worker uses a two-layer Harbor scheme (base = heavy deps, rarely rebuilt;
+# thin worker = code layer). FLAVOR picks CPU or CUDA (GPU). See run instructions
+# in docker-compose.worker-ai.yml header.
+FLAVOR          ?= cpu
+HARBOR_NS       ?= harbor.xakki.ru/convertor
+AI_BASE_IMAGE   = $(HARBOR_NS)/worker-ai-base:$(FLAVOR)
+AI_WORKER_IMAGE = $(HARBOR_NS)/worker-ai:$(FLAVOR)
+
+.PHONY: build-ai-base
+build-ai-base: ## Build worker-ai BASE image (heavy deps). FLAVOR=cpu|cuda (default cpu)
+	docker build -t $(AI_BASE_IMAGE) \
+	    -f docker/workers/ai-base.$(FLAVOR).Dockerfile .
+
+.PHONY: push-ai-base
+push-ai-base: build-ai-base ## Build + push worker-ai BASE image to Harbor. FLAVOR=cpu|cuda
+	docker push $(AI_BASE_IMAGE)
+
 .PHONY: build-ai
-build-ai: ## Build worker-ai image (local tag; see push-ai to tag + push to Harbor)
-	docker build -t $(COMPOSE_PROJECT_NAME)/worker-ai:latest \
+build-ai: ## Build thin worker-ai image FROM the base. FLAVOR=cpu|cuda (default cpu)
+	docker build -t $(AI_WORKER_IMAGE) \
+	    --build-arg AI_BASE_IMAGE=$(AI_BASE_IMAGE) \
 	    -f docker/workers/ai.Dockerfile .
 
-DOCKER_IMAGE_AI ?= harbor.xakki.ru/convertor/worker-ai:latest
-
 .PHONY: push-ai
-push-ai: build-ai ## Build + tag + push worker-ai image to Harbor
-	docker tag $(COMPOSE_PROJECT_NAME)/worker-ai:latest $(DOCKER_IMAGE_AI)
-	docker push $(DOCKER_IMAGE_AI)
+push-ai: build-ai ## Build + push thin worker-ai image to Harbor. FLAVOR=cpu|cuda
+	docker push $(AI_WORKER_IMAGE)
 
 .PHONY: worker-ai-check
 worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compose)
@@ -227,4 +246,4 @@ build-metrics-exporter: ## Build metrics-exporter image
 	    -f docker/workers/metrics_exporter.Dockerfile .
 
 .PHONY: build-workers
-build-workers: build-libreoffice build-ffmpeg build-image build-ai build-data build-metrics-exporter ## Build all worker images
+build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter ## Build all on-server worker images (AI worker is remote — see build-ai / build-ai-base)
