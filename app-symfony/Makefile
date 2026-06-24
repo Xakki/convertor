@@ -1,0 +1,58 @@
+## Don't use alone — included into the parent Makefile
+
+# Shared exec chains for the php container (PHP_CONT comes from the root Makefile).
+PHP_EXEC = docker exec $(PHP_CONT)
+CONSOLE  = $(PHP_EXEC) php bin/console
+
+##@ PHP / Symfony
+
+.PHONY: restart-php
+restart-php: ## Restart only php + cron (e.g. to reload app-symfony/.env.local)
+	$(DC) restart php cron
+
+.PHONY: shell-php
+shell-php: ## Open shell inside php-fpm container
+	docker exec -it $(PHP_CONT) bash
+
+.PHONY: migrate
+migrate: ## Run Doctrine migrations (no interaction)
+	$(CONSOLE) doctrine:migrations:migrate --no-interaction
+
+.PHONY: migrate-diff
+migrate-diff: ## Generate a new Doctrine migration diff
+	$(CONSOLE) doctrine:migrations:diff
+
+.PHONY: seed-plans
+seed-plans: ## Seed subscription plans
+	$(CONSOLE) doctrine:fixtures:load --group=plans --no-interaction || \
+	    $(CONSOLE) app:seed:plans || true
+
+.PHONY: console
+console: ## Run Symfony console command (make console CMD="debug:router")
+	$(CONSOLE) $(CMD)
+
+.PHONY: composer
+composer: ## Run composer command (make composer CMD="require vendor/package")
+	$(PHP_EXEC) composer $(CMD)
+
+.PHONY: build-php
+build-php: ## PHP image is pulled from harbor (DOCKER_IMAGE_PHP), not built here
+	@echo "php image is pulled from harbor: $(DOCKER_IMAGE_PHP) — run 'make pull'. No local docker/php/Dockerfile."
+
+##@ PHP / Quality
+
+.PHONY: test-php
+test-php: ## Run PHPUnit tests
+	$(PHP_EXEC) php vendor/bin/phpunit
+
+.PHONY: phpstan
+phpstan: ## Run PHPStan static analysis
+	$(PHP_EXEC) php vendor/bin/phpstan analyse
+
+.PHONY: cs
+cs: ## Fix code style with php-cs-fixer
+	$(PHP_EXEC) php vendor/bin/php-cs-fixer fix --allow-risky=yes
+
+.PHONY: cs-check
+cs-check: ## Check code style with php-cs-fixer (no changes)
+	$(PHP_EXEC) php vendor/bin/php-cs-fixer fix --dry-run --diff --allow-risky=yes

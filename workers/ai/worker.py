@@ -31,35 +31,34 @@ import socket
 import subprocess
 import tempfile
 import uuid
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import httpx
 
 logger = logging.getLogger(__name__)
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8080")
 WORKER_API_TOKEN = os.getenv("WORKER_API_TOKEN", "")
 WORKER_TYPE = os.getenv("WORKER_TYPE", "ai")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "10"))
 
-# Computed once at startup: all API requests use f"{_api_base}/api/v1/..."
-# API_BASE_URL must be the application root (scheme+host only, no /api path suffix).
-# httpx drops path prefixes when request paths are absolute — building full URLs avoids this.
 _api_base: str = API_BASE_URL.rstrip("/")
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 
-TTS_ENGINE = os.getenv("TTS_ENGINE", "espeak")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
 
+TTS_ENGINE = os.getenv("TTS_ENGINE", "espeak")
 AI_STT_PROVIDER = os.getenv("AI_STT_PROVIDER", "local")
 AI_TTS_PROVIDER = os.getenv("AI_TTS_PROVIDER", "local")
+AI_EMBEDDING_PROVIDER = os.getenv("AI_EMBEDDING_PROVIDER", "local")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -68,18 +67,68 @@ CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
 WORK_DIR = Path(os.getenv("WORK_DIR", tempfile.gettempdir())).resolve()
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Format sets
 # ---------------------------------------------------------------------------
+_STT_INPUTS: set[str] = {"mp3", "wav", "ogg", "m4a", "opus", "flac"}
+_STT_OUTPUTS: set[str] = {"txt", "srt", "vtt"}
+_TTS_INPUTS: set[str] = {"txt", "md"}
+_TTS_OUTPUTS: set[str] = {"mp3", "wav", "ogg"}
+_EMBEDDING_INPUTS: set[str] = {"txt", "md", "json"}
+_EMBEDDING_OUTPUTS: set[str] = {"json"}
 
+_MIME: dict[str, str] = {
+    "txt": "text/plain",
+    "srt": "application/x-subrip",
+    "vtt": "text/vtt",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "ogg": "audio/ogg",
+    "json": "application/json",
+}
 
 def _safe_err(exc: Exception, limit: int = 200) -> str:
-    """Bounded error string safe to log and store.
-
-    Provider error responses can echo back user input (content-policy, text-too-long).
-    Capping at `limit` chars keeps those payloads out of logs and the DB error column.
-    """
     return f"{type(exc).__name__}: {str(exc)[:limit]}"
 
+def _derive_mode(src_fmt: str, tgt_fmt: str) -> str:
+    if src_fmt in _STT_INPUTS and tgt_fmt in _STT_OUTPUTS:
+        return "stt"
+    if src_fmt in _TTS_INPUTS and tgt_fmt in _TTS_OUTPUTS:
+        return "tts"
+    if src_fmt in _EMBEDDING_INPUTS and tgt_fmt in _EMBEDDING_OUTPUTS:
+        return "embedding"
+    raise ValueError(f"cannot derive conversion mode for {src_fmt!r} → {tgt_fmt!r}")
+
+# [Вспомогательные методы форматирования времени оставлены без изменений]
+def _fmt_srt_time(seconds: float) -> str:
+    h, rem = divmod(int(seconds), 3600); m, s = divmod(rem, 60); ms = int((seconds - int(seconds)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+def _fmt_vtt_time(seconds: float) -> str:
+    h, rem = divmod(int(seconds), 3600); m, s = divmod(rem, 60); ms = int((seconds - int(seconds)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+def _segments_to_text(segments: list, output_format: str) -> str:
+    if output_format == "txt": return "\n".join(seg.text.strip() for seg in segments)
+    if output_format == "srt":
+        return "\n".join(f"{i}\n{_fmt_srt_time(seg.start)} --> {_fmt_srt_time(seg.end)}\n{seg.text.strip()}\n" for i, seg in enumerate(segments, 1))
+    if output_format == "vtt":
+        return "WEBVTT\n\n" + "\n".join(f"{_fmt_vtt_time(seg.start)} --> {_fmt_vtt_time(seg.end)}\n{seg.text.strip()}\n" for seg in segments)
+    raise ValueError(f"unsupported format: {output_format}")
+
+# ---------------------------------------------------------------------------
+# NEW: Потоковое распознавание звука (Streaming Speech-to-Text)
+# ---------------------------------------------------------------------------
+async def _speech_to_text_stream(src: Path, chunk_size_bytes: int = 32000) -> AsyncGenerator[str, None]:
+    """Генератор для эмуляции или обработки потокового аудио (chunk-by-chunk транскрипция)."""
+    from faster_whisper import WhisperModel
+    model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE)
+
+    # В реальном стриминге здесь обрабатывается входящий поток байт (например, через ffmpeg pipe)
+    # Ниже реализована логика для обработки итерируемых аудио-сегментов
+    segments, _ = await asyncio.to_thread(model.transcribe, str(src), beam_size=3, vad_filter=True)
+    for segment in segments:
+        yield json.dumps({"start": segment.start, "end": segment.end, "text": segment.text.strip()}, ensure_ascii=False)
+        await asyncio.sleep(0.01)
 
 # ---------------------------------------------------------------------------
 # CAPABILITIES — read by the routing-drift test (keeps ai stream registered)
@@ -91,89 +140,14 @@ CAPABILITIES: dict[str, Any] = {
 }
 
 # ---------------------------------------------------------------------------
-# Format sets
+# STT / TTS Методы
 # ---------------------------------------------------------------------------
-
-_STT_INPUTS: set[str] = {"mp3", "wav", "ogg", "m4a", "opus", "flac"}
-_STT_OUTPUTS: set[str] = {"txt", "srt", "vtt"}
-_TTS_INPUTS: set[str] = {"txt", "md"}
-_TTS_OUTPUTS: set[str] = {"mp3", "wav", "ogg"}
-
-_MIME: dict[str, str] = {
-    "txt": "text/plain",
-    "srt": "application/x-subrip",
-    "vtt": "text/vtt",
-    "mp3": "audio/mpeg",
-    "wav": "audio/wav",
-    "ogg": "audio/ogg",
-}
-
-# ---------------------------------------------------------------------------
-# Mode derivation (flag-agnostic)
-# ---------------------------------------------------------------------------
-
-
-def _derive_mode(src_fmt: str, tgt_fmt: str) -> str:
-    """Derive STT/TTS conversion mode from format pair only. Raises ValueError if underivable."""
-    if src_fmt in _STT_INPUTS and tgt_fmt in _STT_OUTPUTS:
-        return "stt"
-    if src_fmt in _TTS_INPUTS and tgt_fmt in _TTS_OUTPUTS:
-        return "tts"
-    raise ValueError(
-        f"cannot derive conversion mode for {src_fmt!r} → {tgt_fmt!r}: "
-        f"not a valid STT pair ({_STT_INPUTS} → {_STT_OUTPUTS}) "
-        f"nor TTS pair ({_TTS_INPUTS} → {_TTS_OUTPUTS})"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Time formatters (STT subtitle output)
-# ---------------------------------------------------------------------------
-
-
-def _fmt_srt_time(seconds: float) -> str:
-    h, rem = divmod(int(seconds), 3600)
-    m, s = divmod(rem, 60)
-    ms = int((seconds - int(seconds)) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-
-def _fmt_vtt_time(seconds: float) -> str:
-    h, rem = divmod(int(seconds), 3600)
-    m, s = divmod(rem, 60)
-    ms = int((seconds - int(seconds)) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
-
-
-def _segments_to_text(segments: list, output_format: str) -> str:
-    if output_format == "txt":
-        return "\n".join(seg.text.strip() for seg in segments)
-    if output_format == "srt":
-        lines: list[str] = []
-        for i, seg in enumerate(segments, 1):
-            lines.append(f"{i}\n{_fmt_srt_time(seg.start)} --> {_fmt_srt_time(seg.end)}\n{seg.text.strip()}\n")
-        return "\n".join(lines)
-    if output_format == "vtt":
-        lines = ["WEBVTT", ""]
-        for seg in segments:
-            lines.append(f"{_fmt_vtt_time(seg.start)} --> {_fmt_vtt_time(seg.end)}\n{seg.text.strip()}\n")
-        return "\n".join(lines)
-    raise ValueError(f"unsupported STT output format: {output_format}")
-
-
-# ---------------------------------------------------------------------------
-# STT — Local (faster-whisper)
-# ---------------------------------------------------------------------------
-
-
 async def _stt_local(src: Path, output_format: str) -> str:
-    from faster_whisper import WhisperModel  # type: ignore[import]
-
-    def _run() -> str:
+    from faster_whisper import WhisperModel
+    def _run():
         model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE)
         segments, _ = model.transcribe(str(src), beam_size=5)
         return _segments_to_text(list(segments), output_format)
-
     return await asyncio.to_thread(_run)
 
 
@@ -276,7 +250,6 @@ async def _stt_claude(src: Path, output_format: str) -> str:
     if output_format == "vtt" and not text.startswith("WEBVTT"):
         text = "WEBVTT\n\n" + text
     return text
-
 
 def _audio_mime(src: Path) -> str:
     return {
@@ -417,6 +390,38 @@ async def _text_to_speech(src: Path, output_format: str, out_path: Path) -> None
 
     logger.info("TTS done: %s → %s via %s", src.name, out_path.name, provider)
 
+# ---------------------------------------------------------------------------
+# NEW: Обработка Эмбеддингов (_embedding)
+# ---------------------------------------------------------------------------
+async def _embedding_local(text: str) -> list[float]:
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer(EMBEDDING_MODEL, device=EMBEDDING_DEVICE)
+    embedding = await asyncio.to_thread(model.encode, text, convert_to_numpy=True)
+    return embedding.tolist()
+
+async def _embedding_openai(text: str) -> list[float]:
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/embeddings",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": "text-embedding-3-small", "input": text}
+        )
+        response.raise_for_status()
+        return response.json()["data"][0]["embedding"]
+
+async def _process_embedding(src: Path, out_path: Path) -> None:
+    text = src.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError("Empty text file")
+
+    provider = AI_EMBEDDING_PROVIDER
+    if provider == "openai":
+        vectors = await _embedding_openai(text)
+    else:
+        vectors = await _embedding_local(text)
+
+    out_path.write_text(json.dumps({"embedding": vectors}), encoding="utf-8")
+    logger.info("Embedding processing completed via %s", provider)
 
 # ---------------------------------------------------------------------------
 # Core convert (async; no subType — mode derived from format pair only)
@@ -444,8 +449,10 @@ async def convert(job: dict[str, Any]) -> tuple[str, str, str]:
 
     if mode == "stt":
         await _speech_to_text(src, tgt_fmt, out_path)
-    else:
+    elif mode == "tts":
         await _text_to_speech(src, tgt_fmt, out_path)
+    elif mode == "embedding":
+        await _process_embedding(src, out_path)
 
     if not out_path.exists():
         raise RuntimeError("AI conversion produced no output file")

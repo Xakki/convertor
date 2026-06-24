@@ -1,0 +1,144 @@
+## Don't use alone — included into the parent Makefile
+
+# On-server worker image name prefix (COMPOSE_PROJECT_NAME from the root .env).
+IMG = $(COMPOSE_PROJECT_NAME)
+
+# Build one on-server worker image. $(1)=image stem (the /<stem>:latest tag),
+# $(2)=dockerfile stem (docker/workers/<stem>.Dockerfile). Most workers share the
+# stem; metrics-exporter does NOT (tag has no `worker-` prefix, dockerfile is
+# metrics_exporter.Dockerfile) — hence two params.
+define build_img
+docker build -t $(IMG)/$(1):latest -f docker/workers/$(2).Dockerfile .
+endef
+
+##@ Build individual worker images
+
+.PHONY: build-libreoffice
+build-libreoffice: ## Build worker-libreoffice image
+	$(call build_img,worker-libreoffice,libreoffice)
+
+.PHONY: build-ffmpeg
+build-ffmpeg: ## Build worker-ffmpeg image
+	$(call build_img,worker-ffmpeg,ffmpeg)
+
+.PHONY: build-image
+build-image: ## Build worker-image image
+	$(call build_img,worker-image,image)
+
+.PHONY: build-data
+build-data: ## Build worker-data image
+	$(call build_img,worker-data,data)
+
+.PHONY: build-metrics-exporter
+build-metrics-exporter: ## Build metrics-exporter image
+	$(call build_img,metrics-exporter,metrics_exporter)
+
+.PHONY: build-workers
+build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter ## Build all on-server worker images (AI worker is remote — see build-ai / build-ai-base)
+
+##@ Build worker-ai (remote / Harbor)
+
+# AI worker uses a two-layer Harbor scheme (base = heavy deps, rarely rebuilt;
+# thin worker = code layer). FLAVOR picks CPU or CUDA (GPU). See run instructions
+# in docker-compose.worker-ai.yml header.
+FLAVOR          ?= cpu
+HARBOR_NS       ?= harbor.xakki.ru/convertor
+AI_BASE_IMAGE   = $(HARBOR_NS)/worker-ai-base
+AI_WORKER_IMAGE = $(HARBOR_NS)/worker-ai:$(FLAVOR)
+
+.PHONY: build-ai-base
+build-ai-base: ## Build worker-ai BASE image (heavy deps). FLAVOR=cpu|cuda (default cpu)
+	docker build -t $(AI_BASE_IMAGE) \
+	    -f docker/workers/ai-base.Dockerfile .
+
+.PHONY: push-ai-base
+push-ai-base: build-ai-base ## Build + push worker-ai BASE image to Harbor. FLAVOR=cpu|cuda
+	docker push $(AI_BASE_IMAGE)
+
+.PHONY: build-ai
+build-ai: ## Build thin worker-ai image FROM the base. FLAVOR=cpu|cuda (default cpu)
+	docker build -t $(AI_WORKER_IMAGE) \
+	    --build-arg AI_BASE_IMAGE=$(AI_BASE_IMAGE) \
+	    -f docker/workers/ai.$(FLAVOR).Dockerfile .
+
+.PHONY: push-ai
+push-ai: build-ai ## Build + push thin worker-ai image to Harbor. FLAVOR=cpu|cuda
+	docker push $(AI_WORKER_IMAGE)
+
+.PHONY: worker-ai-check
+worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compose)
+	docker compose -f docker-compose.worker-ai.yml config -q
+
+##@ Queue / Workers
+
+.PHONY: worker-logs
+worker-logs: ## Tail logs for on-server worker services (worker-ai is remote — see docker-compose.worker-ai.yml)
+	$(DC) logs -f worker-libreoffice worker-ffmpeg worker-image worker-data
+
+.PHONY: queue-status
+queue-status: ## Show queue lengths in KeyDB (db 2)
+	@echo "=== Queue lengths (KeyDB db 2) ==="
+	@docker exec $(KEYDB_CONT) keydb-cli -a "$(REDIS_PASSWORD)" -n $(REDIS_QUEUE_DB) \
+	    eval "local ks=redis.call('keys','queue:*') local out={} for _,k in ipairs(ks) do out[#out+1]=k..': '..redis.call('llen',k) end return out" 0
+
+##@ Worker tests
+
+# Per-worker unit runs: each worker's tests execute inside that worker's own
+# image (interpreter + pinned deps + system binaries). Source is bind-mounted
+# read-only and PYTHONPATH=/src, so code comes from the working tree; the image
+# only supplies deps. pytest(+asyncio) is installed at runtime (mirrors
+# test-image-ocr). `-m "not e2e"` keeps the same selection as the old host run;
+# integration tests now run for real (the binary IS present in the worker image).
+# $(1)=image  $(2)=test files  $(3)=extra pip pkgs
+define RUN_PYTEST_IN
+docker run --rm --entrypoint sh \
+	-v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp -u root $(1) \
+	-c "pip install --no-cache-dir --quiet pytest pytest-asyncio $(3) && python3 -m pytest $(2) -m 'not e2e' -p no:cacheprovider -ra -v"
+endef
+
+.PHONY: test-python
+test-python: test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai ## Run the unit suite per-worker INSIDE each worker image (excludes e2e + routing-drift; see test-e2e / test-drift)
+
+.PHONY: test-python-data
+test-python-data: build-data ## Unit tests for worker-data (+ shared common: stream_consumer, safe_path)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-data:latest,workers/tests/test_data_worker.py workers/tests/test_stream_consumer.py workers/tests/test_safe_path.py,)
+
+.PHONY: test-python-ffmpeg
+test-python-ffmpeg: build-ffmpeg ## Unit + integration tests for worker-ffmpeg (real ffmpeg binary)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ffmpeg_worker.py workers/tests/test_ffmpeg_integration.py,)
+
+.PHONY: test-python-image
+test-python-image: build-image ## Unit + OCR-integration tests for worker-image (+ cross-worker unsupported-format matrix)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-image:latest,workers/tests/test_image_worker_ocr.py workers/tests/test_image_worker_stream.py workers/tests/test_image_worker_ocr_integration.py workers/tests/test_unsupported_formats.py,)
+
+.PHONY: test-python-libreoffice
+test-python-libreoffice: build-libreoffice ## Unit + integration tests for worker-libreoffice (real soffice/pandoc/pdftotext)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-libreoffice:latest,workers/tests/test_libreoffice_worker.py workers/tests/test_libreoffice_integration.py,)
+
+.PHONY: test-python-metrics
+test-python-metrics: build-metrics-exporter ## Unit tests for metrics-exporter (needs prometheus_client — only in its image)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/metrics-exporter:latest,workers/tests/test_metrics_exporter.py,)
+
+# AI worker is remote/Harbor-built; its image isn't built on-server. Its unit
+# tests only need httpx (worker.py imports the heavy STT/TTS libs lazily), so we
+# run them in the lean worker-ffmpeg image with httpx pip-installed at runtime.
+.PHONY: test-python-ai
+test-python-ai: build-ffmpeg ## AI-worker unit tests (httpx only; runs in worker-ffmpeg image, no Harbor pull)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py,httpx)
+
+.PHONY: test-drift
+test-drift: ## Routing-contract: PHP registry routing keys vs Python worker CAPABILITIES (may fail on known gaps — see .claude/kanban/grooming/)
+	PYTHONPATH=. pytest workers/tests/test_routing_drift.py -v
+
+.PHONY: test-e2e
+test-e2e: ## Real S3 in/out e2e for ffmpeg + data workers (run `make up` first)
+	$(COMPOSE_TEST) up -d --force-recreate --no-deps worker-ffmpeg worker-data
+	$(COMPOSE_TEST) run --rm --no-deps --user $(PUID):$(PGID) \
+	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
+	    --entrypoint sh worker-ffmpeg \
+	    -c "pip install --no-cache-dir --quiet --user pytest && \
+	        python3 -m pytest workers/tests/test_workers_e2e.py -m e2e -p no:cacheprovider -ra -v"; \
+	    rc=$$?; \
+	    echo "[test-e2e] restoring workers to base config…"; \
+	    $(DC) up -d --force-recreate --no-deps worker-ffmpeg worker-data >/dev/null; \
+	    exit $$rc

@@ -50,3 +50,6 @@ typer==0.25.1
 typing_extensions==4.15.0
 urllib3==2.7.0
 yarl==1.24.2
+sentence-transformers
+psutil
+jiwer

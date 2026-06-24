@@ -1,0 +1,27 @@
+{
+    "_embedding": {
+        "models": ["all-MiniLM-L6-v2", "paraphrase-multilingual-MiniLM-L12-v2"],
+        "input_file": "/work/test_data/large_text.txt",
+        "ground_truth": "/work/test_data/embedding_ground_truth.json"
+    },
+    "_speech_to_text": {
+        "models": ["tiny", "base"],
+        "test_cases": [
+            {
+                "audio": "/work/test_data/audio1.wav",
+                "text": "Привет мир, это тестовая запись звука"
+            },
+            {
+                "audio": "/work/test_data/audio2.wav",
+                "text": "Второй проверочный файл для распознавания"
+            }
+        ]
+    },
+    "_text_to_speech": {
+        "test_cases": [
+            {
+                "text_file": "/work/test_data/tts_input1.txt"
+            }
+        ]
+    }
+}

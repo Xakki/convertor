@@ -17,12 +17,12 @@ SaaS-сервис конвертации файлов всех форматов.
 - **Queue**: KeyDB (Redis-compatible) + Symfony Messenger
 - **Workers**: Python 3.12 микросервисы (по одному на категорию конвертации)
 - **DB**: MariaDB 11 + Doctrine ORM
-- **Storage**: /shared-files/ локально → MinIO в проде
+- **Storage**: только S3/MinIO (бакеты `${S3_BUCKET_PREFIX}-inputs` / `-results`); общего тома `/shared-files` нет (убран 2026-06-20)
 
 ## Code Quality
-- `composer test:phpstan` — обязательно исправлять все ошибки PHPStan
-- `composer test:cs-fix` — автоисправление code style
-- `composer test:cs-check` — ручное исправление остального
+- `make phpstan` — обязательно исправлять все ошибки PHPStan
+- `make cs` — автоисправление code style
+- `make cs-check` — ручное исправление остального
 - PHPStan игнорировать только в крайнем случае (максимум 2 попытки исправить)
 - Тесты: PHPUnit для PHP, pytest для Python воркеров
 
@@ -54,7 +54,7 @@ SaaS-сервис конвертации файлов всех форматов.
 
 ## File Handling
 - Загружаемые файлы: валидация MIME + расширения
-- Path traversal защита: только внутри /shared-files/
+- Path traversal защита: ключи S3 валидируются, выход за пределы бакета (`${S3_BUCKET_PREFIX}-inputs`/`-results`) запрещён
 - Авто-удаление через 24ч (Symfony Scheduler)
 - Max size: 50MB free, 500MB paid (Nginx limit_req + PHP проверка)
 
