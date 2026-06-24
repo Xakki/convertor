@@ -1,0 +1,44 @@
+report_dir: /work/reports
+
+models:
+
+    embedding:
+
+        - name: bge-m3
+          model: BAAI/bge-m3
+          device: cpu
+
+        - name: e5-large
+          model: intfloat/multilingual-e5-large
+          device: cpu
+
+    speech_to_text:
+
+        - name: whisper-base
+          model: base
+          device: cpu
+          compute_type: int8
+
+    text_to_speech:
+
+        - name: espeak
+          provider: local
+
+tests:
+
+    embedding:
+
+        - id: embedding_test_1
+          input: /data/embedding/document.txt
+          reference: /data/embedding/triplets.jsonl
+
+    speech_to_text:
+
+        - id: stt_test_1
+          input: /data/stt/audio.wav
+          transcript: /data/stt/audio.txt
+
+    text_to_speech:
+
+        - id: tts_test_1
+          input: /data/tts/input.txt

@@ -31,50 +31,97 @@ import socket
 import subprocess
 import tempfile
 import uuid
-import json
 from pathlib import Path
-from typing import Any, AsyncGenerator
-
+from typing import Any
+import json
 import httpx
+from workers.ai.providers.embedding import generate_embedding
+from workers.ai.providers.streaming_stt import StreamingWhisper
+from workers.ai.providers.stt import SpeechToTextProvider
+from workers.ai.providers.tts import TextToSpeechProvider
 
 logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8080")
 WORKER_API_TOKEN = os.getenv("WORKER_API_TOKEN", "")
 WORKER_TYPE = os.getenv("WORKER_TYPE", "ai")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "10"))
 
+# Computed once at startup: all API requests use f"{_api_base}/api/v1/..."
+# API_BASE_URL must be the application root (scheme+host only, no /api path suffix).
+# httpx drops path prefixes when request paths are absolute — building full URLs avoids this.
 _api_base: str = API_BASE_URL.rstrip("/")
 
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
-WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
-WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
-
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
-
-TTS_ENGINE = os.getenv("TTS_ENGINE", "espeak")
-AI_STT_PROVIDER = os.getenv("AI_STT_PROVIDER", "local")
-AI_TTS_PROVIDER = os.getenv("AI_TTS_PROVIDER", "local")
-AI_EMBEDDING_PROVIDER = os.getenv("AI_EMBEDDING_PROVIDER", "local")
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
-
 WORK_DIR = Path(os.getenv("WORK_DIR", tempfile.gettempdir())).resolve()
+
+EMBEDDING_MODEL = os.getenv(
+    "EMBEDDING_MODEL",
+    "BAAI/bge-m3",
+)
+
+EMBEDDING_DEVICE = os.getenv(
+    "EMBEDDING_DEVICE",
+    WHISPER_DEVICE,
+)
+
+STREAM_WINDOW_SEC = int(
+    os.getenv(
+        "STREAM_WINDOW_SEC",
+        "20",
+    )
+)
+
+STREAM_OVERLAP_SEC = int(
+    os.getenv(
+        "STREAM_OVERLAP_SEC",
+        "2",
+    )
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _safe_err(exc: Exception, limit: int = 200) -> str:
+    """Bounded error string safe to log and store.
+
+    Provider error responses can echo back user input (content-policy, text-too-long).
+    Capping at `limit` chars keeps those payloads out of logs and the DB error column.
+    """
+    return f"{type(exc).__name__}: {str(exc)[:limit]}"
+
+
+# ---------------------------------------------------------------------------
+# CAPABILITIES — read by the routing-drift test (keeps ai stream registered)
+# ---------------------------------------------------------------------------
+
+CAPABILITIES: dict[str, Any] = {
+    "routing_keys": [
+        "ai",
+        "embedding",
+        "speech_to_text_stream",
+    ],
+    "matrix": {
+        "speech_to_text": True,
+        "speech_to_text_stream": True,
+        "text_to_speech": True,
+        "embedding": True,
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Format sets
 # ---------------------------------------------------------------------------
+
 _STT_INPUTS: set[str] = {"mp3", "wav", "ogg", "m4a", "opus", "flac"}
 _STT_OUTPUTS: set[str] = {"txt", "srt", "vtt"}
 _TTS_INPUTS: set[str] = {"txt", "md"}
 _TTS_OUTPUTS: set[str] = {"mp3", "wav", "ogg"}
-_EMBEDDING_INPUTS: set[str] = {"txt", "md", "json"}
-_EMBEDDING_OUTPUTS: set[str] = {"json"}
 
 _MIME: dict[str, str] = {
     "txt": "text/plain",
@@ -83,383 +130,204 @@ _MIME: dict[str, str] = {
     "mp3": "audio/mpeg",
     "wav": "audio/wav",
     "ogg": "audio/ogg",
-    "json": "application/json",
 }
 
-def _safe_err(exc: Exception, limit: int = 200) -> str:
-    return f"{type(exc).__name__}: {str(exc)[:limit]}"
+# ---------------------------------------------------------------------------
+# Mode derivation (flag-agnostic)
+# ---------------------------------------------------------------------------
+
 
 def _derive_mode(src_fmt: str, tgt_fmt: str) -> str:
+    """Derive STT/TTS conversion mode from format pair only. Raises ValueError if underivable."""
     if src_fmt in _STT_INPUTS and tgt_fmt in _STT_OUTPUTS:
         return "stt"
     if src_fmt in _TTS_INPUTS and tgt_fmt in _TTS_OUTPUTS:
         return "tts"
-    if src_fmt in _EMBEDDING_INPUTS and tgt_fmt in _EMBEDDING_OUTPUTS:
-        return "embedding"
-    raise ValueError(f"cannot derive conversion mode for {src_fmt!r} → {tgt_fmt!r}")
+    raise ValueError(
+        f"cannot derive conversion mode for {src_fmt!r} → {tgt_fmt!r}: "
+        f"not a valid STT pair ({_STT_INPUTS} → {_STT_OUTPUTS}) "
+        f"nor TTS pair ({_TTS_INPUTS} → {_TTS_OUTPUTS})"
+    )
 
-# [Вспомогательные методы форматирования времени оставлены без изменений]
-def _fmt_srt_time(seconds: float) -> str:
-    h, rem = divmod(int(seconds), 3600); m, s = divmod(rem, 60); ms = int((seconds - int(seconds)) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-def _fmt_vtt_time(seconds: float) -> str:
-    h, rem = divmod(int(seconds), 3600); m, s = divmod(rem, 60); ms = int((seconds - int(seconds)) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
-
-def _segments_to_text(segments: list, output_format: str) -> str:
-    if output_format == "txt": return "\n".join(seg.text.strip() for seg in segments)
-    if output_format == "srt":
-        return "\n".join(f"{i}\n{_fmt_srt_time(seg.start)} --> {_fmt_srt_time(seg.end)}\n{seg.text.strip()}\n" for i, seg in enumerate(segments, 1))
-    if output_format == "vtt":
-        return "WEBVTT\n\n" + "\n".join(f"{_fmt_vtt_time(seg.start)} --> {_fmt_vtt_time(seg.end)}\n{seg.text.strip()}\n" for seg in segments)
-    raise ValueError(f"unsupported format: {output_format}")
 
 # ---------------------------------------------------------------------------
-# NEW: Потоковое распознавание звука (Streaming Speech-to-Text)
-# ---------------------------------------------------------------------------
-async def _speech_to_text_stream(src: Path, chunk_size_bytes: int = 32000) -> AsyncGenerator[str, None]:
-    """Генератор для эмуляции или обработки потокового аудио (chunk-by-chunk транскрипция)."""
-    from faster_whisper import WhisperModel
-    model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE)
-
-    # В реальном стриминге здесь обрабатывается входящий поток байт (например, через ffmpeg pipe)
-    # Ниже реализована логика для обработки итерируемых аудио-сегментов
-    segments, _ = await asyncio.to_thread(model.transcribe, str(src), beam_size=3, vad_filter=True)
-    for segment in segments:
-        yield json.dumps({"start": segment.start, "end": segment.end, "text": segment.text.strip()}, ensure_ascii=False)
-        await asyncio.sleep(0.01)
-
-# ---------------------------------------------------------------------------
-# CAPABILITIES — read by the routing-drift test (keeps ai stream registered)
+# EMBEDDING
 # ---------------------------------------------------------------------------
 
-CAPABILITIES: dict[str, Any] = {
-    "routing_keys": ["ai"],
-    "matrix": {},
-}
+
+async def _embedding(
+    src: Path,
+    out_path: Path,
+    model_name: str,
+) -> None:
+
+    await asyncio.to_thread(
+        generate_embedding,
+        src,
+        out_path,
+        model_name,
+        EMBEDDING_DEVICE,
+    )
+
 
 # ---------------------------------------------------------------------------
-# STT / TTS Методы
+# STREAMING STT
 # ---------------------------------------------------------------------------
-async def _stt_local(src: Path, output_format: str) -> str:
-    from faster_whisper import WhisperModel
+
+
+async def _speech_to_text_stream(
+    src: Path,
+    out_path: Path,
+) -> None:
+
     def _run():
-        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE)
-        segments, _ = model.transcribe(str(src), beam_size=5)
-        return _segments_to_text(list(segments), output_format)
-    return await asyncio.to_thread(_run)
 
-
-# ---------------------------------------------------------------------------
-# STT — OpenAI Whisper API
-# ---------------------------------------------------------------------------
-
-
-async def _stt_openai(src: Path, output_format: str) -> str:
-    response_format = output_format if output_format in ("srt", "vtt") else "text"
-
-    async with httpx.AsyncClient(timeout=300) as client:
-        with src.open("rb") as f:
-            response = await client.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-                data={"model": "whisper-1", "response_format": response_format},
-                files={"file": (src.name, f, "audio/mpeg")},
-            )
-        response.raise_for_status()
-
-    text = response.text
-    if output_format == "vtt" and not text.startswith("WEBVTT"):
-        text = "WEBVTT\n\n" + text
-    return text
-
-
-# ---------------------------------------------------------------------------
-# STT — Google Gemini (audio understanding)
-# ---------------------------------------------------------------------------
-
-
-async def _stt_gemini(src: Path, output_format: str) -> str:
-    audio_data = base64.b64encode(src.read_bytes()).decode()
-    mime = _audio_mime(src)
-
-    prompt = "Transcribe this audio exactly. Return only the transcript text without any commentary."
-    if output_format == "srt":
-        prompt = "Transcribe this audio in SRT subtitle format with timestamps."
-    elif output_format == "vtt":
-        prompt = "Transcribe this audio in WebVTT subtitle format with timestamps."
-
-    payload = {
-        "contents": [{"parts": [
-            {"text": prompt},
-            {"inline_data": {"mime_type": mime, "data": audio_data}},
-        ]}],
-        "generationConfig": {"temperature": 0},
-    }
-
-    async with httpx.AsyncClient(timeout=300) as client:
-        response = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-            f"?key={GEMINI_API_KEY}",
-            json=payload,
+        model = StreamingWhisper(
+            model_name=WHISPER_MODEL,
+            device=WHISPER_DEVICE,
+            compute_type=WHISPER_COMPUTE_TYPE,
+            window_sec=STREAM_WINDOW_SEC,
+            overlap_sec=STREAM_OVERLAP_SEC,
         )
-        response.raise_for_status()
 
-    result = response.json()
-    text = result["candidates"][0]["content"]["parts"][0]["text"]
-    if output_format == "vtt" and not text.startswith("WEBVTT"):
-        text = "WEBVTT\n\n" + text
-    return text
+        return model.process_file(src)
 
+    result = await asyncio.to_thread(
+        _run,
+    )
 
-# ---------------------------------------------------------------------------
-# STT — Anthropic Claude (audio via base64)
-# ---------------------------------------------------------------------------
-
-
-async def _stt_claude(src: Path, output_format: str) -> str:
-    audio_data = base64.b64encode(src.read_bytes()).decode()
-    mime = _audio_mime(src)
-
-    prompt = "Transcribe this audio exactly. Return only the transcript text."
-    if output_format == "srt":
-        prompt = "Transcribe this audio in SRT subtitle format with timestamps."
-    elif output_format == "vtt":
-        prompt = "Transcribe this audio in WebVTT subtitle format with timestamps."
-
-    payload = {
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 8192,
-        "messages": [{"role": "user", "content": [
-            {"type": "document", "source": {"type": "base64", "media_type": mime, "data": audio_data}},
-            {"type": "text", "text": prompt},
-        ]}],
-    }
-
-    async with httpx.AsyncClient(timeout=300) as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01"},
-            json=payload,
-        )
-        response.raise_for_status()
-
-    result = response.json()
-    text = result["content"][0]["text"]
-    if output_format == "vtt" and not text.startswith("WEBVTT"):
-        text = "WEBVTT\n\n" + text
-    return text
-
-def _audio_mime(src: Path) -> str:
-    return {
-        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
-        ".m4a": "audio/mp4", ".opus": "audio/opus", ".flac": "audio/flac",
-    }.get(src.suffix.lower(), "audio/mpeg")
-
-
-# ---------------------------------------------------------------------------
-# STT — dispatcher
-# ---------------------------------------------------------------------------
-
-
-async def _speech_to_text(src: Path, output_format: str, out_path: Path) -> None:
-    provider = AI_STT_PROVIDER
-    try:
-        if provider == "openai":
-            text = await _stt_openai(src, output_format)
-        elif provider == "gemini":
-            text = await _stt_gemini(src, output_format)
-        elif provider == "claude":
-            text = await _stt_claude(src, output_format)
-        else:
-            text = await _stt_local(src, output_format)
-    except Exception as exc:
-        if provider != "local":
-            logger.warning("STT provider %s failed (%s), falling back to local", provider, _safe_err(exc))
-            text = await _stt_local(src, output_format)
-        else:
-            raise
-    out_path.write_text(text, encoding="utf-8")
-    logger.info("STT done: %s → %s (%d chars) via %s", src.name, out_path.name, len(text), provider)
-
-
-# ---------------------------------------------------------------------------
-# TTS — Local (espeak-ng)
-# ---------------------------------------------------------------------------
-
-
-async def _tts_espeak(text: str, output_format: str, out_path: Path) -> None:
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        wav_path = Path(tmp.name)
-    try:
-        # Pass text via stdin (--stdin) to avoid OSError E2BIG on large inputs.
-        proc = await asyncio.create_subprocess_exec(
-            "espeak-ng", "--stdin", "--stdout",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        out_b, err_b = await asyncio.wait_for(proc.communicate(input=text.encode("utf-8")), timeout=30)
-        if proc.returncode != 0:
-            raise RuntimeError(f"espeak-ng failed: {err_b.decode('utf-8', 'replace').strip()}")
-        wav_path.write_bytes(out_b)
-
-        if output_format == "wav":
-            out_path.write_bytes(wav_path.read_bytes())
-        else:
-            conv = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-i", str(wav_path), "-y", str(out_path),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            _, ferr = await asyncio.wait_for(conv.communicate(), timeout=60)
-            if conv.returncode != 0:
-                raise RuntimeError(f"ffmpeg TTS conversion failed: {ferr.decode('utf-8', 'replace').strip()}")
-    finally:
-        wav_path.unlink(missing_ok=True)
-
-
-def _tts_pyttsx3(text: str, output_format: str, out_path: Path) -> None:
-    import pyttsx3  # type: ignore[import]
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        wav_path = Path(tmp.name)
-    ok = False
-    try:
-        engine = pyttsx3.init()
-        engine.save_to_file(text, str(wav_path))
-        engine.runAndWait()
-        if output_format == "wav":
-            out_path.write_bytes(wav_path.read_bytes())
-        else:
-            subprocess.run(["ffmpeg", "-i", str(wav_path), "-y", str(out_path)], check=True, capture_output=True)
-        ok = True
-    finally:
-        wav_path.unlink(missing_ok=True)
-        if not ok:
-            out_path.unlink(missing_ok=True)
-
-
-# ---------------------------------------------------------------------------
-# TTS — OpenAI TTS API
-# ---------------------------------------------------------------------------
-
-
-async def _tts_openai(text: str, output_format: str, out_path: Path) -> None:
-    fmt = output_format if output_format in ("mp3", "opus", "aac", "flac", "wav") else "mp3"
-    async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/audio/speech",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model": "tts-1", "voice": "alloy", "input": text, "response_format": fmt},
-        )
-        response.raise_for_status()
-
-    out_path.write_bytes(response.content)
-    if fmt != output_format:
-        tmp = out_path.with_suffix(f".{fmt}")
-        out_path.rename(tmp)
-        subprocess.run(["ffmpeg", "-i", str(tmp), "-y", str(out_path)], check=True, capture_output=True)
-        tmp.unlink(missing_ok=True)
-
-
-# ---------------------------------------------------------------------------
-# TTS — dispatcher
-# ---------------------------------------------------------------------------
-
-
-async def _text_to_speech(src: Path, output_format: str, out_path: Path) -> None:
-    text = src.read_text(encoding="utf-8").strip()
-    if not text:
-        raise ValueError("input text file is empty")
-
-    provider = AI_TTS_PROVIDER
-    try:
-        if provider == "openai":
-            await _tts_openai(text, output_format, out_path)
-        else:
-            if TTS_ENGINE == "espeak":
-                await _tts_espeak(text, output_format, out_path)
-            else:
-                await asyncio.to_thread(_tts_pyttsx3, text, output_format, out_path)
-    except Exception as exc:
-        if provider != "local":
-            logger.warning("TTS provider %s failed (%s), falling back to local", provider, _safe_err(exc))
-            await _tts_espeak(text, output_format, out_path)
-        else:
-            raise
-
-    logger.info("TTS done: %s → %s via %s", src.name, out_path.name, provider)
-
-# ---------------------------------------------------------------------------
-# NEW: Обработка Эмбеддингов (_embedding)
-# ---------------------------------------------------------------------------
-async def _embedding_local(text: str) -> list[float]:
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(EMBEDDING_MODEL, device=EMBEDDING_DEVICE)
-    embedding = await asyncio.to_thread(model.encode, text, convert_to_numpy=True)
-    return embedding.tolist()
-
-async def _embedding_openai(text: str) -> list[float]:
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/embeddings",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model": "text-embedding-3-small", "input": text}
-        )
-        response.raise_for_status()
-        return response.json()["data"][0]["embedding"]
-
-async def _process_embedding(src: Path, out_path: Path) -> None:
-    text = src.read_text(encoding="utf-8").strip()
-    if not text:
-        raise ValueError("Empty text file")
-
-    provider = AI_EMBEDDING_PROVIDER
-    if provider == "openai":
-        vectors = await _embedding_openai(text)
-    else:
-        vectors = await _embedding_local(text)
-
-    out_path.write_text(json.dumps({"embedding": vectors}), encoding="utf-8")
-    logger.info("Embedding processing completed via %s", provider)
+    out_path.write_text(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 # ---------------------------------------------------------------------------
 # Core convert (async; no subType — mode derived from format pair only)
 # ---------------------------------------------------------------------------
 
+async def convert(
+    job: dict[str, Any],
+) -> tuple[str, str, str]:
 
-async def convert(job: dict[str, Any]) -> tuple[str, str, str]:
-    """Convert input file to output format.
-
-    Returns (output_path, output_mime, target_ext).
-    Mode (STT/TTS) is derived solely from (sourceFormat, targetFormat).
-    """
     src = Path(job["_localInput"])
-    src_fmt = str(job["sourceFormat"]).lower().lstrip(".")
-    tgt_fmt = str(job["targetFormat"]).lower().lstrip(".")
+
+    src_fmt = str(
+        job["sourceFormat"]
+    ).lower().lstrip(".")
+
+    tgt_fmt = str(
+        job["targetFormat"]
+    ).lower().lstrip(".")
+
     conv_id = job["conversionId"]
 
-    if not src.is_file():
-        raise FileNotFoundError(f"input file not found: {src}")
+    task_type = job.get(
+        "taskType",
+    )
 
-    mode = _derive_mode(src_fmt, tgt_fmt)
+    if not src.exists():
+        raise FileNotFoundError(
+            src,
+        )
 
-    WORK_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{tgt_fmt}"
+    if task_type is None:
+        mode = _derive_mode(
+            src_fmt,
+            tgt_fmt,
+        )
+    else:
+        mode = task_type
 
-    if mode == "stt":
-        await _speech_to_text(src, tgt_fmt, out_path)
-    elif mode == "tts":
-        await _text_to_speech(src, tgt_fmt, out_path)
+    WORK_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    if mode == "embedding":
+        tgt_fmt = "json"
+
+    if mode == "speech_to_text_stream":
+        tgt_fmt = "json"
+
+    out_path = (
+        WORK_DIR
+        / f"out-{conv_id}-{uuid.uuid4().hex}.{tgt_fmt}"
+    )
+
+    if mode == "speech_to_text":
+        await _speech_to_text(
+            src,
+            tgt_fmt,
+            out_path,
+        )
+
+    elif mode == "speech_to_text_stream":
+        await _speech_to_text_stream(
+            src,
+            out_path,
+        )
+
+    elif mode == "text_to_speech":
+        await _text_to_speech(
+            src,
+            tgt_fmt,
+            out_path,
+        )
+
     elif mode == "embedding":
-        await _process_embedding(src, out_path)
+
+        model_name = (
+            job.get("model")
+            or EMBEDDING_MODEL
+        )
+
+        await _embedding(
+            src,
+            out_path,
+            model_name,
+        )
+
+    elif mode == "stt":
+        await _speech_to_text(
+            src,
+            tgt_fmt,
+            out_path,
+        )
+
+    elif mode == "tts":
+        await _text_to_speech(
+            src,
+            tgt_fmt,
+            out_path,
+        )
+
+    else:
+        raise ValueError(
+            f"unsupported taskType={mode}"
+        )
 
     if not out_path.exists():
-        raise RuntimeError("AI conversion produced no output file")
+        raise RuntimeError(
+            "conversion produced no output"
+        )
 
-    mime = _MIME.get(tgt_fmt, "application/octet-stream")
-    logger.info("AI converted %s → %s (conversionId=%s, mode=%s)", src.name, out_path.name, conv_id, mode)
-    return str(out_path), mime, tgt_fmt
+    mime = {
+        "json": "application/json",
+        **_MIME,
+    }.get(
+        tgt_fmt,
+        "application/octet-stream",
+    )
+
+    return (
+        str(out_path),
+        mime,
+        tgt_fmt,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +377,16 @@ async def _process_job(client: httpx.AsyncClient, job_meta: dict) -> None:
             "conversionId": conv_id,
             "sourceFormat": src_fmt,
             "targetFormat": tgt_fmt,
+            "taskType": job_meta.get(
+                "taskType"
+            ),
+            "model": job_meta.get(
+                "model"
+            ),
+            "options": job_meta.get(
+                "options",
+                {},
+            ),
         }
         out_str, mime, _ = await convert(job_payload)
         output_path = Path(out_str)
