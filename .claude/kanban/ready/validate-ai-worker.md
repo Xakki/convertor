@@ -1,5 +1,9 @@
 ### AI воркер — remote pull-API transport + GPU + flag-agnostic + AI-тесты + STT/TTS
 
+> ⚠ **Часть переосмыслена** рефактором 2026-06-25: гибридные внешние провайдеры
+> (OpenAI/Gemini/Claude) убираются — воркер только локальный инференс. Pull-API/транспорт
+> и flag-agnostic остаются в силе. См. [[ai-worker-refactor-core]] и соседние карточки эпика.
+
 **Критичность:** High
 
 **TAGS:**
