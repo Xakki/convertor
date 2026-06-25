@@ -7,6 +7,7 @@ convert() → result, with an in-memory resultId→path registry for download.
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from collections import OrderedDict
@@ -32,6 +33,12 @@ router = APIRouter(prefix="/api")
 
 # Cap the result registry; evicting an entry deletes its temp file (best-effort).
 _MAX_RESULTS = 50
+
+# Format tokens are short alnum strings (mp3, txt, json…). Anything else is
+# rejected up-front: sourceFormat/targetFormat are untrusted form fields and get
+# interpolated into temp filenames, so a value like '../../x' would otherwise
+# escape WORK_DIR on the input-file write (path traversal).
+_FORMAT_RE = re.compile(r"^[a-z0-9]{1,12}$")
 
 
 def _ordered(values: set[str], preferred: list[str]) -> list[str]:
@@ -85,6 +92,12 @@ async def run_method(
     cfg = request.app.state.cfg
     src_fmt = sourceFormat.lower().lstrip(".")
     tgt_fmt = targetFormat.lower().lstrip(".")
+
+    if not _FORMAT_RE.match(src_fmt) or not _FORMAT_RE.match(tgt_fmt):
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": "invalid sourceFormat/targetFormat (expected a short alphanumeric token)"},
+        )
 
     cfg.work_dir.mkdir(parents=True, exist_ok=True)
     in_path = cfg.work_dir / f"devin-{uuid.uuid4().hex}.{src_fmt}"
