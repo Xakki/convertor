@@ -146,7 +146,7 @@ test-python-metrics: build-metrics-exporter ## Unit tests for metrics-exporter (
 # to the $(2) file list below once it exists.
 .PHONY: test-python-ai
 test-python-ai: build-ffmpeg ## AI-worker + dev-server unit tests (runs in worker-ffmpeg image, no Harbor pull)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py,httpx fastapi uvicorn[standard] python-multipart)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py,httpx fastapi uvicorn[standard] python-multipart)
 
 .PHONY: test-drift
 test-drift: ## Routing-contract: PHP registry routing keys vs Python worker CAPABILITIES (may fail on known gaps — see .claude/kanban/grooming/)
