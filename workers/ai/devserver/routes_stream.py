@@ -51,6 +51,24 @@ _EXT_BY_FORMAT = {
 }
 
 
+def _allowed_origins() -> set[str]:
+    """Same-origin allowlist for the WS handshake (anti-CSWSH).
+
+    A browser always sends Origin on a WS connect; we accept only the dev-server's
+    own host:port. DEVSERVER_HOST is included when set (e.g. when exposed off-loopback).
+    """
+    port = os.getenv("DEVSERVER_PORT", "8765")
+    hosts = ["localhost", "127.0.0.1"]
+    host_env = os.getenv("DEVSERVER_HOST")
+    if host_env and host_env not in ("0.0.0.0", "::"):
+        hosts.append(host_env)
+    origins: set[str] = set()
+    for h in hosts:
+        origins.add(f"http://{h}:{port}")
+        origins.add(f"https://{h}:{port}")
+    return origins
+
+
 def _to_input_bytes(data: bytes, fmt: str, sample_rate: int) -> tuple[bytes, str]:
     """Map the accumulated buffer to a decodable file payload + extension."""
     if fmt.startswith("pcm"):
@@ -77,6 +95,14 @@ def _transcribe(model: Any, data: bytes, fmt: str, sample_rate: int) -> dict:
 
 @router.websocket("/ws/stream")
 async def stream(ws: WebSocket) -> None:
+    # Anti-CSWSH: a browser sends Origin on WS connect — reject foreign origins so a
+    # random page the dev visits can't drive the mic-STT route. A missing Origin
+    # (non-browser client / CLI / TestClient) is allowed; the token check still applies.
+    origin = ws.headers.get("origin")
+    if origin is not None and origin not in _allowed_origins():
+        await ws.close(code=1008)  # policy violation
+        return
+
     token = os.getenv("DEVSERVER_TOKEN")
     if token and ws.query_params.get("token") != token:
         await ws.close(code=1008)  # policy violation

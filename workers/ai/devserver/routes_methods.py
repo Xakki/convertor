@@ -38,7 +38,29 @@ _MAX_RESULTS = 50
 # rejected up-front: sourceFormat/targetFormat are untrusted form fields and get
 # interpolated into temp filenames, so a value like '../../x' would otherwise
 # escape WORK_DIR on the input-file write (path traversal).
-_FORMAT_RE = re.compile(r"^[a-z0-9]{1,12}$")
+_FORMAT_RE = re.compile(r"[a-z0-9]{1,8}")
+
+
+def _allowed_formats() -> set[str]:
+    """Union of every source/target the worker advertises (same list as /api/methods)."""
+    allowed: set[str] = set()
+    for m in _methods():
+        allowed.update(m["sources"])
+        allowed.update(m["targets"])
+    return allowed
+
+
+def _valid_format(fmt: str, allowed: set[str]) -> bool:
+    return bool(_FORMAT_RE.fullmatch(fmt)) and fmt in allowed
+
+
+def _within(parent: Path, child: Path) -> bool:
+    """True iff resolved `child` lives under resolved `parent` (traversal guard)."""
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _ordered(values: set[str], preferred: list[str]) -> list[str]:
@@ -93,14 +115,18 @@ async def run_method(
     src_fmt = sourceFormat.lower().lstrip(".")
     tgt_fmt = targetFormat.lower().lstrip(".")
 
-    if not _FORMAT_RE.match(src_fmt) or not _FORMAT_RE.match(tgt_fmt):
+    allowed = _allowed_formats()
+    if not _valid_format(src_fmt, allowed) or not _valid_format(tgt_fmt, allowed):
         return JSONResponse(
             status_code=422,
-            content={"ok": False, "error": "invalid sourceFormat/targetFormat (expected a short alphanumeric token)"},
+            content={"ok": False, "error": "invalid sourceFormat/targetFormat (not an advertised conversion format)"},
         )
 
     cfg.work_dir.mkdir(parents=True, exist_ok=True)
     in_path = cfg.work_dir / f"devin-{uuid.uuid4().hex}.{src_fmt}"
+    # Belt-and-suspenders: even with the allowlist, never write outside WORK_DIR.
+    if not _within(cfg.work_dir, in_path):
+        return JSONResponse(status_code=422, content={"ok": False, "error": "invalid input path"})
     try:
         with in_path.open("wb") as f:
             while True:
@@ -131,6 +157,11 @@ async def run_method(
 
     elapsed_ms = round((time.monotonic() - started) * 1000)
     out_path = Path(out_str)
+    # Output path is server-built inside convert() from a server-generated id + the
+    # already-validated tgt_fmt; assert containment anyway before exposing it.
+    if not _within(cfg.work_dir, out_path):
+        out_path.unlink(missing_ok=True)
+        return JSONResponse(status_code=422, content={"ok": False, "error": "invalid output path"})
     size = out_path.stat().st_size
 
     text: str | None = None
