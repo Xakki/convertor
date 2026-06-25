@@ -352,9 +352,6 @@ services:
             WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
             AI_STT_PROVIDER: ${AI_STT_PROVIDER:-local}
             AI_TTS_PROVIDER: ${AI_TTS_PROVIDER:-local}
-            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-            GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-            CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
         healthcheck:
             test: ["CMD", "python3", "-c", "import faster_whisper; print('ok')"]
             interval: 60s

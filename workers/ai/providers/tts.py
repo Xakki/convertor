@@ -36,9 +36,14 @@ async def espeak(text: str, output_format: str, out_path: Path) -> None:
             out_path.write_bytes(wav_path.read_bytes())
         else:
             ffmpeg = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-i", str(wav_path), "-y", str(out_path)
+                "ffmpeg", "-i", str(wav_path), "-y", str(out_path),
+                stderr=asyncio.subprocess.PIPE,
             )
-            await ffmpeg.wait()
+            _, ffmpeg_err = await ffmpeg.communicate()
+            if ffmpeg.returncode:
+                raise RuntimeError(
+                    f"ffmpeg failed (rc={ffmpeg.returncode}): {ffmpeg_err.decode()}"
+                )
     finally:
         wav_path.unlink(missing_ok=True)
 
