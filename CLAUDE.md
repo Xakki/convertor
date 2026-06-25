@@ -72,7 +72,7 @@ SaaS-сервис конвертации файлов всех форматов.
 - KeyDB — единственный instance, несколько баз (0: cache, 1: sessions, 2: queues)
 
 ## Secrets / env
-- **Секреты — только в `.env.local`** (gitignored). Makefile делает `include .env` + `-include .env.local` + `export`, поэтому значения из `.env.local` уходят в окружение и compose подхватывает их через `${VAR}`. В трекаемых `.env` / `.env_dist` секреты держим ПУСТЫМИ (плейсхолдеры). Никогда не коммить реальные ключи.
+- **Секреты — только в `.env.local`** (gitignored). Makefile делает `include .env` + `-include .env.local` + `export`, поэтому значения из `.env.local` уходят в окружение и compose подхватывает их через `${VAR}`. В трекаемых `.env` / `.env.local_example` секреты держим ПУСТЫМИ (плейсхолдеры). Никогда не коммить реальные ключи.
 
 ## S3 / MinIO
 - **Все операции с S3 — через MCP `minio`** (`mcp__minio__*`): бакеты, юзеры, политики, объекты, presign. Не дёргать `mc`/`mc admin` вручную. Шаренный endpoint — `apis3.xakki.ru` / `apis3.variantgood.com`; бакет результатов — `convertor-results` (`${S3_BUCKET_PREFIX}-results`). Ограничение MCP: создание кастомной IAM-политики недоступно — только встроенные (`readwrite`/`readonly`/…) через `policy_attach`.
