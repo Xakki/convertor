@@ -79,3 +79,34 @@ workers/ai/
 - LLM (text→text) выносится в отдельную карточку [[ai-worker-llm-text2text]].
 - Переосмысливает раздел про гибридные провайдеры из [[validate-ai-worker]] (ready/):
   направление сменилось на «только локальный инференс».
+
+## Execution Log
+
+Branch `task/ai-worker-refactor-core`.
+
+### Final module layout (workers/ai/)
+- `__main__.py` — entry point; `worker` mode (default) + `devserver` stub branch (deferred).
+- `config.py` — single config source; `load_config()` → frozen `Config` dataclass; `.validate()` (only enforces token when `pull_enabled`). All `os.getenv` reads live here. Side-effect-free import. NO LLM fields, NO external-API keys.
+- `worker.py` — production pull-loop only; `CAPABILITIES`, `_process_job`, `_poll_loop`, `run(cfg)`. PULL_ENABLED gate. No provider/external logic.
+- `pull_api.py` — `PullApiClient` thin httpx wrapper for `/api/v1/worker/{claim,jobs/{id}/input,result,fail}`.
+- `convert.py` — flag-agnostic `derive_mode()` + `convert(job, cfg)` dispatch. `Mode` enum.
+- `providers/` — `base.py` (Protocols), `stt.py` (local faster-whisper only), `streaming_stt.py`, `tts.py` (espeak/pyttsx3 only), `embedding.py`. Heavy ML imports made lazy (faster_whisper/sentence_transformers/pyttsx3 not installed in CI).
+- `utils.py` — flat (mime + SRT/VTT formatting).
+
+### Deleted
+- External-API provider code: `_openai`/`_gemini`/`_claude` (stt.py), `_openai` (tts.py) and all fallback/selector logic.
+- Env keys dropped (not migrated to config.py): `AI_STT_PROVIDER`, `AI_TTS_PROVIDER`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `CLAUDE_API_KEY`.
+- Tests: `test_stt_falls_back_to_local_on_provider_error`, `test_stt_local_provider_does_not_fallback`, `test_tts_falls_back_to_local_on_provider_error` (external/fallback — deleted, not repaired).
+- `taskType` override of format-derived mode + `"stt"`/`"tts"` aliases removed (flag-agnostic).
+
+### Decisions settled
+1. **Capabilities = `routing_keys: ["ai"]`, `matrix: {}`.** PHP `streamFor()` only ever emits `'ai'` for AI pairs; `embedding`/`speech_to_text_stream` are NOT PHP routing streams, so they are not advertised (they are sub-behaviours derived from the format pair inside the worker). Empty matrix is required: AI pairs exist in the registry only as virtual `*_stt`/`*_tts` keys which the drift subset-assertion skips — advertising concrete pairs would falsely fail Assertion B. Satisfies `test_capabilities_routing_key == ["ai"]` AND both routing_drift assertions (verified green against the real PHP registry).
+2. **utils = flat `utils.py`** (matches card tree). Only the broken `stt.py` used the package form (`utils.mime`/`utils.subtitles`); repointed to flat. Least churn.
+3. **Mode derivation keeps 4 modes (no orphaning).** convert.py derives: `audio→{txt,srt,vtt}`=STT, `audio→json`=streaming STT, `{txt,md}→audio`=TTS, `{txt,md}→json`=embedding. This keeps `streaming_stt.py` + `embedding.py` reachable (otherwise only bench would touch them = silent capability loss). All pairs unambiguous vs other workers (data worker only handles csv/json/xml/yaml/toml). text→text (LLM) intentionally falls through to ValueError (deferred to ai-worker-llm-text2text).
+
+### Verification
+- `python -c "import workers.ai.worker, workers.ai.convert, workers.ai.config"` OK in bare env (no worker env vars).
+- `pytest workers/tests/test_ai_worker.py workers/tests/test_routing_drift.py -q` → 50 passed, 1 skipped (espeak-ng e2e).
+- Full `pytest workers/tests/` → 226 passed, 10 skipped, 1 xfailed.
+- No OpenAI/Gemini/Claude SDK/env-key references in workers/ai (only docstring mentions of the removal).
+- bench/runner.py: repointed `from workers.ai.worker import _tts_espeak` → `from workers.ai.providers.tts import espeak` (in-function import; bench otherwise untouched; its pre-existing `jiwer` dep gap is unrelated).

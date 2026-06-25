@@ -278,9 +278,7 @@ class BenchmarkRunner:
         test_cfg: dict,
     ) -> dict:
 
-        from workers.ai.worker import (
-            _tts_espeak,
-        )
+        from workers.ai.providers.tts import espeak as _tts_espeak
 
         started = time.time()
 

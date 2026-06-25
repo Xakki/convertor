@@ -3,8 +3,6 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from faster_whisper import WhisperModel
-
 
 class StreamingWhisper:
 
@@ -16,6 +14,7 @@ class StreamingWhisper:
         window_sec: int = 20,
         overlap_sec: int = 2,
     ) -> None:
+        from faster_whisper import WhisperModel
 
         self.model = WhisperModel(
             model_name,

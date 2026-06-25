@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sentence_transformers import SentenceTransformer
-
 
 class EmbeddingProvider:
 
@@ -14,6 +12,8 @@ class EmbeddingProvider:
         model_name: str,
         device: str = "cpu",
     ) -> None:
+        from sentence_transformers import SentenceTransformer
+
         self.model_name = model_name
         self.device = device
         self.model = SentenceTransformer(
