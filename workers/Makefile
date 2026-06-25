@@ -142,8 +142,6 @@ test-python-metrics: build-metrics-exporter ## Unit tests for metrics-exporter (
 # STT/TTS libs lazily), so we run them in the lean worker-ffmpeg image with those
 # deps pip-installed at runtime. FastAPI's TestClient covers the WS route
 # in-process; python-multipart is required for the /api/run multipart upload test.
-# test-engineer: append the new dev-server test file (e.g. workers/tests/test_ai_devserver.py)
-# to the $(2) file list below once it exists.
 .PHONY: test-python-ai
 test-python-ai: build-ffmpeg ## AI-worker + dev-server unit tests (runs in worker-ffmpeg image, no Harbor pull)
 	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py,httpx fastapi uvicorn[standard] python-multipart)

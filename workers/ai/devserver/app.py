@@ -62,11 +62,13 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def auth_guard(request: Request, call_next):
+        # /api/* requires the Authorization header only. Query-param token is NOT
+        # accepted here (it would leak into access logs); it's reserved for the WS
+        # handshake, which can't set headers from the browser and checks ?token=
+        # inside routes_stream.
         token = os.getenv("DEVSERVER_TOKEN")
         if token and request.url.path.startswith("/api/"):
-            expected = f"Bearer {token}"
-            if request.headers.get("authorization") != expected and \
-               request.query_params.get("token") != token:
+            if request.headers.get("authorization") != f"Bearer {token}":
                 return JSONResponse(status_code=401, content={"ok": False, "error": "unauthorized"})
         return await call_next(request)
 

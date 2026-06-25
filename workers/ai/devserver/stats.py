@@ -89,6 +89,9 @@ class Stats:
         }
 
     def snapshot(self) -> dict[str, Any]:
+        # `pullEnabled` reflects the *actual* runner state (started/stopped), not the
+        # config-intended flag — the Stats tab is about real processing. The Settings
+        # tab is the source of truth for the configured PULL_ENABLED value.
         if not self._active:
             out: dict[str, Any] = {"pullEnabled": False, "state": "stopped"}
             if self.processed:
