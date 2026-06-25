@@ -331,8 +331,8 @@ services:
         profiles: ["ai"]
         build:
             context: .
-            dockerfile: docker/workers/ai.Dockerfile
-        image: ${DOCKER_IMAGE_AI:-harbor.xakki.ru/convertor/worker-ai:latest}
+            dockerfile: docker/workers/ai.cpu.Dockerfile
+        image: ${DOCKER_IMAGE_AI:-xakki-convertor/worker-ai:cpu}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
         restart: unless-stopped
         stop_grace_period: 60s

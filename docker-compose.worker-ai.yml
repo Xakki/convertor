@@ -1,52 +1,100 @@
-# AI worker for the home host (WSL + RTX GPU). Pulls a prebuilt Harbor image;
-# no server-side KeyDB/S3 needed — all I/O goes through the HTTP pull-API.
-# Two flavors are published: worker-ai:cpu and worker-ai:cuda (GPU).
+# AI worker for the home/GPU host. Uses a locally built image (NOT pulled from Harbor);
+# only the ai-base layer is published. Build the working image first, then run.
 #
 # ============================================================================
-# ## Запуск дома (docker run) — основной путь, без compose, без сборки
+# ## Build (run once on the GPU host, then on code/deps changes)
 # ============================================================================
-# Prereqs: `docker login harbor.xakki.ru` first; for CUDA also install
-# nvidia-container-toolkit on the host. The pull-API token goes via -e (never
-# committed). Whisper model downloads on first run into the named volume (~500 MB).
+# 1. Pull the published ai-base from Harbor:
+#    docker login harbor.xakki.ru
+#    docker pull harbor.xakki.ru/convertor/worker-ai-base:latest
+#
+# 2. Build the CUDA working image locally (adjust CUDA_ARCH for your card):
+#    make build-ai-cuda CUDA_ARCH=86          # RTX 3080/3090 (Ampere)
+#    # make build-ai-cuda CUDA_ARCH=75        # RTX 20xx / T4
+#    # make build-ai-cuda CUDA_ARCH=89        # RTX 40xx (Ada Lovelace)
+#    # make build-ai-cuda CUDA_ARCH=86 WITH_LLAMACPP=1   # + embedded llama.cpp GGUF
+#    Find your compute capability: nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+#    Then strip the dot: "8.6" → CUDA_ARCH=86.
+#
+# ============================================================================
+# ## Run — docker run (quickstart, no compose needed)
+# ============================================================================
+# Share already-downloaded HuggingFace weights from the host (avoids re-download):
+#
+#   CUDA:
+#   docker run -d --name worker-ai --restart unless-stopped --gpus all \
+#     -e API_BASE_URL=https://convertor.xakki.pro \
+#     -e WORKER_API_TOKEN=YOUR_TOKEN \
+#     -e PULL_ENABLED=true \
+#     -e WHISPER_DEVICE=cuda -e WHISPER_COMPUTE_TYPE=float16 \
+#     -e LLM_BACKEND=ollama -e OLLAMA_URL=http://host.docker.internal:11434 \
+#     -v ~/.cache/huggingface:/home/app/.cache/huggingface \
+#     xakki-convertor/worker-ai:cuda
 #
 #   CPU:
-#   docker run -d --name worker-ai --restart unless-stopped -e API_BASE_URL=https://convertor.xakki.pro -e WORKER_API_TOKEN=YOUR_TOKEN -e WHISPER_MODEL=base -e WHISPER_DEVICE=cpu -e WHISPER_COMPUTE_TYPE=int8 -e AI_STT_PROVIDER=local -e AI_TTS_PROVIDER=local -v worker-ai-models:/home/app/.cache/huggingface harbor.xakki.ru/convertor/worker-ai:cpu
+#   docker run -d --name worker-ai --restart unless-stopped \
+#     -e API_BASE_URL=https://convertor.xakki.pro \
+#     -e WORKER_API_TOKEN=YOUR_TOKEN \
+#     -e PULL_ENABLED=true \
+#     -e WHISPER_DEVICE=cpu -e WHISPER_COMPUTE_TYPE=int8 \
+#     -e LLM_BACKEND=ollama -e OLLAMA_URL=http://host.docker.internal:11434 \
+#     -v ~/.cache/huggingface:/home/app/.cache/huggingface \
+#     xakki-convertor/worker-ai:cpu
 #
-#   CUDA (GPU):
-#   docker run -d --name worker-ai --restart unless-stopped --gpus all -e API_BASE_URL=https://convertor.xakki.pro -e WORKER_API_TOKEN=YOUR_TOKEN -e WHISPER_MODEL=base -e WHISPER_DEVICE=cuda -e WHISPER_COMPUTE_TYPE=float16 -e AI_STT_PROVIDER=local -e AI_TTS_PROVIDER=local -v worker-ai-models:/home/app/.cache/huggingface harbor.xakki.ru/convertor/worker-ai:cuda
-#
-# Update: docker pull harbor.xakki.ru/convertor/worker-ai:cuda && docker rm -f worker-ai && <re-run the line above>
+# Ollama (two options):
+#   a) External Ollama on host (default): -e OLLAMA_URL=http://host.docker.internal:11434
+#   b) Share Ollama weights into container: -v ~/.ollama:/root/.ollama
 #
 # ============================================================================
 # ## Alternative: compose
 # ============================================================================
-#   cp .env.worker-ai.example .env.worker-ai   # fill API_BASE_URL + WORKER_API_TOKEN (+ GPU vars)
+#   cp .env.worker-ai.example .env.worker-ai   # fill API_BASE_URL + WORKER_API_TOKEN
 #   docker compose -f docker-compose.worker-ai.yml --env-file .env.worker-ai up -d
 # GPU: uncomment the `deploy.resources.devices` block below and set WHISPER_DEVICE=cuda.
 
 services:
     worker-ai:
-        image: ${DOCKER_IMAGE_AI:-harbor.xakki.ru/convertor/worker-ai:cpu}
+        image: ${DOCKER_IMAGE_AI:-xakki-convertor/worker-ai:cuda}
         container_name: "worker-ai-home"
         restart: unless-stopped
         stop_grace_period: 60s
         stop_signal: SIGTERM
         volumes:
+            # Named volume for HuggingFace model cache (Whisper, embedding weights).
             - worker-ai-models:/home/app/.cache/huggingface
+            # Alternative: bind-mount already-downloaded weights from the host (no re-download):
+            # - ${HF_CACHE_HOST:-~/.cache/huggingface}:/home/app/.cache/huggingface
+            # Ollama sidecar weights (only needed when running an Ollama sidecar inside the
+            # container — NOT for the default external-Ollama path via OLLAMA_URL).
+            # Note: container runs as uid 1000 (app); /root/.ollama may not be writable.
+            # - ${OLLAMA_HOME:-~/.ollama}:/root/.ollama
         environment:
             WORKER_MODULE: workers.ai.worker
+            # Pull-API (required)
             API_BASE_URL: ${API_BASE_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
             WORKER_TYPE: ${WORKER_TYPE:-ai}
+            PULL_ENABLED: ${PULL_ENABLED:-false}
+            POLL_INTERVAL: ${POLL_INTERVAL:-10}
+            # STT
             WHISPER_MODEL: ${WHISPER_MODEL:-base}
             WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
             WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
-            AI_STT_PROVIDER: ${AI_STT_PROVIDER:-local}
-            AI_TTS_PROVIDER: ${AI_TTS_PROVIDER:-local}
-            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-            GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-            CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
-        # Uncomment for CUDA GPU support (nvidia-container-toolkit required):
+            STREAM_WINDOW_SEC: ${STREAM_WINDOW_SEC:-20}
+            STREAM_OVERLAP_SEC: ${STREAM_OVERLAP_SEC:-2}
+            # TTS
+            TTS_ENGINE: ${TTS_ENGINE:-espeak}
+            # Embedding
+            EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+            # LLM text→text — local only (ollama HTTP or embedded llama.cpp)
+            LLM_BACKEND: ${LLM_BACKEND:-ollama}
+            OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+            OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+            LLM_MODEL_PATH: ${LLM_MODEL_PATH:-}
+            LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1024}
+            LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+            LLM_SYSTEM_PROMPT: ${LLM_SYSTEM_PROMPT:-}
+        # Uncomment for CUDA GPU support (nvidia-container-toolkit required on host):
         # deploy:
         #     resources:
         #         reservations:

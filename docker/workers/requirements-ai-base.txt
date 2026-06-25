@@ -1,0 +1,5 @@
+# AI worker BASE deps — pure-python, no ML stack.
+# Installed in harbor.xakki.ru/convertor/worker-ai-base.
+# Only packages imported at module level in workers/ai/ code.
+# Heavy ML deps (torch, faster-whisper, etc.) live in requirements-ai-ml.txt.
+httpx==0.28.1

@@ -83,10 +83,51 @@ CPU ML) для прогонов/CI без GPU. Нужен шаринг уже с
 - Makefile-таргеты build/push ai-base + локальная сборка ai.cuda/ai.cpu (с `CUDA_ARCH`/
   `WITH_LLAMACPP`); `make docker-check` зелёный.
 
-**Decisions:**
+**Decisions (актуальные — после ревизии пользователем 2026-06-25):**
 - Публикуем ТОЛЬКО `ai-base` (лёгкий). `ai.cuda` — локальный, не публикуется. `ai.cpu` — оставляем.
-- `ai.cuda` = `FROM ai-base` (код пишется один раз в base, рабочие образы доставляют deps поверх).
+- **`ai-base` = `FROM scratch`** — чистый код-артефакт (только файлы, без OS/Python/deps). Каждый
+  рабочий образ приносит свою OS + Python + ML-стек через `COPY --from=aibase`. Убирает конфликт
+  python:3.12-slim→CUDA (была причина ревизии пользователем).
+- `ai.cpu` = `FROM python:3.12-slim` (self-contained); `COPY --from=aibase /app /app`.
+- `ai.cuda` = `FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04` (self-contained); Python
+  устанавливается ровно один раз через apt; `COPY --from=aibase /app /app`.
+- `ai.cuda` multi-stage: llamacpp-build (nvidia/cuda:*-devel) + aibase (Harbor scratch) + runtime.
 - Default LLM-бэкенд — внешний Ollama; веса HF/Ollama шарятся через bind локальных volume.
 - Реальная сборка/пуш тяжёлых образов выполняется пользователем на GPU-хосте (не на saFin автоматом).
 - llama.cpp оставляем: код всегда (ленивый импорт), бинарь — опционально через `WITH_LLAMACPP`.
 - Сборка под конкретную GPU-арх через `CUDA_ARCH`; в доке — таблица карт NVIDIA → compute capability.
+- requirements split: `requirements-ai-base.txt` (httpx only); `requirements-ai-ml.txt` (heavy без torch);
+  torch устанавливается отдельным RUN-шагом в каждом Dockerfile (cpu/cu128 index).
+- Stale API env vars (OPENAI_API_KEY / GEMINI_API_KEY / CLAUDE_API_KEY) — grooming-кандидат.
+
+---
+
+## Execution Log (2026-06-25)
+
+1. Rewrote `ai-base.Dockerfile`: `FROM python:3.12-slim`, tini, venv, light base deps, `COPY workers/ai/`.
+2. Rewrote `ai.cuda.Dockerfile`: multi-stage (llamacpp-build from nvidia/cuda:12.8.0-devel + runtime FROM ai-base),
+   CUDA_ARCH/TORCH_CUDA_ARCH/WITH_LLAMACPP build-args, torch from cu128 index, ffmpeg/espeak-ng.
+3. Rewrote `ai.cpu.Dockerfile`: `FROM ai-base`, CPU torch + ML stack, ffmpeg/espeak-ng.
+4. Created `requirements-ai-base.txt` (httpx only — verified sole non-stdlib top-level import).
+5. Created `requirements-ai-ml.txt` (heavy ML without torch: faster-whisper, ctranslate2, sentence-transformers,
+   av, onnxruntime, pyttsx3, jiwer, psutil).
+6. Reworked `workers/Makefile` AI section: removed FLAVOR/build-ai/push-ai; added build-ai-base/push-ai-base
+   (light, Harbor), build-ai-cuda (CUDA_ARCH+WITH_LLAMACPP), build-ai-cpu; TORCH_CUDA_ARCH derived via sed.
+7. Fixed `docker-compose.yml` line 334: `ai.Dockerfile` (missing) → `ai.cpu.Dockerfile`.
+8. Rewrote `docker-compose.worker-ai.yml`: local image default, HF bind-mount comment, Ollama env vars
+   (OLLAMA_URL/OLLAMA_MODEL/LLM_BACKEND/LLM_MODEL_PATH), updated run instructions.
+9. Updated `.env.worker-ai.example`: new local image default, host.docker.internal Ollama URL.
+10. Added AI Worker GPU setup section to `README.md` (CUDA_ARCH table, build commands, model sharing).
+11. `make docker-check`: exit 0. `make worker-ai-check`: exit 0.
+
+## Rework Log (2026-06-25 — user correction after review)
+
+User rejected python:3.12-slim ai-base (conflict with CUDA base). New scheme — ai-base = FROM scratch.
+
+12. Rewrote `ai-base.Dockerfile`: `FROM scratch`, COPY code + requirements files only. No OS/Python/deps.
+13. Rewrote `ai.cpu.Dockerfile`: fully self-contained `FROM python:3.12-slim`; pulls code via
+    `COPY --from=aibase /app /app` (stage-alias trick to avoid BuildKit ARG-in-COPY pitfalls).
+14. Rewrote `ai.cuda.Dockerfile`: 3 stages — llamacpp-build (nvidia/cuda:*-devel), aibase (Harbor scratch),
+    runtime (nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04). Python installed once via apt. Code pulled via
+    `COPY --from=aibase /app /app`.
+15. `make docker-check`: exit 0. `make worker-ai-check`: exit 0.

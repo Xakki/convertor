@@ -34,36 +34,54 @@ build-metrics-exporter: ## Build metrics-exporter image
 	$(call build_img,metrics-exporter,metrics_exporter)
 
 .PHONY: build-workers
-build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter ## Build all on-server worker images (AI worker is remote — see build-ai / build-ai-base)
+build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter ## Build all on-server worker images (AI worker is remote — see build-ai-base / build-ai-cuda / build-ai-cpu)
 
-##@ Build worker-ai (remote / Harbor)
+##@ Build worker-ai (remote / Harbor + local GPU)
 
-# AI worker uses a two-layer Harbor scheme (base = heavy deps, rarely rebuilt;
-# thin worker = code layer). FLAVOR picks CPU or CUDA (GPU). See run instructions
-# in docker-compose.worker-ai.yml header.
-FLAVOR          ?= cpu
+# New two-layer scheme:
+#   ai-base  (light: code + pure-python deps) → published to Harbor, rarely rebuilt.
+#   ai.cuda  (FROM ai-base + CUDA ML stack)   → LOCAL build on GPU host, NOT published.
+#   ai.cpu   (FROM ai-base + CPU ML stack)    → LOCAL build for CI / CPU-only runs.
+#
+# Run instructions and model-sharing volumes: see docker-compose.worker-ai.yml header.
 HARBOR_NS       ?= harbor.xakki.ru/convertor
-AI_BASE_IMAGE   = $(HARBOR_NS)/worker-ai-base
-AI_WORKER_IMAGE = $(HARBOR_NS)/worker-ai:$(FLAVOR)
+AI_BASE_IMAGE   ?= $(HARBOR_NS)/worker-ai-base:latest
+AI_CUDA_IMAGE   ?= $(IMG)/worker-ai:cuda
+AI_CPU_IMAGE    ?= $(IMG)/worker-ai:cpu
+
+# Compute capability as integer (e.g. 86 for RTX 3080/3090).
+# Run: nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+# Then strip the dot: "8.6" → 86.
+CUDA_ARCH       ?= 86
+# Dotted form for TORCH_CUDA_ARCH_LIST (derived from CUDA_ARCH).
+TORCH_CUDA_ARCH ?= $(shell echo $(CUDA_ARCH) | sed 's/\([0-9]*\)\([0-9]\)/\1.\2/')
+# Set to 1 to compile and embed llama-cpp-python with CUDA (larger image, slower build).
+# Default 0: Ollama backend works without it; the code path is always present (lazy import).
+WITH_LLAMACPP   ?= 0
 
 .PHONY: build-ai-base
-build-ai-base: ## Build worker-ai BASE image (heavy deps). FLAVOR=cpu|cuda (default cpu)
+build-ai-base: ## Build the LIGHT ai-base image (code + pure-python deps, no ML)
 	docker build -t $(AI_BASE_IMAGE) \
 	    -f docker/workers/ai-base.Dockerfile .
 
 .PHONY: push-ai-base
-push-ai-base: build-ai-base ## Build + push worker-ai BASE image to Harbor. FLAVOR=cpu|cuda
+push-ai-base: build-ai-base ## Build + push ai-base to Harbor (the only published AI image)
 	docker push $(AI_BASE_IMAGE)
 
-.PHONY: build-ai
-build-ai: ## Build thin worker-ai image FROM the base. FLAVOR=cpu|cuda (default cpu)
-	docker build -t $(AI_WORKER_IMAGE) \
+.PHONY: build-ai-cuda
+build-ai-cuda: ## LOCAL build: ai.cuda (FROM ai-base + CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
+	docker build -t $(AI_CUDA_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_IMAGE) \
-	    -f docker/workers/ai.$(FLAVOR).Dockerfile .
+	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
+	    --build-arg TORCH_CUDA_ARCH=$(TORCH_CUDA_ARCH) \
+	    --build-arg WITH_LLAMACPP=$(WITH_LLAMACPP) \
+	    -f docker/workers/ai.cuda.Dockerfile .
 
-.PHONY: push-ai
-push-ai: build-ai ## Build + push thin worker-ai image to Harbor. FLAVOR=cpu|cuda
-	docker push $(AI_WORKER_IMAGE)
+.PHONY: build-ai-cpu
+build-ai-cpu: ## LOCAL build: ai.cpu (FROM ai-base + CPU ML stack, no GPU required)
+	docker build -t $(AI_CPU_IMAGE) \
+	    --build-arg AI_BASE_IMAGE=$(AI_BASE_IMAGE) \
+	    -f docker/workers/ai.cpu.Dockerfile .
 
 .PHONY: worker-ai-check
 worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compose)

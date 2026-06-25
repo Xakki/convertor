@@ -1,9 +1,60 @@
-ARG CUDA_IMAGE=nvidia/cuda:13.3.0-cudnn-runtime-ubuntu24.04
+# syntax=docker/dockerfile:1.7
+# AI worker — CUDA/GPU flavor. Self-contained runnable image.
+# Pulls the published code artifact from Harbor via COPY --from; installs its own
+# Python + CUDA ML stack on top of the nvidia/cuda cuDNN runtime base.
+# Python is installed EXACTLY ONCE (via apt on the nvidia/cuda Ubuntu base).
+# LOCAL build on the GPU host — NOT published to Harbor.
+#
+# Build args:
+#   AI_BASE_IMAGE    published code artifact (default: harbor.xakki.ru/convertor/worker-ai-base:latest)
+#   CUDA_DEVEL_IMAGE CUDA devel image used to compile llama-cpp-python (default: nvidia/cuda:12.8.0-devel-ubuntu24.04)
+#   CUDA_ARCH        GPU compute capability as integer (e.g. 86 for RTX 3080/3090).
+#                    Wired into CMAKE_CUDA_ARCHITECTURES and TORCH_CUDA_ARCH_LIST.
+#   TORCH_CUDA_ARCH  TORCH_CUDA_ARCH_LIST dotted form (e.g. "8.6" when CUDA_ARCH=86).
+#                    Derived automatically in the Makefile via sed.
+#   WITH_LLAMACPP    0 (default) | 1 — compile and install llama-cpp-python with CUDA.
+#                    The llama.cpp code path (providers/llm.py) is always present (lazy import);
+#                    the binary is gated by this flag to keep the default image smaller.
+#
+# Usage (via Makefile):
+#   make build-ai-cuda                          # RTX 3080/3090, no llama.cpp binary
+#   make build-ai-cuda CUDA_ARCH=75             # RTX 20xx / T4
+#   make build-ai-cuda CUDA_ARCH=86 WITH_LLAMACPP=1   # with embedded llama.cpp GGUF
+#
+# Note: even when WITH_LLAMACPP=0 the devel stage pulls nvidia/cuda:*-devel (large
+# image) but skips compilation entirely; the image is cached after the first pull.
+
+# Global ARGs — must be declared before any FROM that references them
 ARG AI_BASE_IMAGE=harbor.xakki.ru/convertor/worker-ai-base:latest
+ARG CUDA_DEVEL_IMAGE=nvidia/cuda:12.8.0-devel-ubuntu24.04
 
-FROM ${CUDA_IMAGE}
+# ── Stage 1: optional llama.cpp CUDA compilation ─────────────────────────────
+FROM ${CUDA_DEVEL_IMAGE} AS llamacpp-build
 
-ARG DEBIAN_FRONTEND=noninteractive
+ARG WITH_LLAMACPP=0
+ARG CUDA_ARCH=86
+
+RUN mkdir -p /build/wheels && \
+    if [ "$WITH_LLAMACPP" = "1" ]; then \
+        apt-get update && \
+        apt-get install -y --no-install-recommends \
+            python3-full python3-pip build-essential cmake ninja-build && \
+        rm -rf /var/lib/apt/lists/* && \
+        CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH}" \
+        pip3 wheel --no-cache-dir --no-deps -w /build/wheels llama-cpp-python; \
+    fi
+
+# ── Stage 2: code artifact from Harbor ───────────────────────────────────────
+FROM ${AI_BASE_IMAGE} AS aibase
+
+# ── Stage 3: runtime — nvidia cuDNN + Python from apt ────────────────────────
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04
+
+ARG CUDA_ARCH=86
+ARG WITH_LLAMACPP=0
+# TORCH_CUDA_ARCH_LIST dotted form, e.g. "8.6" for CUDA_ARCH=86.
+# Set automatically by Makefile; override manually if needed.
+ARG TORCH_CUDA_ARCH=8.6
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -16,68 +67,44 @@ ENV PYTHONUNBUFFERED=1 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# -----------------------------------------------------------------------------
-# System packages
-# -----------------------------------------------------------------------------
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         python3-venv \
         python3-pip \
+        tini \
         ffmpeg \
         espeak-ng \
-        tini \
         ca-certificates \
-        curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# -----------------------------------------------------------------------------
-# Runtime user
-# -----------------------------------------------------------------------------
+    && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 app && \
-    mkdir -p /work && \
-    mkdir -p /home/app/.cache/huggingface && \
+    mkdir -p /work /home/app/.cache/huggingface && \
     chown -R app:app /work /home/app
-
-# -----------------------------------------------------------------------------
-# Python venv
-# -----------------------------------------------------------------------------
 
 RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
+# Pull code + requirements from the Harbor code artifact
+COPY --from=aibase /app /app
+
+# CUDA-enabled PyTorch — bundles CUDA runtime; no separate nvidia/cuda runtime layer needed
+RUN pip install --no-cache-dir torch \
+    --index-url https://download.pytorch.org/whl/cu128
+
+RUN TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH}" \
+    pip install --no-cache-dir \
+    -r /app/requirements-ai-base.txt \
+    -r /app/requirements-ai-ml.txt
+
+# Install llama-cpp-python wheel if compiled in Stage 1 (empty dir is harmless)
+COPY --from=llamacpp-build /build/wheels/ /tmp/llama_wheels/
+RUN set -- /tmp/llama_wheels/*.whl; [ -f "$1" ] && pip install --no-cache-dir "$@" || true
 
 WORKDIR /app
 
-COPY --from=${AI_BASE_IMAGE} /app /app
-
-RUN pip install --no-cache-dir -r /app/requirements-ai.txt
-
-# -----------------------------------------------------------------------------
-# Defaults
-# -----------------------------------------------------------------------------
-
-ENV WORKER_MODULE=workers.ai.worker \
-    WORK_DIR=/work \
-    WHISPER_MODEL=base \
-    WHISPER_DEVICE=cuda \
+ENV WHISPER_DEVICE=cuda \
     WHISPER_COMPUTE_TYPE=float16
 
-# -----------------------------------------------------------------------------
-# Healthcheck
-# -----------------------------------------------------------------------------
-
-HEALTHCHECK --interval=60s \
-            --timeout=15s \
-            --start-period=60s \
-            --retries=3 \
-    CMD python -c "import faster_whisper; print('ok')" || exit 1
-
 USER app
-
-ENTRYPOINT ["/usr/bin/tini","--"]
-
-CMD ["sh","-c","python -m ${WORKER_MODULE}"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["python3", "-m", "workers.ai"]
