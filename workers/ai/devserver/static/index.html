@@ -4,12 +4,292 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI worker dev-server</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','monospace'] } } } };
+  </script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script defer src="/app.js"></script>
+  <style>
+    [x-cloak]{ display:none !important; }
+    body{ background:#0f172a; }
+  </style>
 </head>
-<body>
-  <!-- Placeholder served at / so the StaticFiles mount works.
-       frontend-dev replaces this with the SPA (Methods / Audio stream / Pull
-       stats / Settings tabs) per .claude/skills/devserver-api-contract. -->
-  <h1>AI worker dev-server</h1>
-  <p>Backend is up. Web UI is built by frontend-dev. API under <code>/api/</code>, WS at <code>/ws/stream</code>.</p>
+<body class="text-slate-200 font-mono text-sm min-h-screen">
+<div x-data="devserver()" x-init="init()" x-cloak class="max-w-5xl mx-auto p-4">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between gap-4 mb-4 border-b border-slate-700 pb-3">
+    <h1 class="text-lg font-semibold text-slate-100">AI&nbsp;worker <span class="text-sky-400">dev-server</span></h1>
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-slate-400">Bearer token</label>
+      <input type="password" x-model="token" @input.debounce.400ms="saveToken()"
+             placeholder="optional"
+             class="bg-slate-800 border border-slate-700 rounded px-2 py-1 w-44 text-xs focus:outline-none focus:border-sky-500" />
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="flex gap-1 mb-5">
+    <template x-for="t in tabs" :key="t.id">
+      <button @click="setTab(t.id)"
+              :class="tab===t.id ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'"
+              class="px-4 py-2 rounded-t text-xs font-medium transition-colors"
+              x-text="t.label"></button>
+    </template>
+  </nav>
+
+  <!-- ============ METHODS ============ -->
+  <section x-show="tab==='methods'" class="space-y-4">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Mode</label>
+        <select x-model="m.mode" @change="onModeChange()"
+                class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-2 text-xs">
+          <template x-for="me in methods" :key="me.mode">
+            <option :value="me.mode" x-text="me.label + ' (' + me.mode + ')'"></option>
+          </template>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Source format</label>
+        <select x-model="m.source" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-2 text-xs">
+          <template x-for="s in currentMethod?.sources || []" :key="s"><option :value="s" x-text="s"></option></template>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Target format</label>
+        <select x-model="m.target" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-2 text-xs">
+          <template x-for="t in currentMethod?.targets || []" :key="t"><option :value="t" x-text="t"></option></template>
+        </select>
+      </div>
+    </div>
+
+    <div x-show="m.mode==='llm' || m.mode==='embedding'">
+      <label class="block text-xs text-slate-400 mb-1">Model <span class="text-slate-500">(optional, llm/embedding)</span></label>
+      <input type="text" x-model="m.model" placeholder="leave empty for default"
+             class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-2 text-xs" />
+    </div>
+
+    <!-- drop zone -->
+    <div @dragover.prevent="m.drag=true" @dragleave.prevent="m.drag=false"
+         @drop.prevent="onDrop($event)"
+         :class="m.drag ? 'border-sky-500 bg-slate-800/60' : 'border-slate-700'"
+         class="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors"
+         @click="$refs.file.click()">
+      <input type="file" x-ref="file" class="hidden" @change="onPick($event)" />
+      <template x-if="!m.file">
+        <p class="text-slate-400 text-xs">Drag &amp; drop a file here, or click to choose</p>
+      </template>
+      <template x-if="m.file">
+        <p class="text-slate-200 text-xs">📄 <span x-text="m.file.name"></span> <span class="text-slate-500" x-text="'('+fmtBytes(m.file.size)+')'"></span></p>
+      </template>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button @click="run()" :disabled="!m.file || m.running"
+              class="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium">
+        <span x-text="m.running ? 'Running…' : 'Run conversion'"></span>
+      </button>
+      <span x-show="m.running" class="text-xs text-slate-400">⏳ processing</span>
+    </div>
+
+    <!-- error -->
+    <div x-show="m.error" class="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 text-xs" x-text="m.error"></div>
+
+    <!-- result -->
+    <template x-if="m.result">
+      <div class="bg-slate-800/60 border border-slate-700 rounded p-3 space-y-2">
+        <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+          <span>mime: <span class="text-slate-200" x-text="m.result.mime"></span></span>
+          <span>ext: <span class="text-slate-200" x-text="m.result.ext"></span></span>
+          <span>bytes: <span class="text-slate-200" x-text="fmtBytes(m.result.bytes)"></span></span>
+          <span>elapsed: <span class="text-slate-200" x-text="m.result.elapsedMs + ' ms'"></span></span>
+        </div>
+        <template x-if="m.result.text !== null">
+          <div class="space-y-1">
+            <button @click="copy(m.result.text)" class="text-xs text-sky-400 hover:text-sky-300">⧉ copy</button>
+            <pre class="bg-slate-900 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap max-h-96 overflow-auto" x-text="m.result.text"></pre>
+          </div>
+        </template>
+        <template x-if="m.result.text === null">
+          <a :href="m.result.downloadUrl" @click.prevent="download(m.result.downloadUrl)"
+             class="inline-block px-3 py-2 rounded bg-sky-600 hover:bg-sky-500 text-white text-xs">⬇ Download result</a>
+        </template>
+      </div>
+    </template>
+  </section>
+
+  <!-- ============ AUDIO STREAM ============ -->
+  <section x-show="tab==='stream'" class="space-y-4">
+    <div class="flex items-center gap-3">
+      <button @click="startStream()" :disabled="ws.active"
+              class="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-medium">● Start</button>
+      <button @click="stopStream()" :disabled="!ws.active"
+              class="px-4 py-2 rounded bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white text-xs font-medium">■ Stop</button>
+      <span x-show="ws.active" class="flex items-center gap-1 text-xs text-red-400">
+        <span class="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> recording
+      </span>
+      <span class="text-xs text-slate-500" x-text="ws.status"></span>
+    </div>
+
+    <div x-show="ws.error" class="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 text-xs" x-text="ws.error"></div>
+
+    <div>
+      <label class="block text-xs text-slate-400 mb-1">Final transcript</label>
+      <pre class="bg-slate-900 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap min-h-[3rem]" x-text="ws.final || '—'"></pre>
+    </div>
+    <div>
+      <label class="block text-xs text-slate-400 mb-1">Partial (live) <span x-show="ws.language" class="text-slate-500" x-text="'· '+ws.language"></span></label>
+      <pre class="bg-slate-900 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap min-h-[3rem] text-sky-300" x-text="ws.partial || '…'"></pre>
+    </div>
+    <div x-show="ws.segments.length">
+      <label class="block text-xs text-slate-400 mb-1">Segments</label>
+      <div class="bg-slate-900 border border-slate-700 rounded p-2 max-h-60 overflow-auto text-xs space-y-1">
+        <template x-for="(s,i) in ws.segments" :key="i">
+          <div class="flex gap-2"><span class="text-slate-500 shrink-0" x-text="s.start.toFixed(1)+'–'+s.end.toFixed(1)+'s'"></span><span x-text="s.text"></span></div>
+        </template>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PULL STATS ============ -->
+  <section x-show="tab==='stats'" class="space-y-4">
+    <template x-if="stats && (stats.pullEnabled===false || stats.state==='stopped')">
+      <div class="bg-amber-900/30 border border-amber-700 rounded p-4 text-amber-200 text-sm flex items-center gap-2">
+        ⏸ Pull processing is <b>disabled</b> (PULL_ENABLED=false). Enable it in Settings to see live data.
+      </div>
+    </template>
+
+    <template x-if="stats && stats.pullEnabled!==false && stats.state!=='stopped'">
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="bg-slate-800/60 border border-slate-700 rounded p-3">
+            <div class="text-xs text-slate-400">State</div>
+            <div class="text-base text-emerald-400" x-text="stats.state"></div>
+          </div>
+          <div class="bg-slate-800/60 border border-slate-700 rounded p-3">
+            <div class="text-xs text-slate-400">Processed</div>
+            <div class="text-base text-slate-100" x-text="stats.processed ?? 0"></div>
+          </div>
+          <div class="bg-slate-800/60 border border-slate-700 rounded p-3">
+            <div class="text-xs text-slate-400">Success</div>
+            <div class="text-base text-emerald-400" x-text="stats.success ?? 0"></div>
+          </div>
+          <div class="bg-slate-800/60 border border-slate-700 rounded p-3">
+            <div class="text-xs text-slate-400">Failed</div>
+            <div class="text-base text-red-400" x-text="stats.failed ?? 0"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3" x-show="stats.latencyMs">
+          <div class="bg-slate-800/60 border border-slate-700 rounded p-3"><div class="text-xs text-slate-400">Latency avg</div><div class="text-slate-100" x-text="(stats.latencyMs?.avg ?? '–')+' ms'"></div></div>
+          <div class="bg-slate-800/60 border border-slate-700 rounded p-3"><div class="text-xs text-slate-400">p95</div><div class="text-slate-100" x-text="(stats.latencyMs?.p95 ?? '–')+' ms'"></div></div>
+          <div class="bg-slate-800/60 border border-slate-700 rounded p-3"><div class="text-xs text-slate-400">last</div><div class="text-slate-100" x-text="(stats.latencyMs?.last ?? '–')+' ms'"></div></div>
+        </div>
+
+        <div class="bg-slate-800/60 border border-slate-700 rounded p-3">
+          <div class="text-xs text-slate-400 mb-1">Current job</div>
+          <template x-if="stats.currentJob">
+            <div class="text-xs text-slate-200" x-text="stats.currentJob.conversionId+'  '+stats.currentJob.sourceFormat+'→'+stats.currentJob.targetFormat+'  @'+stats.currentJob.startedAt"></div>
+          </template>
+          <template x-if="!stats.currentJob"><div class="text-xs text-slate-500">idle</div></template>
+        </div>
+
+        <div class="bg-slate-800/60 border border-slate-700 rounded p-3">
+          <div class="text-xs text-slate-400 mb-1">Started at: <span class="text-slate-200" x-text="stats.startedAt || '–'"></span></div>
+          <div class="text-xs text-slate-400 mb-1">Last errors</div>
+          <template x-if="(stats.lastErrors||[]).length===0"><div class="text-xs text-slate-500">none</div></template>
+          <div class="space-y-1 max-h-48 overflow-auto">
+            <template x-for="(e,i) in stats.lastErrors||[]" :key="i">
+              <div class="text-xs text-red-300"><span class="text-slate-500" x-text="e.at"></span> · <span x-text="e.conversionId"></span>: <span x-text="e.error"></span></div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <div x-show="!stats" class="text-xs text-slate-500">loading…</div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section x-show="tab==='settings'" class="space-y-4">
+    <div class="flex items-center gap-3">
+      <button @click="saveSettings()" :disabled="!dirtyCount() || s.saving"
+              class="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-medium">
+        <span x-text="s.saving ? 'Saving…' : ('Save changes ('+dirtyCount()+')')"></span>
+      </button>
+      <button @click="loadSettings()" class="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 text-xs">↻ Reload</button>
+    </div>
+
+    <div x-show="s.applied.length" class="bg-emerald-900/30 border border-emerald-700 rounded p-2 text-emerald-200 text-xs">
+      Applied: <span x-text="s.applied.join(', ')"></span>
+    </div>
+    <div x-show="s.pendingRestart.length" class="bg-amber-900/30 border border-amber-700 rounded p-2 text-amber-200 text-xs">
+      Pending restart: <span x-text="s.pendingRestart.join(', ')"></span>
+    </div>
+    <div x-show="s.error" class="bg-red-900/40 border border-red-700 rounded p-2 text-red-200 text-xs">
+      <span x-show="s.errKey" class="font-semibold" x-text="s.errKey+': '"></span><span x-text="s.error"></span>
+    </div>
+
+    <!-- PULL_ENABLED prominent -->
+    <template x-if="pullField">
+      <div class="bg-slate-800 border border-sky-700 rounded p-3 flex items-center justify-between">
+        <div>
+          <div class="text-sm text-slate-100">Pull processing</div>
+          <div class="text-xs text-slate-400">Starts/stops the in-process pull loop at runtime (hot)</div>
+        </div>
+        <button @click="pullField.value=!pullField.value"
+                :class="pullField.value ? 'bg-emerald-600' : 'bg-slate-600'"
+                class="relative w-12 h-6 rounded-full transition-colors">
+          <span :class="pullField.value ? 'translate-x-6' : 'translate-x-1'" class="absolute top-1 left-0 w-4 h-4 bg-white rounded-full transition-transform"></span>
+        </button>
+      </div>
+    </template>
+
+    <template x-for="g in groups" :key="g">
+      <div class="border border-slate-700 rounded">
+        <div class="bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 uppercase tracking-wide" x-text="g"></div>
+        <div class="divide-y divide-slate-800">
+          <template x-for="f in fieldsByGroup(g)" :key="f.key">
+            <div class="flex items-center gap-3 px-3 py-2">
+              <div class="flex-1 min-w-0">
+                <div class="text-xs text-slate-200 truncate" x-text="f.label || f.key"></div>
+                <div class="text-[10px] text-slate-500" x-text="f.key"></div>
+              </div>
+              <span :class="f.apply==='hot' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'"
+                    class="text-[10px] px-1.5 py-0.5 rounded shrink-0" x-text="f.apply"></span>
+              <div class="w-48 shrink-0">
+                <!-- bool -->
+                <template x-if="f.type==='bool'">
+                  <button @click="f.value=!f.value" :class="f.value ? 'bg-emerald-600' : 'bg-slate-600'" class="relative w-12 h-6 rounded-full transition-colors">
+                    <span :class="f.value ? 'translate-x-6' : 'translate-x-1'" class="absolute top-1 left-0 w-4 h-4 bg-white rounded-full transition-transform"></span>
+                  </button>
+                </template>
+                <!-- enum -->
+                <template x-if="f.type==='enum'">
+                  <select x-model="f.value" class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs">
+                    <template x-for="o in f.options||[]" :key="o"><option :value="o" x-text="o"></option></template>
+                  </select>
+                </template>
+                <!-- int/float -->
+                <template x-if="f.type==='int' || f.type==='float'">
+                  <input type="number" :step="f.type==='float' ? '0.01' : '1'" x-model.number="f.value"
+                         class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs" />
+                </template>
+                <!-- str -->
+                <template x-if="f.type==='str'">
+                  <input type="text" x-model="f.value" class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs" />
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+    <div x-show="!settings.length" class="text-xs text-slate-500">loading…</div>
+  </section>
+
+</div>
 </body>
 </html>
