@@ -3,6 +3,7 @@ from pathlib import Path
 
 OUTPUT_MIME = {
     "txt": "text/plain",
+    "md": "text/markdown",
     "srt": "application/x-subrip",
     "vtt": "text/vtt",
     "json": "application/json",

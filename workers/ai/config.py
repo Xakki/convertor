@@ -8,8 +8,9 @@ Call `load_config()` (optionally `.validate()`) from the entry point. This keeps
 `import workers.ai.config` safe in bare environments (tests, drift-scan subprocess).
 
 External-API provider keys (OPENAI/GEMINI/CLAUDE, AI_STT_PROVIDER, AI_TTS_PROVIDER)
-are intentionally absent — the worker runs local inference only.
-LLM fields are intentionally absent — deferred to ai-worker-llm-text2text.
+are intentionally absent — the worker runs local inference only. The text→text LLM
+path is local too: either an external self-hosted Ollama server (HTTP) or an embedded
+llama.cpp model — never a hosted API.
 """
 
 from __future__ import annotations
@@ -30,11 +31,24 @@ def _getenv_int(name: str, default: int) -> int:
         raise ValueError(f"env {name}={raw!r} is not a valid integer")
 
 
+def _getenv_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(f"env {name}={raw!r} is not a valid float")
+
+
 def _getenv_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+LLM_BACKENDS = ("ollama", "llamacpp")
 
 
 @dataclass(frozen=True)
@@ -63,6 +77,15 @@ class Config:
     embedding_model: str
     embedding_device: str
 
+    # --- LLM text→text (local only: ollama HTTP | embedded llama.cpp) ---
+    llm_backend: str
+    ollama_url: str
+    ollama_model: str
+    llm_model_path: str
+    llm_max_tokens: int
+    llm_temperature: float
+    llm_system_prompt: str
+
     @property
     def api_base(self) -> str:
         """API root with trailing slash stripped; all paths built as f'{api_base}/api/v1/...'."""
@@ -79,6 +102,16 @@ class Config:
                 "PULL_ENABLED=true but WORKER_API_TOKEN is empty — "
                 "the worker cannot authenticate to the pull-API"
             )
+        if self.pull_enabled:
+            if self.llm_backend not in LLM_BACKENDS:
+                raise ValueError(
+                    f"LLM_BACKEND={self.llm_backend!r} invalid — "
+                    f"must be one of {LLM_BACKENDS}"
+                )
+            if self.llm_backend == "llamacpp" and not self.llm_model_path:
+                raise ValueError(
+                    "LLM_BACKEND=llamacpp requires LLM_MODEL_PATH (GGUF weights path)"
+                )
 
 
 def load_config() -> Config:
@@ -100,4 +133,11 @@ def load_config() -> Config:
         tts_engine=os.getenv("TTS_ENGINE", "espeak"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         embedding_device=os.getenv("EMBEDDING_DEVICE", whisper_device),
+        llm_backend=os.getenv("LLM_BACKEND", "ollama").strip().lower(),
+        ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
+        llm_model_path=os.getenv("LLM_MODEL_PATH", ""),
+        llm_max_tokens=_getenv_int("LLM_MAX_TOKENS", 1024),
+        llm_temperature=_getenv_float("LLM_TEMPERATURE", 0.7),
+        llm_system_prompt=os.getenv("LLM_SYSTEM_PROMPT", ""),
     )

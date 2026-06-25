@@ -4,7 +4,8 @@ Covers:
 - CAPABILITIES routing key (routing-drift contract: single 'ai' stream)
 - Mode derivation: flag-agnostic derive_mode(), incl. error on underivable pair
 - ROADMAP.md format matrix validation (STT/TTS rows)
-- convert() routing: format pair → mode (STT / TTS / embedding), no flags read
+- convert() routing: format pair → mode (STT / TTS / embedding / LLM), no flags read
+- LLM text→text: routing + mocked Ollama backend + backend factory selection
 - Poll-client flow: download → convert → result (happy path) + failure paths
 - PULL_ENABLED gate: false → worker stays idle and does not claim
 - Real TTS e2e with espeak-ng (integration marker, skipped if binary absent)
@@ -16,6 +17,8 @@ ai-worker-refactor-core — the worker is local-inference only.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import os
 import shutil
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -92,13 +95,18 @@ class TestDeriveMode:
         assert derive_mode(src, tgt) is Mode.EMBEDDING
 
     @pytest.mark.parametrize("src,tgt", [
+        ("txt", "txt"), ("txt", "md"), ("md", "txt"), ("md", "md"),
+    ])
+    def test_llm_pairs(self, src, tgt):
+        assert derive_mode(src, tgt) is Mode.LLM
+
+    @pytest.mark.parametrize("src,tgt", [
         ("mp3", "mp4"),    # audio → video: ffmpeg, not ai
         ("xyz", "txt"),    # unknown input
         ("txt", "pdf"),    # text → pdf: libreoffice, not ai
         ("pdf", "txt"),    # ocr: image worker, not ai
         ("mp3", "mp3"),    # same format
         ("wav", "ogg"),    # audio → audio: ffmpeg, not ai
-        ("txt", "md"),     # text → text: LLM, deferred (ai-worker-llm-text2text)
     ])
     def test_invalid_pairs_raise(self, src, tgt):
         with pytest.raises(ValueError, match="cannot derive"):
@@ -188,6 +196,218 @@ async def test_convert_txt_to_json_calls_embedding(tmp_path):
     assert Path(out_path).exists()
     assert ext == "json"
     assert mime == "application/json"
+
+
+async def test_convert_txt_to_txt_calls_llm(tmp_path):
+    """convert() derives LLM from txt→txt and dispatches to the llm provider."""
+    src = tmp_path / "text.txt"
+    src.write_text("summarize this", encoding="utf-8")
+
+    class FakeProvider:
+        async def generate(self, prompt):
+            return f"RESULT:{prompt}"
+
+    with patch("workers.ai.providers.llm.make_llm_provider", return_value=FakeProvider()):
+        out_path, mime, ext = await convert({
+            "_localInput": str(src),
+            "conversionId": 21,
+            "sourceFormat": "txt",
+            "targetFormat": "txt",
+        }, _cfg(tmp_path))
+
+    assert Path(out_path).exists()
+    assert ext == "txt"
+    assert mime == "text/plain"
+    assert Path(out_path).read_text() == "RESULT:summarize this"
+
+
+async def test_convert_md_to_md_calls_llm(tmp_path):
+    """md→md is part of the text family → LLM, mime is markdown."""
+    src = tmp_path / "doc.md"
+    src.write_text("# heading", encoding="utf-8")
+
+    class FakeProvider:
+        async def generate(self, prompt):
+            return "# rewritten"
+
+    with patch("workers.ai.providers.llm.make_llm_provider", return_value=FakeProvider()):
+        out_path, mime, ext = await convert({
+            "_localInput": str(src),
+            "conversionId": 22,
+            "sourceFormat": "md",
+            "targetFormat": "md",
+        }, _cfg(tmp_path))
+
+    assert ext == "md"
+    assert mime == "text/markdown"
+    assert Path(out_path).read_text() == "# rewritten"
+
+
+async def test_convert_llm_ignores_flags(tmp_path):
+    """A taskType/subType flag must NOT change the txt→txt LLM derivation."""
+    src = tmp_path / "text.txt"
+    src.write_text("hello", encoding="utf-8")
+
+    class FakeProvider:
+        async def generate(self, prompt):
+            return "out"
+
+    with patch("workers.ai.providers.llm.make_llm_provider", return_value=FakeProvider()):
+        _, _, ext = await convert({
+            "_localInput": str(src),
+            "conversionId": 23,
+            "sourceFormat": "txt",
+            "targetFormat": "txt",
+            "taskType": "embedding",   # bogus flag — must be ignored
+            "subType": "ocr",
+            "ocr": True,
+        }, _cfg(tmp_path))
+
+    assert ext == "txt"  # LLM derived from txt→txt, flags ignored
+
+
+async def test_convert_empty_llm_output_raises(tmp_path):
+    """A whitespace-only backend reply must not be written silently."""
+    src = tmp_path / "text.txt"
+    src.write_text("summarize this", encoding="utf-8")
+
+    class FakeProvider:
+        async def generate(self, prompt):
+            return "   \n  "
+
+    with patch("workers.ai.providers.llm.make_llm_provider", return_value=FakeProvider()):
+        with pytest.raises(ValueError, match="empty output"):
+            await convert({
+                "_localInput": str(src),
+                "conversionId": 25,
+                "sourceFormat": "txt",
+                "targetFormat": "txt",
+            }, _cfg(tmp_path))
+
+
+async def test_convert_empty_llm_input_raises(tmp_path):
+    src = tmp_path / "empty.txt"
+    src.write_bytes(b"   \n  ")
+    with pytest.raises(ValueError, match="empty"):
+        await convert({
+            "_localInput": str(src),
+            "conversionId": 24,
+            "sourceFormat": "txt",
+            "targetFormat": "txt",
+        }, _cfg(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# LLM providers — mocked backends (no real Ollama server, no llama_cpp import)
+# ---------------------------------------------------------------------------
+
+
+async def test_ollama_provider_generate(monkeypatch):
+    """OllamaProvider POSTs the expected payload and returns the stripped response."""
+    from workers.ai.providers.llm import OllamaProvider
+
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": "  summarized text  "}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            captured["client_kwargs"] = kw
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["payload"] = json
+            return FakeResp()
+
+    monkeypatch.setattr("workers.ai.providers.llm.httpx.AsyncClient", FakeClient)
+
+    provider = OllamaProvider(
+        url="http://ollama:11434/",
+        model="qwen2.5",
+        max_tokens=128,
+        temperature=0.3,
+        system_prompt="be brief",
+    )
+    out = await provider.generate("translate this")
+
+    assert out == "summarized text"  # stripped
+    assert captured["url"] == "http://ollama:11434/api/generate"
+    payload = captured["payload"]
+    assert payload["model"] == "qwen2.5"
+    assert payload["prompt"] == "translate this"
+    assert payload["stream"] is False
+    assert payload["system"] == "be brief"
+    assert payload["options"]["num_predict"] == 128
+    assert payload["options"]["temperature"] == 0.3
+    assert captured["client_kwargs"].get("timeout") is not None
+
+
+async def test_ollama_provider_omits_empty_system_prompt(monkeypatch):
+    from workers.ai.providers.llm import OllamaProvider
+
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": "ok"}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json):
+            captured["payload"] = json
+            return FakeResp()
+
+    monkeypatch.setattr("workers.ai.providers.llm.httpx.AsyncClient", FakeClient)
+
+    provider = OllamaProvider(url="http://x", model="m", max_tokens=10, temperature=0.0)
+    await provider.generate("hi")
+    assert "system" not in captured["payload"]
+
+
+def test_make_llm_provider_selects_backend(tmp_path):
+    from workers.ai.providers.llm import (
+        LlamaCppProvider,
+        OllamaProvider,
+        make_llm_provider,
+    )
+
+    ollama_cfg = replace(load_config(), llm_backend="ollama")
+    assert isinstance(make_llm_provider(ollama_cfg), OllamaProvider)
+
+    llamacpp_cfg = replace(
+        load_config(), llm_backend="llamacpp", llm_model_path="/models/m.gguf"
+    )
+    assert isinstance(make_llm_provider(llamacpp_cfg), LlamaCppProvider)
+
+
+def test_make_llm_provider_unknown_backend_raises():
+    from workers.ai.providers.llm import make_llm_provider
+
+    cfg = replace(load_config(), llm_backend="bogus")
+    with pytest.raises(ValueError, match="unknown LLM_BACKEND"):
+        make_llm_provider(cfg)
 
 
 async def test_convert_invalid_pair_raises(tmp_path):
@@ -462,3 +682,25 @@ def test_tts_espeak_real_e2e_wav(tmp_path):
     assert out.is_file(), "espeak-ng produced no output file"
     assert out.stat().st_size > 0, "espeak-ng output is empty"
     assert out.read_bytes()[:4] == b"RIFF", "output is not a valid WAV file"
+
+
+# ---------------------------------------------------------------------------
+# Real LLM e2e — llama.cpp (integration, skipped without binary + GGUF model)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    importlib.util.find_spec("llama_cpp") is None or not os.getenv("LLM_MODEL_PATH"),
+    reason="llama_cpp not installed or LLM_MODEL_PATH unset — skipping real LLM e2e",
+)
+def test_llamacpp_real_e2e():
+    from workers.ai.providers.llm import LlamaCppProvider
+
+    provider = LlamaCppProvider(
+        model_path=os.environ["LLM_MODEL_PATH"],
+        max_tokens=16,
+        temperature=0.0,
+    )
+    out = asyncio.run(provider.generate("Say hello in one word."))
+    assert isinstance(out, str) and out.strip()

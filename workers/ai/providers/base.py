@@ -23,3 +23,14 @@ class TtsProvider(Protocol):
     async def synthesize(self, text: str, output_format: str, out_path: Path) -> None:
         """Synthesize `text` to audio written at `out_path` in `output_format`."""
         ...
+
+
+@runtime_checkable
+class LlmProvider(Protocol):
+    async def generate(self, prompt: str) -> str:
+        """Run a local instruct LLM over `prompt`, returning the generated text.
+
+        Inference params (model, max tokens, temperature, system prompt) are bound
+        at construction — `generate` takes only the per-job prompt.
+        """
+        ...

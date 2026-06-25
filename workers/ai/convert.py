@@ -8,7 +8,7 @@ a pure function of the format pair:
     audio → json              = streaming STT (faster-whisper, segment JSON)
     {txt, md} → {mp3,wav,ogg} = TTS (espeak-ng / pyttsx3)
     {txt, md} → json          = embedding (sentence-transformers)
-    text → text               = LLM (DEFERRED — ai-worker-llm-text2text)
+    {txt, md} → {txt, md}     = LLM text→text (local Ollama / llama.cpp)
 
 Any pair outside these → ValueError (the registry must not route it here).
 """
@@ -33,6 +33,9 @@ STT_INPUTS: set[str] = {"mp3", "wav", "ogg", "m4a", "opus", "flac"}
 STT_OUTPUTS: set[str] = {"txt", "srt", "vtt"}
 TTS_INPUTS: set[str] = {"txt", "md"}
 TTS_OUTPUTS: set[str] = {"mp3", "wav", "ogg"}
+# text family — both sides of the LLM text→text path: txt↔txt, txt↔md, md↔md.
+LLM_INPUTS: set[str] = {"txt", "md"}
+LLM_OUTPUTS: set[str] = {"txt", "md"}
 
 
 class Mode(str, Enum):
@@ -40,14 +43,11 @@ class Mode(str, Enum):
     STT_STREAM = "stt_stream"
     TTS = "tts"
     EMBEDDING = "embedding"
+    LLM = "llm"
 
 
 def derive_mode(src_fmt: str, tgt_fmt: str) -> Mode:
-    """Derive the conversion Mode from a format pair only. Raises ValueError if underivable.
-
-    text→text (LLM) is intentionally NOT handled here — deferred to a separate card;
-    it falls through to the ValueError path.
-    """
+    """Derive the conversion Mode from a format pair only. Raises ValueError if underivable."""
     if src_fmt in STT_INPUTS and tgt_fmt in STT_OUTPUTS:
         return Mode.STT
     if src_fmt in STT_INPUTS and tgt_fmt == "json":
@@ -56,11 +56,14 @@ def derive_mode(src_fmt: str, tgt_fmt: str) -> Mode:
         return Mode.TTS
     if src_fmt in TTS_INPUTS and tgt_fmt == "json":
         return Mode.EMBEDDING
+    if src_fmt in LLM_INPUTS and tgt_fmt in LLM_OUTPUTS:
+        return Mode.LLM
     raise ValueError(
         f"cannot derive conversion mode for {src_fmt!r} → {tgt_fmt!r}: "
         f"not STT ({sorted(STT_INPUTS)} → {sorted(STT_OUTPUTS)}|json), "
         f"nor TTS ({sorted(TTS_INPUTS)} → {sorted(TTS_OUTPUTS)}), "
-        f"nor embedding ({sorted(TTS_INPUTS)} → json)"
+        f"nor embedding ({sorted(TTS_INPUTS)} → json), "
+        f"nor LLM ({sorted(LLM_INPUTS)} → {sorted(LLM_OUTPUTS)})"
     )
 
 
@@ -137,6 +140,18 @@ async def convert(job: dict[str, Any], cfg: Config) -> tuple[str, str, str]:
             model_name,
             cfg.embedding_device,
         )
+
+    elif mode is Mode.LLM:
+        from workers.ai.providers.llm import make_llm_provider
+
+        text = src.read_text(encoding="utf-8")
+        if not text.strip():
+            raise ValueError("LLM source text is empty")
+        provider = make_llm_provider(cfg)
+        result = await provider.generate(text)
+        if not result.strip():
+            raise ValueError("LLM produced empty output")
+        out_path.write_text(result, encoding="utf-8")
 
     if not out_path.exists():
         raise RuntimeError("conversion produced no output")
