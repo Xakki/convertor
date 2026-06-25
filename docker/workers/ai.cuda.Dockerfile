@@ -1,34 +1,83 @@
+ARG CUDA_IMAGE=nvidia/cuda:13.3.0-cudnn-runtime-ubuntu24.04
 ARG AI_BASE_IMAGE=harbor.xakki.ru/convertor/worker-ai-base:latest
-FROM ${AI_BASE_IMAGE}
 
-USER root
+FROM ${CUDA_IMAGE}
 
-# Подключаем официальный репозиторий Nvidia и устанавливаем CUDA 12.4 + cuDNN 9
-RUN curl -fSsL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -o /tmp/cuda-keyring.deb \
-    && dpkg -i /tmp/cuda-keyring.deb \
-    && rm /tmp/cuda-keyring.deb \
-    && apt-get update && apt-get install -y --no-install-recommends \
-        cuda-cudart-12-4 \
-        cuda-cublas-12-4 \
-        libcudnn9-cuda-12 \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+ARG DEBIAN_FRONTEND=noninteractive
 
-# Переменные окружения для корректной работы Docker с NVIDIA контейнерами
-ENV NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-    LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/home/app \
+    HF_HOME=/home/app/.cache/huggingface \
+    PATH=/opt/venv/bin:$PATH \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# Настройки для работы с GPU по умолчанию
+# -----------------------------------------------------------------------------
+# System packages
+# -----------------------------------------------------------------------------
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-venv \
+        python3-pip \
+        ffmpeg \
+        espeak-ng \
+        tini \
+        ca-certificates \
+        curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------------------------
+# Runtime user
+# -----------------------------------------------------------------------------
+
+RUN useradd -m -u 1000 app && \
+    mkdir -p /work && \
+    mkdir -p /home/app/.cache/huggingface && \
+    chown -R app:app /work /home/app
+
+# -----------------------------------------------------------------------------
+# Python venv
+# -----------------------------------------------------------------------------
+
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --upgrade pip setuptools wheel
+
+
+WORKDIR /app
+
+COPY --from=${AI_BASE_IMAGE} /app /app
+
+RUN pip install --no-cache-dir -r /app/requirements-ai.txt
+
+# -----------------------------------------------------------------------------
+# Defaults
+# -----------------------------------------------------------------------------
+
 ENV WORKER_MODULE=workers.ai.worker \
+    WORK_DIR=/work \
     WHISPER_MODEL=base \
     WHISPER_DEVICE=cuda \
-    WHISPER_COMPUTE_TYPE=float16 \
-    EMBEDDING_DEVICE=cuda
+    WHISPER_COMPUTE_TYPE=float16
+
+# -----------------------------------------------------------------------------
+# Healthcheck
+# -----------------------------------------------------------------------------
+
+HEALTHCHECK --interval=60s \
+            --timeout=15s \
+            --start-period=60s \
+            --retries=3 \
+    CMD python -c "import faster_whisper; print('ok')" || exit 1
 
 USER app
 
-HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
-    CMD python3 -c "import faster_whisper; print('ok')" || exit 1
+ENTRYPOINT ["/usr/bin/tini","--"]
 
-CMD ["sh", "-c", "python3 -m ${WORKER_MODULE}"]
+CMD ["sh","-c","python -m ${WORKER_MODULE}"]

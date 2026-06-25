@@ -11,17 +11,17 @@ ENV PYTHONUNBUFFERED=1 \
     HOME=/home/app \
     HF_HOME=/home/app/.cache/huggingface
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        espeak-ng \
+RUN apt-get update && apt-get install -y \
         ffmpeg \
+        espeak-ng \
         tini \
-        ca-certificates \
-        curl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1000 app
-RUN mkdir -p /home/app/.cache/huggingface && chown -R app:app /home/app/.cache
+COPY workers/ai/ /app/
+COPY docker/workers/requirements-ai.txt /app/requirements-ai.txt
 
-COPY docker/workers/requirements-ai.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-ai.txt
+
+WORKDIR /app
+
+ENTRYPOINT ["/usr/bin/tini","--"]
