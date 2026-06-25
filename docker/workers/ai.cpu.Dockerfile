@@ -31,8 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 app && \
-    mkdir -p /work /home/app/.cache/huggingface && \
-    chown -R app:app /work /home/app
+    mkdir -p /work /data /home/app/.cache/huggingface && \
+    chown -R app:app /work /data /home/app
 
 RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip setuptools wheel

@@ -2,12 +2,12 @@
 
 Modes:
   worker     — production pull-loop (default), gated by PULL_ENABLED.
-  devserver  — local dev HTTP server (DEFERRED — ai-worker-devserver). Stub only.
+  devserver  — local dev FastAPI server + web UI (ai-worker-devserver).
 
 Usage:
-  python -m workers.ai            # worker mode
+  python -m workers.ai             # worker mode
   python -m workers.ai worker
-  python -m workers.ai devserver  # not implemented yet
+  python -m workers.ai devserver   # dev-server (also: python -m workers.ai --devserver)
 """
 
 from __future__ import annotations
@@ -27,16 +27,16 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     mode = args[0] if args else "worker"
 
+    # Accept both the positional `devserver` and the `--devserver` flag (card AC).
+    if mode == "devserver" or "--devserver" in args:
+        from workers.ai.devserver.app import serve  # lazy: keeps prod worker fastapi-free
+
+        serve()
+        return 0
+
     if mode == "worker":
         run_worker(load_config())
         return 0
-
-    if mode == "devserver":
-        # DEFERRED — implemented in ai-worker-devserver. Hook left intentionally empty.
-        logging.getLogger(__name__).error(
-            "devserver mode is not implemented yet (ai-worker-devserver)"
-        )
-        return 2
 
     logging.getLogger(__name__).error("unknown mode %r (expected: worker | devserver)", mode)
     return 2

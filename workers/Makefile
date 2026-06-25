@@ -138,11 +138,15 @@ test-python-metrics: build-metrics-exporter ## Unit tests for metrics-exporter (
 	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/metrics-exporter:latest,workers/tests/test_metrics_exporter.py,)
 
 # AI worker is remote/Harbor-built; its image isn't built on-server. Its unit
-# tests only need httpx (worker.py imports the heavy STT/TTS libs lazily), so we
-# run them in the lean worker-ffmpeg image with httpx pip-installed at runtime.
+# tests need httpx + the dev-server stack (worker.py / devserver import the heavy
+# STT/TTS libs lazily), so we run them in the lean worker-ffmpeg image with those
+# deps pip-installed at runtime. FastAPI's TestClient covers the WS route
+# in-process; python-multipart is required for the /api/run multipart upload test.
+# test-engineer: append the new dev-server test file (e.g. workers/tests/test_ai_devserver.py)
+# to the $(2) file list below once it exists.
 .PHONY: test-python-ai
-test-python-ai: build-ffmpeg ## AI-worker unit tests (httpx only; runs in worker-ffmpeg image, no Harbor pull)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py,httpx)
+test-python-ai: build-ffmpeg ## AI-worker + dev-server unit tests (runs in worker-ffmpeg image, no Harbor pull)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py,httpx fastapi uvicorn[standard] python-multipart)
 
 .PHONY: test-drift
 test-drift: ## Routing-contract: PHP registry routing keys vs Python worker CAPABILITIES (may fail on known gaps — see .claude/kanban/grooming/)
