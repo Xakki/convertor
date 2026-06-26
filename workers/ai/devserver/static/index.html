@@ -4,12 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI worker dev-server</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Deviation from the project "use CDN" frontend rule: this is an INTERNAL dev tool that must
+       run on an offline/restricted GPU box, so Alpine + Tailwind are vendored locally (static/vendor/).
+       Relative (no leading slash) URLs so the page works both at :8877/ and under nginx /worker-ai/. -->
+  <script src="vendor/tailwind.min.js"></script>
   <script>
     tailwind.config = { theme: { extend: { fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','monospace'] } } } };
   </script>
-  <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
-  <script defer src="/app.js"></script>
+  <!-- app.js MUST load before Alpine: it defines devserver(), which Alpine
+       evaluates in x-data the moment it auto-starts. Both defer → ordered. -->
+  <script defer src="app.js"></script>
+  <script defer src="vendor/alpine.min.js"></script>
   <style>
     [x-cloak]{ display:none !important; }
     body{ background:#0f172a; }
@@ -113,7 +118,7 @@
           </div>
         </template>
         <template x-if="m.result.text === null">
-          <a :href="m.result.downloadUrl" @click.prevent="download(m.result.downloadUrl)"
+          <a :href="resolveUrl(m.result.downloadUrl)" @click.prevent="download(m.result.downloadUrl)"
              class="inline-block px-3 py-2 rounded bg-sky-600 hover:bg-sky-500 text-white text-xs">⬇ Download result</a>
         </template>
       </div>

@@ -54,18 +54,24 @@ _EXT_BY_FORMAT = {
 def _allowed_origins() -> set[str]:
     """Same-origin allowlist for the WS handshake (anti-CSWSH).
 
-    A browser always sends Origin on a WS connect; we accept only the dev-server's
-    own host:port. DEVSERVER_HOST is included when set (e.g. when exposed off-loopback).
+    A browser always sends Origin on a WS connect; we accept only trusted origins.
+    Localhost defaults always apply (direct :8877 dev). When the dev-server is
+    exposed off-loopback (DEVSERVER_HOST=0.0.0.0) or proxied behind nginx at a
+    public origin (e.g. https://convertor.xakki.pro/worker-ai/), the browser Origin
+    is NOT localhost — so add those absolute origins via DEVSERVER_ALLOWED_ORIGINS
+    (comma-separated, e.g. "https://convertor.xakki.pro,http://host:8877"). This is
+    decoupled from the bind host (DEVSERVER_HOST=0.0.0.0 says nothing about the
+    public origin and a proxied origin carries no port).
     """
-    port = os.getenv("DEVSERVER_PORT", "8765")
-    hosts = ["localhost", "127.0.0.1"]
-    host_env = os.getenv("DEVSERVER_HOST")
-    if host_env and host_env not in ("0.0.0.0", "::"):
-        hosts.append(host_env)
+    port = os.getenv("DEVSERVER_PORT", "8877")
     origins: set[str] = set()
-    for h in hosts:
+    for h in ("localhost", "127.0.0.1"):
         origins.add(f"http://{h}:{port}")
         origins.add(f"https://{h}:{port}")
+    for extra in (os.getenv("DEVSERVER_ALLOWED_ORIGINS") or "").split(","):
+        extra = extra.strip().rstrip("/")
+        if extra:
+            origins.add(extra)
     return origins
 
 

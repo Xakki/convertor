@@ -62,9 +62,15 @@ function devserver() {
       if (this.token) h['Authorization'] = 'Bearer ' + this.token;
       return h;
     },
+    // Directory of the current page: '/' at :8877/, '/worker-ai/' behind nginx.
+    // Lets API/WS/asset URLs resolve relative to wherever the SPA is served.
+    basePath() { return location.pathname.replace(/[^/]*$/, ''); },
+    // Resolve a path (absolute like '/api/x' or relative) against basePath.
+    resolveUrl(p) { return this.basePath() + String(p || '').replace(/^\//, ''); },
+    apiUrl(p) { return this.resolveUrl(p); },
     wsUrl(path) {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      let u = proto + '://' + location.host + path;
+      let u = proto + '://' + location.host + this.resolveUrl(path);
       if (this.token) u += (u.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(this.token);
       return u;
     },
@@ -89,7 +95,7 @@ function devserver() {
 
     async loadMethods() {
       try {
-        const d = await this.getJSON('/api/methods');
+        const d = await this.getJSON(this.apiUrl('api/methods'));
         this.methods = d.methods || [];
         if (this.methods.length && !this.m.mode) { this.m.mode = this.methods[0].mode; this.onModeChange(); }
       } catch (e) { this.m.error = 'Failed to load methods: ' + e.message; }
@@ -118,7 +124,7 @@ function devserver() {
         fd.append('sourceFormat', this.m.source);
         fd.append('targetFormat', this.m.target);
         if ((this.m.mode === 'llm' || this.m.mode === 'embedding') && this.m.model) fd.append('model', this.m.model);
-        const r = await fetch('/api/run', { method: 'POST', headers: this.authHeaders(), body: fd });
+        const r = await fetch(this.apiUrl('api/run'), { method: 'POST', headers: this.authHeaders(), body: fd });
         const data = await r.json().catch(() => ({}));
         if (!r.ok || data.ok === false) { this.m.error = data.error || ('HTTP ' + r.status); return; }
         this.m.result = data;
@@ -132,7 +138,7 @@ function devserver() {
     // download with auth header (can't rely on plain <a> when token is set)
     async download(url) {
       try {
-        const r = await fetch(url, { headers: this.authHeaders() });
+        const r = await fetch(this.resolveUrl(url), { headers: this.authHeaders() });
         if (!r.ok) { this.m.error = 'Download failed: HTTP ' + r.status; return; }
         const blob = await r.blob();
         const cd = r.headers.get('Content-Disposition') || '';
@@ -229,7 +235,7 @@ function devserver() {
     },
     stopStatsPoll() { if (this._statsTimer) { clearInterval(this._statsTimer); this._statsTimer = null; } },
     async fetchStats() {
-      try { this.stats = await this.getJSON('/api/stats'); }
+      try { this.stats = await this.getJSON(this.apiUrl('api/stats')); }
       catch (e) { /* keep last known; avoid console spam */ }
     },
 
@@ -245,7 +251,7 @@ function devserver() {
     async loadSettings() {
       this.s.error = ''; this.s.errKey = '';
       try {
-        const d = await this.getJSON('/api/settings');
+        const d = await this.getJSON(this.apiUrl('api/settings'));
         this.settings = (d.settings || []).map(f => ({ ...f, _orig: f.value }));
       } catch (e) { this.s.error = 'Failed to load settings: ' + e.message; }
     },
@@ -258,7 +264,7 @@ function devserver() {
       if (!Object.keys(changed).length) return;
       this.s.saving = true; this.s.error = ''; this.s.errKey = ''; this.s.applied = []; this.s.pendingRestart = [];
       try {
-        const r = await fetch('/api/settings', {
+        const r = await fetch(this.apiUrl('api/settings'), {
           method: 'PUT',
           headers: this.authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(changed),
