@@ -284,7 +284,7 @@ def test_ws_partial_then_final(dev_app):
     ):
         with TestClient(dev_app) as client:
             with client.websocket_connect(
-                "/ws/stream", headers={"origin": "http://localhost:8765"}
+                "/ws/stream", headers={"origin": "http://localhost:8877"}
             ) as ws:
                 ws.send_json({"type": "start", "format": "webm/opus", "sampleRate": 16000})
                 ws.send_bytes(b"webm-frame-bytes")   # last_emit=0 → emits a partial now
@@ -330,12 +330,12 @@ def test_ws_foreign_origin_rejected(dev_app):
 def test_allowed_origins_helper(monkeypatch):
     """Authoritative anti-CSWSH assertion (independent of TestClient WS quirks)."""
     monkeypatch.delenv("DEVSERVER_HOST", raising=False)
-    monkeypatch.setenv("DEVSERVER_PORT", "8765")
+    monkeypatch.setenv("DEVSERVER_PORT", "8877")
     from workers.ai.devserver.routes_stream import _allowed_origins
 
     origins = _allowed_origins()
-    assert "http://localhost:8765" in origins
-    assert "http://127.0.0.1:8765" in origins
+    assert "http://localhost:8877" in origins
+    assert "http://127.0.0.1:8877" in origins
     assert "http://evil.example" not in origins
 
 

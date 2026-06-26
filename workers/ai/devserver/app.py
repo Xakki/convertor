@@ -1,6 +1,6 @@
 """FastAPI app factory + uvicorn launcher for the AI-worker dev-server.
 
-Binds 127.0.0.1:8765 by default (DEVSERVER_HOST/DEVSERVER_PORT). Optional bearer
+Binds 127.0.0.1:8877 by default (DEVSERVER_HOST/DEVSERVER_PORT). Optional bearer
 (DEVSERVER_TOKEN): when set, every /api/* request and the /ws/* handshake must
 present it (header `Authorization: Bearer <token>` or `?token=`). Static UI is
 served from ./static.
@@ -92,8 +92,8 @@ def serve() -> None:
 
     host = os.getenv("DEVSERVER_HOST", "127.0.0.1")
     try:
-        port = int(os.getenv("DEVSERVER_PORT", "8765"))
+        port = int(os.getenv("DEVSERVER_PORT", "8877"))
     except ValueError:
-        port = 8765
+        port = 8877
     logger.info("starting AI-worker dev-server on http://%s:%d", host, port)
     uvicorn.run(app, host=host, port=port)
