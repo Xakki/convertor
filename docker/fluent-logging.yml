@@ -92,14 +92,6 @@ services:
         depends_on:
             fluent-bit:
                 condition: service_started
-    worker-ai:
-        <<: *_logging
-        labels:
-            tier: "worker"
-            log_format: "auto"
-        depends_on:
-            fluent-bit:
-                condition: service_started
     worker-data:
         <<: *_logging
         labels:

@@ -324,44 +324,9 @@ services:
             - default
             - backend
 
-    worker-ai:
-        # Remote worker — runs off-server (home WSL + GPU), NOT on saFin.
-        # profiles:[ai] = local-dev-only; the real deployment pulls the Harbor
-        # image on the home host via docker-compose.worker-ai.yml.
-        profiles: ["ai"]
-        build:
-            context: .
-            dockerfile: docker/workers/ai.cpu.Dockerfile
-        image: ${DOCKER_IMAGE_AI:-xakki-convertor/worker-ai:cpu}
-        container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
-        restart: unless-stopped
-        stop_grace_period: 60s
-        stop_signal: SIGTERM
-        volumes:
-            - whisper-models:/home/app/.cache/huggingface
-        environment:
-            APP_ENV: ${APP_ENV}
-            TZ: ${TZ}
-            WORKER_MODULE: workers.ai.worker
-            # Pull-API config (no KeyDB/S3 — all I/O via API)
-            API_BASE_URL: ${API_BASE_URL:-http://localhost:8080}
-            WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
-            WORKER_TYPE: ${WORKER_TYPE:-ai}
-            WHISPER_MODEL: ${WHISPER_MODEL:-base}
-            WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
-            WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
-            AI_STT_PROVIDER: ${AI_STT_PROVIDER:-local}
-            AI_TTS_PROVIDER: ${AI_TTS_PROVIDER:-local}
-        healthcheck:
-            test: ["CMD", "python3", "-c", "import faster_whisper; print('ok')"]
-            interval: 60s
-            timeout: 15s
-            retries: 3
-            start_period: 30s
-        # default only: egress to pull-API + HuggingFace model download.
-        # No backend (keydb not needed) — all queue access via pull-API.
-        networks:
-            - default
+    # worker-ai is a REMOTE worker (home WSL + GPU), run separately via
+    # docker-compose.worker-ai.yml (add it to COMPOSE_FILE in .env.local). It is
+    # intentionally NOT part of the main on-server stack.
 
     worker-data:
         build:
@@ -455,5 +420,3 @@ volumes:
         name: "${COMPOSE_PROJECT_NAME}-keydb-data"
     php-socket:
         name: "${COMPOSE_PROJECT_NAME}-php-socket"
-    whisper-models:
-        name: "${COMPOSE_PROJECT_NAME}-whisper-models"

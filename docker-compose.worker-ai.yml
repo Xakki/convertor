@@ -55,7 +55,7 @@
 services:
     worker-ai:
         image: ${DOCKER_IMAGE_AI:-xakki-convertor/worker-ai:cuda}
-        container_name: "worker-ai-home"
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
         restart: unless-stopped
         stop_grace_period: 60s
         stop_signal: SIGTERM
@@ -103,12 +103,17 @@ services:
             # must also set DEVSERVER_HOST=0.0.0.0 (the in-container default 127.0.0.1 is loopback-only).
             DEVSERVER_CONFIG_PATH: ${DEVSERVER_CONFIG_PATH:-/data/devserver_settings.json}
             DEVSERVER_HOST: ${DEVSERVER_HOST:-127.0.0.1}
-            DEVSERVER_PORT: ${DEVSERVER_PORT:-8765}
+            DEVSERVER_PORT: ${DEVSERVER_PORT:-8877}
             DEVSERVER_TOKEN: ${DEVSERVER_TOKEN:-}
+            # WS Origin allowlist (anti-CSWSH). Localhost is always allowed; when reaching the
+            # dev-server off-loopback or via the nginx /worker-ai/ subpath, add the public origin(s)
+            # here (comma-separated, no path), else the /ws/stream handshake is rejected (1008).
+            #   e.g. DEVSERVER_ALLOWED_ORIGINS=https://convertor.xakki.pro
+            DEVSERVER_ALLOWED_ORIGINS: ${DEVSERVER_ALLOWED_ORIGINS:-}
         # To run the dev-server instead of the pull worker, override the command + publish the
         # port (set DEVSERVER_HOST=0.0.0.0 so the mapping is reachable):
         #   command: ["python3", "-m", "workers.ai", "--devserver"]
-        #   ports: ["${DEVSERVER_PORT:-8765}:${DEVSERVER_PORT:-8765}"]
+        #   ports: ["${DEVSERVER_PORT:-8877}:${DEVSERVER_PORT:-8877}"]
         # Uncomment for CUDA GPU support (nvidia-container-toolkit required on host):
         # deploy:
         #     resources:

@@ -11,7 +11,7 @@ these. Any change here must be agreed via the teamlead, not invented per-side.
 
 Entry: `python -m workers.ai devserver` **and** `python -m workers.ai --devserver`
 (accept both — the card AC names `--devserver` literally). App binds
-`127.0.0.1:8765` by default
+`127.0.0.1:8877` by default
 (`DEVSERVER_HOST`/`DEVSERVER_PORT`). Optional bearer (`DEVSERVER_TOKEN`): if set,
 every `/api/*` and `/ws/*` request must send `Authorization: Bearer <token>`
 (WS via `?token=` query param too). Default = no token (localhost only).
@@ -19,6 +19,17 @@ every `/api/*` and `/ws/*` request must send `Authorization: Bearer <token>`
 Static UI served at `/` from `workers/ai/devserver/static/` (SPA, 4 tabs).
 All API under `/api/`, WS under `/ws/`. JSON everywhere except file upload
 (multipart) and result download (binary stream).
+
+**Base-path aware (subpath serving).** The UI works BOTH at direct `:8877/` AND
+behind a reverse proxy at a subpath (e.g. nginx `/worker-ai/` → `proxy_pass …/`
+strips the prefix). To allow this: index.html references assets with **relative**
+URLs (`app.js`, `vendor/…`, no leading slash); app.js derives a base from
+`location.pathname` (`basePath()` = directory of the page) and builds every
+API/WS URL as `basePath()+'api/…'` / `wsUrl('/ws/stream')` rather than absolute
+`/api…`. Backend-returned absolute URLs (e.g. `downloadUrl: "/api/result/<id>"`)
+are re-resolved against `basePath()` client-side (`resolveUrl`). nginx must
+redirect the no-slash form (`/worker-ai` → `/worker-ai/`) so relative resolution
+keeps the prefix.
 
 ## Architecture notes (binding decisions)
 
@@ -79,6 +90,15 @@ small in-memory registry mapping `resultId` → temp path (best-effort cleanup).
 
 ## WS /ws/stream  (audio streaming, dev-only — NOT backend pull-API)
 Browser captures mic and streams audio to the dev-server for live STT.
+
+**WS Origin allowlist (anti-CSWSH).** The handshake rejects (close 1008) browser
+Origins not in an allowlist. Localhost (`http(s)://localhost|127.0.0.1:<port>`)
+is always allowed. When exposed off-loopback (`DEVSERVER_HOST=0.0.0.0`) or proxied
+at a public origin (e.g. `https://convertor.xakki.pro/worker-ai/`), the Origin is
+NOT localhost — set **`DEVSERVER_ALLOWED_ORIGINS`** (comma-separated absolute
+origins, no path, e.g. `https://convertor.xakki.pro,http://myhost:8877`) to add
+them. Decoupled from `DEVSERVER_HOST` (bind host ≠ public origin; a proxied origin
+has no port). Missing Origin (CLI/TestClient) is allowed; the token check still applies.
 - **Client → server, first message** (text/JSON, handshake):
   `{ "type": "start", "sampleRate": 16000, "format": "webm/opus", "lang": null }`
   **FINALIZED.** Browser captures mic with `MediaRecorder` (`audio/webm;codecs=opus`)
@@ -153,7 +173,12 @@ Response:
 Validation error: HTTP 422 `{ "ok": false, "error": "...", "key": "WHISPER_MODEL" }`.
 
 ## Web UI (static/)
-SPA, Alpine.js + HTMX + Tailwind via CDN (project frontend rules — no npm in prod).
+SPA, Alpine.js + Tailwind. **Vendored locally** under `static/vendor/`
+(`alpine.min.js`, `tailwind.min.js`) and referenced with relative URLs — NOT
+CDN. Deliberate deviation from the project "use CDN" frontend rule because this
+is an internal dev tool that must run on an offline/restricted GPU box (no
+external network). Asset/API/WS URLs are base-path relative (see above) so it
+serves at `:8877/` and under `/worker-ai/`.
 Tabs: **Methods** (pick mode/source/target, upload, run, preview/download),
 **Audio stream** (mic → WS → live transcript), **Pull stats** (poll `/api/stats`
 every ~2 s; show "disabled" when off), **Settings** (render groups, hot vs
