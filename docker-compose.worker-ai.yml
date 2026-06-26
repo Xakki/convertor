@@ -110,10 +110,11 @@ services:
             # here (comma-separated, no path), else the /ws/stream handshake is rejected (1008).
             #   e.g. DEVSERVER_ALLOWED_ORIGINS=https://convertor.xakki.pro
             DEVSERVER_ALLOWED_ORIGINS: ${DEVSERVER_ALLOWED_ORIGINS:-}
-        # To run the dev-server instead of the pull worker, override the command + publish the
-        # port (set DEVSERVER_HOST=0.0.0.0 so the mapping is reachable):
-        #   command: ["python3", "-m", "workers.ai", "--devserver"]
-        #   ports: ["${DEVSERVER_PORT:-8877}:${DEVSERVER_PORT:-8877}"]
+        # Run the dev-server (FastAPI UI + optional in-process pull loop via PULL_ENABLED)
+        # instead of the bare pull worker. nginx reaches it internally as worker-ai:8877, so
+        # set DEVSERVER_HOST=0.0.0.0 (in .env.local) — no host ports: publish needed.
+        command: ["python3", "-m", "workers.ai", "--devserver"]
+        #   ports: ["${DEVSERVER_PORT:-8877}:${DEVSERVER_PORT:-8877}"]   # only for direct host curl
         # Uncomment for CUDA GPU support (nvidia-container-toolkit required on host):
         # deploy:
         #     resources:
