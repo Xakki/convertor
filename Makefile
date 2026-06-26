@@ -19,6 +19,8 @@ DC         = docker compose
 COMPOSE_TEST = docker compose --env-file .env.test
 PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
+PUID := $(shell id -u)
+PGID := $(shell id -g)
 
 # Colours
 BOLD  = \033[1m
