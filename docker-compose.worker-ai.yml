@@ -98,15 +98,17 @@ services:
             LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
             LLM_SYSTEM_PROMPT: ${LLM_SYSTEM_PROMPT:-}
             # Dev-server (only used when overriding command to `python -m workers.ai --devserver`).
-            # Persist overlay on the worker-ai-data volume; bind to localhost by default.
+            # Persist overlay on the worker-ai-data volume. A single DEVSERVER_PORT drives both
+            # the uvicorn listen port and the published port below. To reach it from the host you
+            # must also set DEVSERVER_HOST=0.0.0.0 (the in-container default 127.0.0.1 is loopback-only).
             DEVSERVER_CONFIG_PATH: ${DEVSERVER_CONFIG_PATH:-/data/devserver_settings.json}
-            # DEVSERVER_HOST: 0.0.0.0           # expose to the GPU-host network (default 127.0.0.1)
-            # DEVSERVER_PORT: ${DEVSERVER_PORT:-8765}
-            # DEVSERVER_TOKEN: ${DEVSERVER_TOKEN:-}   # require bearer when exposed off-localhost
-        # To run the dev-server instead of the pull worker, override the command and
-        # map the port, e.g.:
+            DEVSERVER_HOST: ${DEVSERVER_HOST:-127.0.0.1}
+            DEVSERVER_PORT: ${DEVSERVER_PORT:-8765}
+            DEVSERVER_TOKEN: ${DEVSERVER_TOKEN:-}
+        # To run the dev-server instead of the pull worker, override the command + publish the
+        # port (set DEVSERVER_HOST=0.0.0.0 so the mapping is reachable):
         #   command: ["python3", "-m", "workers.ai", "--devserver"]
-        #   ports: ["127.0.0.1:8765:8765"]
+        #   ports: ["${DEVSERVER_PORT:-8765}:${DEVSERVER_PORT:-8765}"]
         # Uncomment for CUDA GPU support (nvidia-container-toolkit required on host):
         # deploy:
         #     resources:
