@@ -96,6 +96,25 @@ build-ai-cpu: ## LOCAL build: ai.cpu (FROM ai-base + CPU ML stack, no GPU requir
 worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compose)
 	docker compose -f docker-compose.worker-ai.yml config -q
 
+# On-server run of the AI worker (CPU dev-server) as part of the convertor stack,
+# reachable via nginx at /worker-ai/. Explicit -f because the root Makefile
+# unexports COMPOSE_FILE and `docker compose` only auto-loads .env (not .env.local),
+# so the worker-ai overlay would otherwise be dropped. Image/env come from the
+# exported vars (set DOCKER_IMAGE_AI=...:cpu + DEVSERVER_HOST=0.0.0.0 in .env.local).
+WORKER_AI_DC = $(DC) -f docker-compose.yml -f docker-compose.worker-ai.yml
+
+.PHONY: worker-ai-up
+worker-ai-up: ## Run the AI worker (CPU dev-server) on this host, reachable via nginx /worker-ai/
+	$(WORKER_AI_DC) up -d worker-ai
+
+.PHONY: worker-ai-down
+worker-ai-down: ## Stop & remove the on-server AI worker
+	$(WORKER_AI_DC) rm -sf worker-ai
+
+.PHONY: worker-ai-logs
+worker-ai-logs: ## Tail the on-server AI worker logs
+	$(WORKER_AI_DC) logs -f worker-ai
+
 ##@ Queue / Workers
 
 .PHONY: worker-logs
