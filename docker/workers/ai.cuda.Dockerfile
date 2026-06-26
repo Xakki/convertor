@@ -77,8 +77,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1000 app && \
-    mkdir -p /work /data /home/app/.cache/huggingface && \
+# App user at a stable, host-matchable UID/GID (default 1000 so host bind mounts and
+# the /data volume stay writable). Configurable via build args, e.g.
+# `make build-ai-cuda APP_UID=$(id -u)`. The Ubuntu 24.04 CUDA base ships a default
+# `ubuntu` user at UID 1000, so free any pre-existing occupant of the target uid/gid
+# before creating `app` — keeps the RUN idempotent across Ubuntu and Debian bases.
+ARG APP_UID=1000
+ARG APP_GID=1000
+RUN set -eux; \
+    if u="$(getent passwd "${APP_UID}" | cut -d: -f1)"; [ -n "$u" ]; then userdel -r "$u" 2>/dev/null || true; fi; \
+    if g="$(getent group "${APP_GID}" | cut -d: -f1)"; [ -n "$g" ]; then groupdel "$g" 2>/dev/null || true; fi; \
+    groupadd -g "${APP_GID}" app; \
+    useradd -m -u "${APP_UID}" -g "${APP_GID}" app; \
+    mkdir -p /work /data /home/app/.cache/huggingface; \
     chown -R app:app /work /data /home/app
 
 RUN python3 -m venv /opt/venv && \

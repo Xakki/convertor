@@ -58,6 +58,11 @@ TORCH_CUDA_ARCH ?= $(shell echo $(CUDA_ARCH) | sed 's/\([0-9]*\)\([0-9]\)/\1.\2/
 # Set to 1 to compile and embed llama-cpp-python with CUDA (larger image, slower build).
 # Default 0: Ollama backend works without it; the code path is always present (lazy import).
 WITH_LLAMACPP   ?= 0
+# App user UID/GID baked into the working images. Default 1000 (host-matchable, so
+# bind mounts + the /data volume stay writable). Override to match the build host:
+#   make build-ai-cuda APP_UID=$(id -u) APP_GID=$(id -g)
+APP_UID         ?= 1000
+APP_GID         ?= 1000
 
 .PHONY: build-ai-base
 build-ai-base: ## Build the LIGHT ai-base image (code + pure-python deps, no ML)
@@ -75,12 +80,16 @@ build-ai-cuda: ## LOCAL build: ai.cuda (FROM ai-base + CUDA ML). CUDA_ARCH=86 WI
 	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
 	    --build-arg TORCH_CUDA_ARCH=$(TORCH_CUDA_ARCH) \
 	    --build-arg WITH_LLAMACPP=$(WITH_LLAMACPP) \
+	    --build-arg APP_UID=$(APP_UID) \
+	    --build-arg APP_GID=$(APP_GID) \
 	    -f docker/workers/ai.cuda.Dockerfile .
 
 .PHONY: build-ai-cpu
 build-ai-cpu: ## LOCAL build: ai.cpu (FROM ai-base + CPU ML stack, no GPU required)
 	docker build -t $(AI_CPU_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_IMAGE) \
+	    --build-arg APP_UID=$(APP_UID) \
+	    --build-arg APP_GID=$(APP_GID) \
 	    -f docker/workers/ai.cpu.Dockerfile .
 
 .PHONY: worker-ai-check
