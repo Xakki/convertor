@@ -143,22 +143,26 @@ All editable settings with metadata. `apply` = `"hot"` (live) or `"restart"`
   { "key": "LLM_MAX_TOKENS",     "value": 1024,  "type": "int",    "group": "llm",       "apply": "hot" },
   { "key": "LLM_TEMPERATURE",    "value": 0.7,   "type": "float",  "group": "llm",       "apply": "hot" },
   { "key": "LLM_SYSTEM_PROMPT",  "value": "",    "type": "str",    "group": "llm",       "apply": "hot" },
-  { "key": "WHISPER_MODEL",      "value": "base","type": "enum",   "group": "stt",       "apply": "restart", "options": ["tiny","base","small","medium","large"] },
+  { "key": "WHISPER_MODEL",      "value": "base","type": "enum",   "group": "stt",       "apply": "restart", "options": ["tiny","base","small","medium","large"], "helpUrl": "https://huggingface.co/Systran" },
   { "key": "WHISPER_DEVICE",     "value": "cpu", "type": "enum",   "group": "stt",       "apply": "restart", "options": ["cpu","cuda","mps"] },
   { "key": "WHISPER_COMPUTE_TYPE","value":"int8","type": "enum",   "group": "stt",       "apply": "restart", "options": ["int8","int16","float16","float32"] },
   { "key": "STREAM_WINDOW_SEC",  "value": 20,    "type": "int",    "group": "stt_stream","apply": "restart" },
   { "key": "STREAM_OVERLAP_SEC", "value": 2,     "type": "int",    "group": "stt_stream","apply": "restart" },
   { "key": "TTS_ENGINE",         "value": "espeak","type":"enum",  "group": "tts",       "apply": "restart", "options": ["espeak","pyttsx3"] },
-  { "key": "EMBEDDING_MODEL",    "value": "BAAI/bge-m3","type":"str","group": "embedding","apply": "restart" },
+  { "key": "EMBEDDING_MODEL",    "value": "Qwen/Qwen3-Embedding-0.6B","type":"str","group": "embedding","apply": "restart", "helpUrl": "https://huggingface.co/models?library=sentence-transformers&pipeline_tag=feature-extraction&sort=trending" },
   { "key": "EMBEDDING_DEVICE",   "value": "cpu", "type": "enum",   "group": "embedding","apply": "restart", "options": ["cpu","cuda","mps"] },
-  { "key": "LLM_BACKEND",        "value": "ollama","type": "enum", "group": "llm",       "apply": "restart", "options": ["ollama","llamacpp"] },
+  { "key": "LLM_BACKEND",        "value": "llamacpp","type": "enum", "group": "llm",     "apply": "restart", "options": ["ollama","llamacpp"] },
+  { "key": "LLM_MODEL_REPO",     "value": "Qwen/Qwen2.5-0.5B-Instruct-GGUF","type":"str","group":"llm","apply":"restart", "helpUrl": "https://huggingface.co/models?library=gguf&pipeline_tag=text-generation&sort=trending" },
+  { "key": "LLM_MODEL_FILE",     "value": "qwen2.5-0.5b-instruct-q4_k_m.gguf","type":"str","group":"llm","apply":"restart" },
   { "key": "OLLAMA_URL",         "value": "http://localhost:11434","type":"str","group":"llm","apply":"restart" },
-  { "key": "OLLAMA_MODEL",       "value": "llama3.2","type":"str", "group": "llm",       "apply": "restart" }
+  { "key": "OLLAMA_MODEL",       "value": "llama3.2","type":"str", "group": "llm",       "apply": "restart", "helpUrl": "https://ollama.com/library" }
 ] }
 ```
 The exact key set must match `Config` fields in `workers/ai/config.py`; the list
 above is the authoritative grouping/apply-mode. Secrets (`WORKER_API_TOKEN`,
-`LLM_MODEL_PATH`) are NOT exposed/editable here.
+`LLM_MODEL_PATH`) are NOT exposed/editable here. Optional `helpUrl` (string): a
+"where to find compatible models" link for model-valued settings; the UI renders
+it as a "find models ↗" link next to the field. Absent on settings without one.
 
 ## PUT /api/settings
 Body: `{ "<KEY>": <value>, ... }` (subset). Backend validates types/enums,

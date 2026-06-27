@@ -39,6 +39,7 @@ class Setting:
     apply: str         # hot | restart
     label: str | None = None
     options: tuple[str, ...] | None = None
+    help_url: str | None = None   # optional "where to find compatible models" link
 
 
 # Authoritative grouping / apply-mode — mirrors the API contract list.
@@ -49,7 +50,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("LLM_TEMPERATURE", "llm_temperature", "float", "llm", "hot"),
     Setting("LLM_SYSTEM_PROMPT", "llm_system_prompt", "str", "llm", "hot"),
     Setting("WHISPER_MODEL", "whisper_model", "enum", "stt", "restart",
-            options=("tiny", "base", "small", "medium", "large")),
+            options=("tiny", "base", "small", "medium", "large"),
+            help_url="https://huggingface.co/Systran"),
     Setting("WHISPER_DEVICE", "whisper_device", "enum", "stt", "restart",
             options=("cpu", "cuda", "mps")),
     Setting("WHISPER_COMPUTE_TYPE", "whisper_compute_type", "enum", "stt", "restart",
@@ -58,13 +60,18 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("STREAM_OVERLAP_SEC", "stream_overlap_sec", "int", "stt_stream", "restart"),
     Setting("TTS_ENGINE", "tts_engine", "enum", "tts", "restart",
             options=("espeak", "pyttsx3")),
-    Setting("EMBEDDING_MODEL", "embedding_model", "str", "embedding", "restart"),
+    Setting("EMBEDDING_MODEL", "embedding_model", "str", "embedding", "restart",
+            help_url="https://huggingface.co/models?library=sentence-transformers&pipeline_tag=feature-extraction&sort=trending"),
     Setting("EMBEDDING_DEVICE", "embedding_device", "enum", "embedding", "restart",
             options=("cpu", "cuda", "mps")),
     Setting("LLM_BACKEND", "llm_backend", "enum", "llm", "restart",
             options=("ollama", "llamacpp")),
+    Setting("LLM_MODEL_REPO", "llm_model_repo", "str", "llm", "restart",
+            help_url="https://huggingface.co/models?library=gguf&pipeline_tag=text-generation&sort=trending"),
+    Setting("LLM_MODEL_FILE", "llm_model_file", "str", "llm", "restart"),
     Setting("OLLAMA_URL", "ollama_url", "str", "llm", "restart"),
-    Setting("OLLAMA_MODEL", "ollama_model", "str", "llm", "restart"),
+    Setting("OLLAMA_MODEL", "ollama_model", "str", "llm", "restart",
+            help_url="https://ollama.com/library"),
 )
 SETTINGS_BY_KEY: dict[str, Setting] = {s.key: s for s in SETTINGS}
 
@@ -153,5 +160,7 @@ def settings_list(cfg: Config) -> list[dict[str, Any]]:
             item["label"] = s.label
         if s.options is not None:
             item["options"] = list(s.options)
+        if s.help_url:
+            item["helpUrl"] = s.help_url
         out.append(item)
     return out
