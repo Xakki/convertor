@@ -41,9 +41,13 @@
 #     -v ~/.cache/huggingface:/home/app/.cache/huggingface \
 #     xakki-convertor/worker-ai:cpu
 #
-# Ollama (two options):
-#   a) External Ollama on host (default): -e OLLAMA_URL=http://host.docker.internal:11434
-#   b) Share Ollama weights into container: -v ~/.ollama:/root/.ollama
+# LLM text→text backend:
+#   Default = embedded llama.cpp (LLM_BACKEND=llamacpp) over a HF GGUF
+#   (LLM_MODEL_REPO/LLM_MODEL_FILE, default Qwen2.5-0.5B-Instruct Q4_K_M) — self-contained,
+#   downloaded into the models volume on first use, no external server needed.
+#   Alternative = Ollama (LLM_BACKEND=ollama):
+#     a) External Ollama on host: -e OLLAMA_URL=http://host.docker.internal:11434
+#     b) Share Ollama weights into container: -v ~/.ollama:/root/.ollama
 #
 # ============================================================================
 # ## Alternative: compose
@@ -89,10 +93,16 @@ services:
             TTS_ENGINE: ${TTS_ENGINE:-espeak}
             # Embedding
             EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
-            # LLM text→text — local only (ollama HTTP or embedded llama.cpp)
-            LLM_BACKEND: ${LLM_BACKEND:-ollama}
+            # LLM text→text — local only. Default = embedded llama.cpp over a HF GGUF
+            # (self-contained, no external server). Switch LLM_BACKEND=ollama to use a
+            # self-hosted Ollama server instead.
+            LLM_BACKEND: ${LLM_BACKEND:-llamacpp}
+            # llamacpp: pull the GGUF from a HF repo on first use (cached in the models volume).
+            LLM_MODEL_REPO: ${LLM_MODEL_REPO:-Qwen/Qwen2.5-0.5B-Instruct-GGUF}
+            LLM_MODEL_FILE: ${LLM_MODEL_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
             OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
             OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+            # llamacpp alt: a local GGUF path instead of LLM_MODEL_REPO (takes precedence if set).
             LLM_MODEL_PATH: ${LLM_MODEL_PATH:-}
             LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1024}
             LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}

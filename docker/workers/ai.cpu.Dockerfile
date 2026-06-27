@@ -58,6 +58,11 @@ RUN pip install --no-cache-dir \
     -r /app/requirements-ai-base.txt \
     -r /app/requirements-ai-ml.txt
 
+# llama-cpp-python for the local llamacpp LLM backend (text→text over GGUF).
+# Prebuilt CPU wheel (py3-none manylinux2014) from the abetlen index → no source compile.
+RUN pip install --no-cache-dir llama-cpp-python==0.3.30 \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
 WORKDIR /app
 
 ENV WHISPER_DEVICE=cpu \
