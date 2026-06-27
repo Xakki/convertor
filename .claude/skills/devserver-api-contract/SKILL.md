@@ -54,22 +54,28 @@ keeps the prefix.
 ## GET /api/methods
 List of conversion methods derived from the worker's mode→formats mapping
 (source of truth: `derive_mode` pairs in `workers/ai/convert.py`). No flags.
+Each method carries a `description` (string) — a concise, human "what this does"
+the UI shows under the mode selector (e.g. stt_stream explains sliding-window
+streaming vs one-shot stt).
 ```json
 { "methods": [
-  { "mode": "stt",       "label": "Speech → Text",      "sources": ["mp3","wav","ogg","m4a","opus","flac"], "targets": ["txt","srt","vtt"] },
-  { "mode": "stt_stream","label": "Speech → Segments",  "sources": ["mp3","wav","ogg","m4a","opus","flac"], "targets": ["json"] },
-  { "mode": "tts",       "label": "Text → Speech",      "sources": ["txt","md"], "targets": ["mp3","wav","ogg"] },
-  { "mode": "embedding", "label": "Text → Embedding",   "sources": ["txt","md"], "targets": ["json"] },
-  { "mode": "llm",       "label": "Text → Text (LLM)",  "sources": ["txt","md"], "targets": ["txt","md"] }
+  { "mode": "stt",       "label": "Speech → Text",      "sources": ["mp3","wav","ogg","m4a","opus","flac"], "targets": ["txt","srt","vtt"], "description": "One-shot transcription…" },
+  { "mode": "stt_stream","label": "Speech → Segments",  "sources": ["mp3","wav","ogg","m4a","opus","flac"], "targets": ["json"], "description": "Streaming transcription via sliding windows…" },
+  { "mode": "tts",       "label": "Text → Speech",      "sources": ["txt","md"], "targets": ["mp3","wav","ogg"], "description": "Speech synthesis…" },
+  { "mode": "embedding", "label": "Text → Embedding",   "sources": ["txt","md"], "targets": ["json"], "description": "Vector embedding…" },
+  { "mode": "llm",       "label": "Text → Text (LLM)",  "sources": ["txt","md"], "targets": ["txt","md"], "description": "LLM generation…" }
 ] }
 ```
 
 ## POST /api/run  (multipart/form-data)
-Run one conversion on an uploaded file. Fields: `file` (the upload),
+Run one conversion. Input is EITHER `file` (the upload) OR `text` (a string —
+for text-input methods like tts/llm/embedding where the user types directly);
+exactly one is required, `file` wins if both are sent, neither → 422
+`{"ok": false, "error": "provide a file or text input"}`. Other fields:
 `sourceFormat` (str), `targetFormat` (str), optional `model` (str, LLM/embedding).
-Backend writes upload to a temp path under WORK_DIR, builds a job dict
-(`{_localInput, conversionId, sourceFormat, targetFormat, model?}`), calls
-`convert(job, cfg)`, returns:
+Backend writes the upload (or the `text`, UTF-8) to a temp path under WORK_DIR,
+builds a job dict (`{_localInput, conversionId, sourceFormat, targetFormat,
+model?}`), calls `convert(job, cfg)`, returns:
 ```json
 { "ok": true, "resultId": "<uuid>", "mime": "text/plain", "ext": "txt",
   "bytes": 1234,
@@ -136,9 +142,13 @@ last-known counters if any (UI shows "processing disabled").
 ## GET /api/settings
 All editable settings with metadata. `apply` = `"hot"` (live) or `"restart"`
 (needs model reload / next job). `value` reflects the effective (env+overlay) value.
+Each setting also carries `label` (short human name) and `help` (one-line
+description: what it controls, valid values, effect) — the UI shows `label` as the
+field title and `help` as a `<small>` + native `title=` tooltip. Both omitted from
+the abbreviated sample below for brevity; they are present on every setting.
 ```json
 { "settings": [
-  { "key": "PULL_ENABLED",       "value": false, "type": "bool",   "group": "pull",      "apply": "hot",     "label": "Enable pull processing" },
+  { "key": "PULL_ENABLED",       "value": false, "type": "bool",   "group": "pull",      "apply": "hot",     "label": "Enable pull processing", "help": "Master switch for the in-process pull loop…" },
   { "key": "POLL_INTERVAL",      "value": 10,    "type": "int",    "group": "pull",      "apply": "hot" },
   { "key": "LLM_MAX_TOKENS",     "value": 1024,  "type": "int",    "group": "llm",       "apply": "hot" },
   { "key": "LLM_TEMPERATURE",    "value": 0.7,   "type": "float",  "group": "llm",       "apply": "hot" },

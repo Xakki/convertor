@@ -121,6 +121,10 @@ def test_methods_shape(dev_app):
     assert methods["llm"]["sources"] == ["txt", "md"]
     assert methods["llm"]["targets"] == ["txt", "md"]
 
+    # Every method carries a human description the UI surfaces under the selector.
+    for mode in ("stt", "stt_stream", "tts", "embedding", "llm"):
+        assert methods[mode]["description"].strip()
+
 
 # ---------------------------------------------------------------------------
 # routes_methods — POST /api/run
@@ -145,6 +149,30 @@ def test_run_happy_path_text(dev_app, tmp_path):
     assert body["bytes"] == len("transcript")
     assert body["downloadUrl"] == f"/api/result/{body['resultId']}"
     assert isinstance(body["elapsedMs"], int) and body["elapsedMs"] >= 0
+
+
+def test_run_text_input_branch(dev_app, tmp_path):
+    """Text-input methods: a typed `text` field substitutes for a file upload."""
+    fake = _fake_convert(tmp_path, mime="audio/mpeg", ext="mp3", payload=b"\x00audio")
+    with patch("workers.ai.devserver.routes_methods.convert", side_effect=fake):
+        with TestClient(dev_app) as client:
+            resp = client.post(
+                "/api/run",
+                data={"sourceFormat": "txt", "targetFormat": "mp3", "text": "speak this"},
+            )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+def test_run_no_file_no_text_422(dev_app):
+    """Neither file nor text → 422 before any convert/path build."""
+    convert_spy = MagicMock()
+    with patch("workers.ai.devserver.routes_methods.convert", convert_spy):
+        with TestClient(dev_app) as client:
+            resp = client.post("/api/run", data={"sourceFormat": "txt", "targetFormat": "mp3"})
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    convert_spy.assert_not_called()
 
 
 def test_run_json_result_inlines_text(dev_app, tmp_path):
@@ -360,6 +388,11 @@ def test_settings_get_shape_and_secrets_absent(dev_app):
     assert wm["apply"] == "restart"
     assert wm["type"] == "enum"
     assert wm["options"] == ["tiny", "base", "small", "medium", "large"]
+
+    # Every setting carries a human label + help for the UI (no key-duplication).
+    for s in body["settings"]:
+        assert s["label"].strip()
+        assert s["help"].strip()
 
 
 def test_settings_put_persists_and_applies(dev_app, tmp_path):

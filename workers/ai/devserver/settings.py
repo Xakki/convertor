@@ -38,39 +38,86 @@ class Setting:
     group: str
     apply: str         # hot | restart
     label: str | None = None
+    help: str | None = None       # human description: what it controls, valid values, effect
     options: tuple[str, ...] | None = None
     help_url: str | None = None   # optional "where to find compatible models" link
 
 
 # Authoritative grouping / apply-mode — mirrors the API contract list.
 SETTINGS: tuple[Setting, ...] = (
-    Setting("PULL_ENABLED", "pull_enabled", "bool", "pull", "hot", "Enable pull processing"),
-    Setting("POLL_INTERVAL", "poll_interval", "int", "pull", "hot"),
-    Setting("LLM_MAX_TOKENS", "llm_max_tokens", "int", "llm", "hot"),
-    Setting("LLM_TEMPERATURE", "llm_temperature", "float", "llm", "hot"),
-    Setting("LLM_SYSTEM_PROMPT", "llm_system_prompt", "str", "llm", "hot"),
+    Setting("PULL_ENABLED", "pull_enabled", "bool", "pull", "hot",
+            label="Enable pull processing",
+            help="Master switch for the in-process pull loop. On = the dev-server "
+                 "claims and converts jobs from the backend queue; off = idle. Applies instantly."),
+    Setting("POLL_INTERVAL", "poll_interval", "int", "pull", "hot",
+            label="Poll interval (s)",
+            help="Seconds the pull loop waits between polls when the queue is empty. "
+                 "Lower = more responsive, higher = less load. Integer seconds."),
+    Setting("LLM_MAX_TOKENS", "llm_max_tokens", "int", "llm", "hot",
+            label="Max tokens",
+            help="Maximum tokens the LLM may generate per request. Higher = longer "
+                 "answers but slower and more memory."),
+    Setting("LLM_TEMPERATURE", "llm_temperature", "float", "llm", "hot",
+            label="Temperature",
+            help="LLM sampling temperature (0.0–2.0). Lower = deterministic/focused, "
+                 "higher = more creative/random."),
+    Setting("LLM_SYSTEM_PROMPT", "llm_system_prompt", "str", "llm", "hot",
+            label="System prompt",
+            help="Optional system prompt prepended to every LLM request to steer "
+                 "tone/role. Empty = none."),
     Setting("WHISPER_MODEL", "whisper_model", "enum", "stt", "restart",
+            label="Whisper model",
+            help="faster-whisper model size for speech-to-text. Larger = more accurate "
+                 "but slower and more RAM.",
             options=("tiny", "base", "small", "medium", "large"),
             help_url="https://huggingface.co/Systran"),
     Setting("WHISPER_DEVICE", "whisper_device", "enum", "stt", "restart",
+            label="Whisper device",
+            help="Compute device for Whisper. cpu = portable; cuda = NVIDIA GPU; mps = Apple Silicon.",
             options=("cpu", "cuda", "mps")),
     Setting("WHISPER_COMPUTE_TYPE", "whisper_compute_type", "enum", "stt", "restart",
+            label="Compute type",
+            help="Numeric precision for Whisper inference. int8 = fastest/smallest, "
+                 "float32 = most accurate. int8 recommended on CPU.",
             options=("int8", "int16", "float16", "float32")),
-    Setting("STREAM_WINDOW_SEC", "stream_window_sec", "int", "stt_stream", "restart"),
-    Setting("STREAM_OVERLAP_SEC", "stream_overlap_sec", "int", "stt_stream", "restart"),
+    Setting("STREAM_WINDOW_SEC", "stream_window_sec", "int", "stt_stream", "restart",
+            label="Window (s)",
+            help="Streaming-STT window length in seconds: how much audio each "
+                 "incremental transcription covers."),
+    Setting("STREAM_OVERLAP_SEC", "stream_overlap_sec", "int", "stt_stream", "restart",
+            label="Overlap (s)",
+            help="Overlap in seconds between consecutive streaming windows; prevents "
+                 "words being cut at window edges."),
     Setting("TTS_ENGINE", "tts_engine", "enum", "tts", "restart",
+            label="TTS engine",
+            help="Text-to-speech backend. espeak = lightweight/offline; pyttsx3 = system voices.",
             options=("espeak", "pyttsx3")),
     Setting("EMBEDDING_MODEL", "embedding_model", "str", "embedding", "restart",
+            label="Embedding model",
+            help="HuggingFace sentence-transformers model id used to embed text into vectors.",
             help_url="https://huggingface.co/models?library=sentence-transformers&pipeline_tag=feature-extraction&sort=trending"),
     Setting("EMBEDDING_DEVICE", "embedding_device", "enum", "embedding", "restart",
+            label="Embedding device",
+            help="Compute device for the embedding model (cpu/cuda/mps).",
             options=("cpu", "cuda", "mps")),
     Setting("LLM_BACKEND", "llm_backend", "enum", "llm", "restart",
+            label="LLM backend",
+            help="Which LLM runtime to use. llamacpp = local GGUF in-process; "
+                 "ollama = external Ollama server.",
             options=("ollama", "llamacpp")),
     Setting("LLM_MODEL_REPO", "llm_model_repo", "str", "llm", "restart",
+            label="Model repo (GGUF)",
+            help="HuggingFace GGUF repo id to download the LLM from (llamacpp backend).",
             help_url="https://huggingface.co/models?library=gguf&pipeline_tag=text-generation&sort=trending"),
-    Setting("LLM_MODEL_FILE", "llm_model_file", "str", "llm", "restart"),
-    Setting("OLLAMA_URL", "ollama_url", "str", "llm", "restart"),
+    Setting("LLM_MODEL_FILE", "llm_model_file", "str", "llm", "restart",
+            label="Model file (.gguf)",
+            help="Specific .gguf filename within the repo to load (llamacpp backend)."),
+    Setting("OLLAMA_URL", "ollama_url", "str", "llm", "restart",
+            label="Ollama URL",
+            help="Base URL of the Ollama server to call (ollama backend)."),
     Setting("OLLAMA_MODEL", "ollama_model", "str", "llm", "restart",
+            label="Ollama model",
+            help="Ollama model name/tag to run (ollama backend).",
             help_url="https://ollama.com/library"),
 )
 SETTINGS_BY_KEY: dict[str, Setting] = {s.key: s for s in SETTINGS}
@@ -158,6 +205,8 @@ def settings_list(cfg: Config) -> list[dict[str, Any]]:
         }
         if s.label:
             item["label"] = s.label
+        if s.help:
+            item["help"] = s.help
         if s.options is not None:
             item["options"] = list(s.options)
         if s.help_url:

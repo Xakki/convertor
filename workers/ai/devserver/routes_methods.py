@@ -75,16 +75,30 @@ def _methods() -> list[dict[str, Any]]:
     text = _ordered(TTS_INPUTS, ["txt", "md"])
     return [
         {"mode": "stt", "label": "Speech → Text",
-         "sources": audio, "targets": _ordered(STT_OUTPUTS, ["txt", "srt", "vtt"])},
+         "sources": audio, "targets": _ordered(STT_OUTPUTS, ["txt", "srt", "vtt"]),
+         "description": "One-shot transcription: returns a single full transcript "
+                        "(txt) or subtitles (srt/vtt) for the whole audio file."},
         {"mode": "stt_stream", "label": "Speech → Segments",
-         "sources": audio, "targets": ["json"]},
+         "sources": audio, "targets": ["json"],
+         "description": "Streaming transcription: audio is processed in overlapping "
+                        "sliding windows (STREAM_WINDOW_SEC, default 20s; "
+                        "STREAM_OVERLAP_SEC, default 2s) and incremental segments are "
+                        "emitted progressively over the Audio-stream WebSocket. Use it "
+                        "for live mic input; vs plain stt which returns one final "
+                        "transcript for the whole file."},
         {"mode": "tts", "label": "Text → Speech",
-         "sources": text, "targets": _ordered(TTS_OUTPUTS, ["mp3", "wav", "ogg"])},
+         "sources": text, "targets": _ordered(TTS_OUTPUTS, ["mp3", "wav", "ogg"]),
+         "description": "Speech synthesis: turns input text into an audio file "
+                        "(mp3/wav/ogg) via the configured TTS engine."},
         {"mode": "embedding", "label": "Text → Embedding",
-         "sources": _ordered(LLM_INPUTS, ["txt", "md"]), "targets": ["json"]},
+         "sources": _ordered(LLM_INPUTS, ["txt", "md"]), "targets": ["json"],
+         "description": "Vector embedding: encodes input text into a numeric vector "
+                        "(JSON) with the configured embedding model."},
         {"mode": "llm", "label": "Text → Text (LLM)",
          "sources": _ordered(LLM_INPUTS, ["txt", "md"]),
-         "targets": _ordered(LLM_OUTPUTS, ["txt", "md"])},
+         "targets": _ordered(LLM_OUTPUTS, ["txt", "md"]),
+         "description": "LLM generation: runs input text through the configured LLM "
+                        "(llamacpp/ollama) and returns generated text."},
     ]
 
 
@@ -106,7 +120,8 @@ def _register_result(results: OrderedDict, result_id: str, path: Path, mime: str
 @router.post("/run")
 async def run_method(
     request: Request,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
+    text: str | None = Form(None),
     sourceFormat: str = Form(...),
     targetFormat: str = Form(...),
     model: str | None = Form(None),
@@ -122,6 +137,14 @@ async def run_method(
             content={"ok": False, "error": "invalid sourceFormat/targetFormat (not an advertised conversion format)"},
         )
 
+    # Input is EITHER an uploaded file OR a typed `text` field (text-input methods
+    # like tts/llm/embedding). Exactly one is required; `file` wins if both arrive.
+    if file is None and not text:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": "provide a file or text input"},
+        )
+
     cfg.work_dir.mkdir(parents=True, exist_ok=True)
     in_path = cfg.work_dir / f"devin-{uuid.uuid4().hex}.{src_fmt}"
     # Belt-and-suspenders: even with the allowlist, never write outside WORK_DIR.
@@ -129,11 +152,14 @@ async def run_method(
         return JSONResponse(status_code=422, content={"ok": False, "error": "invalid input path"})
     try:
         with in_path.open("wb") as f:
-            while True:
-                chunk = await file.read(65536)
-                if not chunk:
-                    break
-                f.write(chunk)
+            if file is not None:
+                while True:
+                    chunk = await file.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            else:
+                f.write(text.encode("utf-8"))
     except Exception as exc:  # noqa: BLE001 — surface any upload write error as 422
         in_path.unlink(missing_ok=True)
         return JSONResponse(status_code=422, content={"ok": False, "error": _safe_err(exc)})
