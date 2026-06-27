@@ -27,9 +27,17 @@
     .badge{ padding:.05rem .4rem; border-radius:.4rem; font-size:.7rem; white-space:nowrap; }
     .badge-hot{ background:#064e3b; color:#6ee7b7; }
     .badge-restart{ background:#78350f; color:#fcd34d; }
-    .field-row{ display:flex; align-items:center; gap:.75rem; }
-    .field-row > :last-child{ margin-left:auto; }
-    .field-row input, .field-row select{ margin-bottom:0; width:auto; }
+    .settings-group{ margin-bottom:1rem; }
+    .settings-group > header{ margin-bottom:.25rem; }
+    .setting{ padding:.65rem 0; border-top:1px solid var(--pico-muted-border-color); }
+    .setting:first-of-type{ border-top:0; }
+    .setting-head{ display:flex; align-items:center; gap:.5rem; margin-bottom:.3rem; }
+    .setting-head strong{ font-size:.92rem; }
+    .setting input, .setting select{ margin-bottom:.25rem; }
+    .setting input[type="checkbox"][role="switch"]{ width:auto; }
+    .setting-help{ display:block; margin-bottom:.2rem; }
+    .setting-meta{ display:flex; gap:.9rem; align-items:center; }
+    .setting-meta code{ font-size:.72rem; }
     pre{ max-height:24rem; overflow:auto; white-space:pre-wrap; }
   </style>
 </head>
@@ -75,13 +83,30 @@
         </label>
       </div>
 
+      <p x-show="currentMethod?.description" style="margin:-.25rem 0 1rem">
+        <small class="muted" x-text="currentMethod?.description"></small>
+      </p>
+
       <label x-show="m.mode==='llm' || m.mode==='embedding'">
         Model <small class="muted">(optional, llm/embedding)</small>
         <input type="text" x-model="m.model" placeholder="leave empty for default" />
       </label>
 
-      <!-- drop zone -->
-      <div class="dropzone" :class="m.drag ? 'dragover' : ''"
+      <!-- input mode toggle (text-input methods only: type OR upload) -->
+      <fieldset x-show="isTextInput" role="group" style="max-width:22rem">
+        <button type="button" @click="m.inputMode='text'"
+                :class="m.inputMode==='text' ? '' : 'secondary outline'">Type text</button>
+        <button type="button" @click="m.inputMode='file'"
+                :class="m.inputMode==='file' ? '' : 'secondary outline'">Upload file</button>
+      </fieldset>
+
+      <!-- textarea (text methods, type mode) -->
+      <label x-show="useTextarea">Input text
+        <textarea x-model="m.text" rows="6" placeholder="Type or paste text to convert…"></textarea>
+      </label>
+
+      <!-- drop zone (binary methods, or text methods in upload mode) -->
+      <div class="dropzone" x-show="!useTextarea" :class="m.drag ? 'dragover' : ''"
            @dragover.prevent="m.drag=true" @dragleave.prevent="m.drag=false"
            @drop.prevent="onDrop($event)" @click="$refs.file.click()">
         <input type="file" x-ref="file" hidden @change="onPick($event)" />
@@ -89,7 +114,7 @@
         <template x-if="m.file"><p style="margin:0">&#128196; <span x-text="m.file.name"></span> <small class="muted" x-text="'('+fmtBytes(m.file.size)+')'"></small></p></template>
       </div>
 
-      <button type="submit" :disabled="!m.file || m.running" :aria-busy="m.running"
+      <button type="submit" :disabled="!canRun" :aria-busy="m.running"
               x-text="m.running ? 'Running…' : 'Run conversion'"></button>
     </form>
 
@@ -212,37 +237,40 @@
     </template>
 
     <template x-for="g in groups" :key="g">
-      <details open>
-        <summary x-text="g.toUpperCase()"></summary>
+      <article class="settings-group">
+        <header><strong x-text="groupLabel(g)"></strong></header>
         <template x-for="f in fieldsByGroup(g)" :key="f.key">
-          <div class="field-row">
-            <div>
-              <span x-text="f.label || f.key"></span>
-              <a x-show="f.helpUrl" :href="f.helpUrl" target="_blank" rel="noopener">find models ↗</a>
-              <br /><small class="muted" x-text="f.key"></small>
+          <div class="setting">
+            <div class="setting-head">
+              <strong x-text="f.label || f.key"></strong>
+              <small class="badge" :class="f.apply==='hot' ? 'badge-hot' : 'badge-restart'" x-text="f.apply"></small>
             </div>
-            <small class="badge" :class="f.apply==='hot' ? 'badge-hot' : 'badge-restart'" x-text="f.apply"></small>
             <!-- bool -->
             <template x-if="f.type==='bool'">
-              <input type="checkbox" role="switch" x-model="f.value" />
+              <input type="checkbox" role="switch" x-model="f.value" :title="f.help || ''" />
             </template>
             <!-- enum -->
             <template x-if="f.type==='enum'">
-              <select x-model="f.value">
+              <select x-model="f.value" :title="f.help || ''">
                 <template x-for="o in f.options||[]" :key="o"><option :value="o" x-text="o"></option></template>
               </select>
             </template>
             <!-- int/float -->
             <template x-if="f.type==='int' || f.type==='float'">
-              <input type="number" :step="f.type==='float' ? '0.01' : '1'" x-model.number="f.value" />
+              <input type="number" :step="f.type==='float' ? '0.01' : '1'" x-model.number="f.value" :title="f.help || ''" />
             </template>
             <!-- str -->
             <template x-if="f.type==='str'">
-              <input type="text" x-model="f.value" />
+              <input type="text" x-model="f.value" :title="f.help || ''" />
             </template>
+            <small class="muted setting-help" x-show="f.help" x-text="f.help"></small>
+            <small class="setting-meta">
+              <code x-text="f.key"></code>
+              <a x-show="f.helpUrl" :href="f.helpUrl" target="_blank" rel="noopener">find models ↗</a>
+            </small>
           </div>
         </template>
-      </details>
+      </article>
     </template>
     <p class="muted" x-show="!settings.length">loading…</p>
   </section>

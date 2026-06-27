@@ -13,7 +13,10 @@ function devserver() {
 
     // methods tab
     methods: [],
-    m: { mode: '', source: '', target: '', model: '', file: null, drag: false, running: false, result: null, error: '' },
+    m: { mode: '', source: '', target: '', model: '', file: null, text: '', inputMode: 'text',
+         drag: false, running: false, result: null, error: '' },
+    // Source formats that mean "text input" → offer a textarea instead of upload.
+    textFormats: ['txt', 'md'],
 
     // stream tab
     ws: { sock: null, rec: null, stream: null, active: false, status: 'idle', error: '',
@@ -92,6 +95,16 @@ function devserver() {
 
     // ============ METHODS ============
     get currentMethod() { return this.methods.find(x => x.mode === this.m.mode) || null; },
+    // A method is "text input" when all its source formats are text (tts/llm/embedding).
+    get isTextInput() {
+      const me = this.currentMethod;
+      return !!me && me.sources.length > 0 && me.sources.every(s => this.textFormats.includes(s));
+    },
+    get useTextarea() { return this.isTextInput && this.m.inputMode === 'text'; },
+    get canRun() {
+      if (this.m.running) return false;
+      return this.useTextarea ? !!this.m.text.trim() : !!this.m.file;
+    },
 
     async loadMethods() {
       try {
@@ -106,6 +119,8 @@ function devserver() {
       if (!me) return;
       this.m.source = me.sources[0] || '';
       this.m.target = me.targets[0] || '';
+      // Default text methods to the textarea; binary methods always use upload.
+      this.m.inputMode = this.isTextInput ? 'text' : 'file';
     },
 
     onDrop(ev) {
@@ -116,11 +131,12 @@ function devserver() {
     onPick(ev) { const f = ev.target.files && ev.target.files[0]; if (f) this.m.file = f; },
 
     async run() {
-      if (!this.m.file) return;
+      if (!this.canRun) return;
       this.m.running = true; this.m.error = ''; this.m.result = null;
       try {
         const fd = new FormData();
-        fd.append('file', this.m.file);
+        if (this.useTextarea) fd.append('text', this.m.text);
+        else fd.append('file', this.m.file);
         fd.append('sourceFormat', this.m.source);
         fd.append('targetFormat', this.m.target);
         if ((this.m.mode === 'llm' || this.m.mode === 'embedding') && this.m.model) fd.append('model', this.m.model);
@@ -247,6 +263,16 @@ function devserver() {
     },
     get pullField() { return this.settings.find(f => f.key === 'PULL_ENABLED') || null; },
     fieldsByGroup(g) { return this.settings.filter(f => f.group === g && f.key !== 'PULL_ENABLED'); },
+    groupLabel(g) {
+      return ({
+        pull: 'Pull processing',
+        stt: 'Speech-to-text (Whisper)',
+        stt_stream: 'Streaming STT',
+        tts: 'Text-to-speech',
+        embedding: 'Embeddings',
+        llm: 'LLM',
+      })[g] || g.toUpperCase();
+    },
 
     async loadSettings() {
       this.s.error = ''; this.s.errKey = '';
