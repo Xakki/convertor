@@ -131,7 +131,7 @@ def load_config() -> Config:
         stream_window_sec=_getenv_int("STREAM_WINDOW_SEC", 20),
         stream_overlap_sec=_getenv_int("STREAM_OVERLAP_SEC", 2),
         tts_engine=os.getenv("TTS_ENGINE", "espeak"),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"),
         embedding_device=os.getenv("EMBEDDING_DEVICE", whisper_device),
         llm_backend=os.getenv("LLM_BACKEND", "ollama").strip().lower(),
         ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),

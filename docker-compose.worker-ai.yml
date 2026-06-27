@@ -88,7 +88,7 @@ services:
             # TTS
             TTS_ENGINE: ${TTS_ENGINE:-espeak}
             # Embedding
-            EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+            EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
             # LLM text→text — local only (ollama HTTP or embedded llama.cpp)
             LLM_BACKEND: ${LLM_BACKEND:-ollama}
             OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
