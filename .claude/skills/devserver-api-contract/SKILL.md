@@ -177,12 +177,15 @@ Response:
 Validation error: HTTP 422 `{ "ok": false, "error": "...", "key": "WHISPER_MODEL" }`.
 
 ## Web UI (static/)
-SPA, Alpine.js + Tailwind. **Vendored locally** under `static/vendor/`
-(`alpine.min.js`, `tailwind.min.js`) and referenced with relative URLs — NOT
-CDN. Deliberate deviation from the project "use CDN" frontend rule because this
-is an internal dev tool that must run on an offline/restricted GPU box (no
-external network). Asset/API/WS URLs are base-path relative (see above) so it
-serves at `:8877/` and under `/worker-ai/`.
+SPA: semantic HTML styled by **Pico.css** (classless, no build step) + **Alpine.js**.
+Both **vendored locally** under `static/vendor/` (`pico.min.css`, `alpine.min.js`)
+and referenced with relative URLs — NOT CDN, and NO Tailwind/runtime JIT. Deliberate
+deviation from the project "use CDN" frontend rule because this is an internal dev
+tool that must run on an offline/restricted GPU box (no external network). The page
+uses `<html data-theme="dark">` plus a small inline `<style>` for the few bits Pico
+doesn't cover (x-cloak, tab active state, status badges, record indicator, field
+rows). Asset/API/WS URLs are base-path relative (see above) so it serves at `:8877/`
+and under `/worker-ai/`.
 Tabs: **Methods** (pick mode/source/target, upload, run, preview/download),
 **Audio stream** (mic → WS → live transcript), **Pull stats** (poll `/api/stats`
 every ~2 s; show "disabled" when off), **Settings** (render groups, hot vs
