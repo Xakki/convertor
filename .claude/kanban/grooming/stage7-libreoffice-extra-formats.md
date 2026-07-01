@@ -20,3 +20,6 @@
 
 **Decisions:**
 - Выделено из [[validate-libreoffice-worker]] / [[post-mvp-conversion-formats]] (2026-06-21).
+- epub non-md via pandoc chain ; Pages = verify libetonyek in image first else drop ; keep all in libreoffice-worker. Hard dep on the chaining/registry work.
+
+**Status:** grooming (Stage 7).

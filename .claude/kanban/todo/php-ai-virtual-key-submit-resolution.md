@@ -25,14 +25,15 @@ STT/TTS/embedding-пары присутствуют в реестре конве
 (тот про обратное направление — пары воркера отсутствуют в PHP, и он resolved).
 Собственный docblock `resolveSubType()` называет это «the deferred AI-routing gap».
 
-**Open questions:**
-- Где резолвить плоскую пару в виртуальный ключ — в `submit()` до валидации, или в
-  `isSupported()`/`isAi()`/`streamFor()`? Нужна ли явная сигнализация выбора stream
-  для неоднозначных пар (флаг `ocr` и т.п. из CLAUDE.md «Queue Architecture»)?
-- Что для пар, которые умеют несколько воркеров (напр. `pdf→txt`: document-extract vs
-  image-OCR) — как submit выбирает stream? (CLAUDE.md уже описывает флаг-селектор.)
-- Тест-покрытие: добавить e2e submit `mp3→txt`/`txt→mp3`/`txt→json` доходит до stream `ai`.
-
 **Влияние:**
 Без этого вся AI-ветка не работает end-to-end; рефактор воркера и последующие
 карточки эпика (LLM, dev-сервер, бенчмарки) не проверяемы реальной задачей.
+
+**Decisions:**
+- Approach = **Option B (flat pairs) on the CURRENT hardcoded matrix** (do NOT wait for the self-registration epic). Add AI pairs to PHP `ConversionRegistry::workerCapabilities()` as a new AI worker block with `isAi:true`: sources mp3/wav/ogg/m4a/opus → txt/srt/vtt ; txt/md → mp3/wav/ogg ; txt → json.
+- DELETE the virtual-key injection block (`buildMatrix()` ~L249-262) and `resolveSubType()` (ConversionManager.php ~L199-213). `streamFor()` already returns 'ai' when isAi.
+- Update the golden snapshot test (ConversionRegistryGoldenTest) + drift test as needed.
+- MERGE `backend-subtype-cleanup` into this card (delete subType/resolveSubType is part of B).
+- Phase 2 (generalized candidate+intent router) is OUT OF SCOPE here → lives in the registry epic.
+
+**Status:** ready (todo). Verified: all 3 AI pairs are unambiguous; no AI block exists in workerCapabilities today.

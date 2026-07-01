@@ -19,9 +19,11 @@ import logging
 import os
 import signal
 import socket
+import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -53,13 +55,36 @@ def _safe_err(exc: Exception, limit: int = 200) -> str:
     return f"{type(exc).__name__}: {str(exc)[:limit]}"
 
 
+@dataclass
+class JobOutcome:
+    """Result of one job pass — fed to the stats sink by the poll cycle."""
+
+    ok: bool
+    error: str | None = None
+
+
+class StatsSink(Protocol):
+    """Optional instrumentation hook the dev-server's PullRunner plugs in.
+
+    Prod `run()` passes no sink (None); the dev-server passes its in-memory Stats.
+    """
+
+    def job_started(self, job_meta: dict) -> None: ...
+
+    def job_finished(self, job_meta: dict, ok: bool, error: str | None, elapsed_ms: float) -> None: ...
+
+
 # ---------------------------------------------------------------------------
 # Per-job processing
 # ---------------------------------------------------------------------------
 
 
-async def _process_job(client: httpx.AsyncClient, cfg: Config, job_meta: dict) -> None:
-    """Process one claimed job: download input → convert → upload result or fail."""
+async def _process_job(client: httpx.AsyncClient, cfg: Config, job_meta: dict) -> JobOutcome:
+    """Process one claimed job: download input → convert → upload result or fail.
+
+    Returns a JobOutcome (ok + bounded error) so the poll cycle can update stats.
+    The fail-API notification still happens here on every failure path.
+    """
     api = PullApiClient(client, cfg.api_base)
     job_id = str(job_meta["jobId"])
     conv_id = job_meta["conversionId"]
@@ -84,7 +109,7 @@ async def _process_job(client: httpx.AsyncClient, cfg: Config, job_meta: dict) -
         logger.error("input download failed for job %s: %s", job_id, _safe_err(exc))
         await _notify_fail(_safe_err(exc))
         input_path.unlink(missing_ok=True)
-        return
+        return JobOutcome(ok=False, error=_safe_err(exc))
 
     # Convert
     output_path: Path | None = None
@@ -101,7 +126,7 @@ async def _process_job(client: httpx.AsyncClient, cfg: Config, job_meta: dict) -
     except Exception as exc:
         logger.error("conversion failed for job %s: %s", job_id, _safe_err(exc))
         await _notify_fail(_safe_err(exc))
-        return
+        return JobOutcome(ok=False, error=_safe_err(exc))
     finally:
         input_path.unlink(missing_ok=True)
 
@@ -110,9 +135,11 @@ async def _process_job(client: httpx.AsyncClient, cfg: Config, job_meta: dict) -
         with output_path.open("rb") as f:
             await api.upload_result(job_id, output_path.name, f, mime)
         logger.info("job %s completed (%s → %s)", job_id, src_fmt, tgt_fmt)
+        return JobOutcome(ok=True)
     except Exception as exc:
         logger.error("result upload failed for job %s: %s", job_id, _safe_err(exc))
         await _notify_fail(_safe_err(exc))
+        return JobOutcome(ok=False, error=_safe_err(exc))
     finally:
         if output_path:
             output_path.unlink(missing_ok=True)
@@ -131,6 +158,71 @@ def _handle_shutdown(signum: int, frame: Any) -> None:
     _running = False
 
 
+async def _poll_cycle(
+    client: httpx.AsyncClient,
+    cfg: Config,
+    consumer: str,
+    stats: StatsSink | None = None,
+) -> bool:
+    """Run ONE claim→process pass. Shared by prod `_poll_loop` and the dev-server PullRunner.
+
+    Returns True when a job was handled (so the caller loops immediately), False when
+    the queue is empty or the claim failed (so the caller sleeps `poll_interval`).
+    Never raises: an unexpected per-job bug is caught and reported via the fail-API.
+    The optional `stats` sink is updated around real job processing only.
+    """
+    api = PullApiClient(client, cfg.api_base)
+
+    # Claim a job
+    try:
+        job_meta = await api.claim(cfg.worker_type, consumer)
+    except Exception as exc:
+        logger.warning("claim request failed: %s", exc)
+        return False
+
+    if job_meta is None:
+        return False
+
+    # Validate required fields — a malformed response must never crash the loop
+    job_id: str | None = None
+    try:
+        job_id = str(job_meta["jobId"])
+        _ = job_meta["conversionId"]
+        _ = job_meta["sourceFormat"]
+        _ = job_meta["targetFormat"]
+    except (KeyError, TypeError) as exc:
+        logger.error(
+            "malformed claim response (missing %s) — skipping; raw: %s",
+            exc, job_meta,
+        )
+        if job_id:
+            try:
+                await api.fail(job_id, f"malformed job claim: {exc}")
+            except Exception:
+                logger.warning("fail notification failed for job %s", job_id)
+        return True
+
+    if stats is not None:
+        stats.job_started(job_meta)
+    started = time.monotonic()
+
+    # Per-job guard: an unexpected bug must not kill the loop
+    try:
+        outcome = await _process_job(client, cfg, job_meta)
+    except Exception:
+        logger.exception("unexpected error processing job %s — skipping", job_id)
+        try:
+            await api.fail(job_id, "internal worker error")
+        except Exception:
+            logger.warning("fail notification failed for job %s", job_id)
+        outcome = JobOutcome(ok=False, error="internal worker error")
+
+    if stats is not None:
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        stats.job_finished(job_meta, outcome.ok, outcome.error, elapsed_ms)
+    return True
+
+
 async def _poll_loop(cfg: Config) -> None:
     consumer = f"{socket.gethostname()}-{os.getpid()}"
     auth_headers = {"Authorization": f"Bearer {cfg.worker_api_token}"}
@@ -143,48 +235,10 @@ async def _poll_loop(cfg: Config) -> None:
         headers=auth_headers,
         timeout=httpx.Timeout(30.0),
     ) as client:
-        api = PullApiClient(client, cfg.api_base)
         while _running:
-            # Claim a job
-            try:
-                job_meta = await api.claim(cfg.worker_type, consumer)
-            except Exception as exc:
-                logger.warning("claim request failed: %s", exc)
+            handled = await _poll_cycle(client, cfg, consumer)
+            if not handled:
                 await asyncio.sleep(cfg.poll_interval)
-                continue
-
-            if job_meta is None:
-                await asyncio.sleep(cfg.poll_interval)
-                continue
-
-            # Validate required fields — a malformed response must never crash the loop
-            job_id: str | None = None
-            try:
-                job_id = str(job_meta["jobId"])
-                _ = job_meta["conversionId"]
-                _ = job_meta["sourceFormat"]
-                _ = job_meta["targetFormat"]
-            except (KeyError, TypeError) as exc:
-                logger.error(
-                    "malformed claim response (missing %s) — skipping; raw: %s",
-                    exc, job_meta,
-                )
-                if job_id:
-                    try:
-                        await api.fail(job_id, f"malformed job claim: {exc}")
-                    except Exception:
-                        logger.warning("fail notification failed for job %s", job_id)
-                continue
-
-            # Per-job guard: an unexpected bug must not kill the loop
-            try:
-                await _process_job(client, cfg, job_meta)
-            except Exception:
-                logger.exception("unexpected error processing job %s — skipping", job_id)
-                try:
-                    await api.fail(job_id, "internal worker error")
-                except Exception:
-                    logger.warning("fail notification failed for job %s", job_id)
 
 
 def _check_api_base_url(cfg: Config) -> None:

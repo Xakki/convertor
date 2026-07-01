@@ -21,3 +21,13 @@ On-server `QueueResultConsumerCommand` пишет в `conv.result.dead` (DLQ) ч
 
 **Контекст:** validate-ai-worker → WorkerStreamGateway (2026-06-23). Аналог есть в
 `QueueResultConsumerCommand::processDeadEntry()`.
+
+**Decisions:**
+- Attempt count = **XPENDING times_delivered** (Q3.1) — drop the custom `attempts` meta field.
+- DLQ trigger = **on `/fail`** (Q3.2): on a reported fail, if times_delivered > N → DLQ+ack; else leave unacked for retry. `{"permanent":true}` on the /fail body → immediate DLQ, no retry.
+- DLQ stream = **`conv.dead`** (canonical); reconcile the existing `conv.result.dead` name used by QueueResultConsumerCommand to `conv.dead` too.
+- N = **3** (matches Python `_MAX_RETRIES`).
+- KNOWN GAP (record, do not fix here): a silent-crash poison job that never calls `/fail` is not caught by the /fail-side check — it is re-handed by reclaimStale() until idle/manual. Follow-up card later for a claim-side guard if it bites.
+- Card stale fix: card refs nonexistent `processDeadEntry()` → actual method is `sendToDlq()`.
+
+**Status:** ready (todo).

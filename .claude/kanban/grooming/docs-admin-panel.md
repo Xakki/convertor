@@ -26,10 +26,7 @@ Build admin API endpoints + bind the existing UI skeleton; reuse KeyDB queue sta
 - Queue sizes + stuck jobs visible.
 - Logs searchable/filterable.
 
-**Open questions:**
-- Priority vs payments/prod-polish — defer until after MVP launch?
-- Auth/roles for admin access (separate from user JWT)?
-- Build on an admin bundle (EasyAdmin) or custom HTMX views?
-
 **Decisions:**
-- (to be filled during grooming)
+- FROZEN until after MVP. When unfrozen: auth = ROLE_ADMIN on User+JWT ; UI = custom HTMX (no EasyAdmin) ; queue stats via KeyDB Streams XINFO/XLEN.
+
+**Status:** grooming — FROZEN (post-MVP).

@@ -82,6 +82,8 @@ class Config:
     ollama_url: str
     ollama_model: str
     llm_model_path: str
+    llm_model_repo: str
+    llm_model_file: str
     llm_max_tokens: int
     llm_temperature: float
     llm_system_prompt: str
@@ -108,9 +110,12 @@ class Config:
                     f"LLM_BACKEND={self.llm_backend!r} invalid — "
                     f"must be one of {LLM_BACKENDS}"
                 )
-            if self.llm_backend == "llamacpp" and not self.llm_model_path:
+            if self.llm_backend == "llamacpp" and not (
+                self.llm_model_path or (self.llm_model_repo and self.llm_model_file)
+            ):
                 raise ValueError(
-                    "LLM_BACKEND=llamacpp requires LLM_MODEL_PATH (GGUF weights path)"
+                    "LLM_BACKEND=llamacpp requires LLM_MODEL_PATH (local GGUF) or "
+                    "LLM_MODEL_REPO+LLM_MODEL_FILE (HuggingFace GGUF repo)"
                 )
 
 
@@ -131,12 +136,14 @@ def load_config() -> Config:
         stream_window_sec=_getenv_int("STREAM_WINDOW_SEC", 20),
         stream_overlap_sec=_getenv_int("STREAM_OVERLAP_SEC", 2),
         tts_engine=os.getenv("TTS_ENGINE", "espeak"),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"),
         embedding_device=os.getenv("EMBEDDING_DEVICE", whisper_device),
-        llm_backend=os.getenv("LLM_BACKEND", "ollama").strip().lower(),
+        llm_backend=os.getenv("LLM_BACKEND", "llamacpp").strip().lower(),
         ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
         ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
         llm_model_path=os.getenv("LLM_MODEL_PATH", ""),
+        llm_model_repo=os.getenv("LLM_MODEL_REPO", "Qwen/Qwen2.5-0.5B-Instruct-GGUF"),
+        llm_model_file=os.getenv("LLM_MODEL_FILE", "qwen2.5-0.5b-instruct-q4_k_m.gguf"),
         llm_max_tokens=_getenv_int("LLM_MAX_TOKENS", 1024),
         llm_temperature=_getenv_float("LLM_TEMPERATURE", 0.7),
         llm_system_prompt=os.getenv("LLM_SYSTEM_PROMPT", ""),

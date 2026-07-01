@@ -62,7 +62,12 @@ class OllamaProvider:
 
 
 class LlamaCppProvider:
-    """Embedded llama.cpp over GGUF weights. `llama_cpp` imported lazily on first use."""
+    """Embedded llama.cpp over GGUF weights. `llama_cpp` imported lazily on first use.
+
+    Weights come from EITHER a local file (`model_path`) OR a HuggingFace GGUF repo
+    (`model_repo` + `model_file`); the latter is downloaded into the HF cache on first
+    use via `Llama.from_pretrained`. `model_repo` takes precedence when set.
+    """
 
     def __init__(
         self,
@@ -70,8 +75,12 @@ class LlamaCppProvider:
         max_tokens: int,
         temperature: float,
         system_prompt: str = "",
+        model_repo: str = "",
+        model_file: str = "",
     ) -> None:
         self.model_path = model_path
+        self.model_repo = model_repo
+        self.model_file = model_file
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.system_prompt = system_prompt
@@ -81,7 +90,15 @@ class LlamaCppProvider:
         from llama_cpp import Llama  # lazy — only when the llamacpp backend runs
 
         if self._llm is None:
-            self._llm = Llama(model_path=self.model_path)
+            if self.model_repo:
+                self._llm = Llama.from_pretrained(
+                    repo_id=self.model_repo,
+                    filename=self.model_file,
+                    n_ctx=4096,
+                    verbose=False,
+                )
+            else:
+                self._llm = Llama(model_path=self.model_path)
 
         messages = []
         if self.system_prompt:
@@ -115,5 +132,7 @@ def make_llm_provider(cfg: Config):
             max_tokens=cfg.llm_max_tokens,
             temperature=cfg.llm_temperature,
             system_prompt=cfg.llm_system_prompt,
+            model_repo=cfg.llm_model_repo,
+            model_file=cfg.llm_model_file,
         )
     raise ValueError(f"unknown LLM_BACKEND {cfg.llm_backend!r} (expected ollama|llamacpp)")

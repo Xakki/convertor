@@ -12,11 +12,9 @@
 - **преамбула/эпилог `convert()`**: извлечение `conversionId`/`src`/`targetFormat`/`sourceFormat`, `is_file()`-проверка, валидация по матрице, `WORK_DIR.mkdir`, генерация `out-<id>-<uuid>` имени, `exists()`-проверка результата, `_MIME.get(..., octet-stream)`, `logger.info`. Одинаковая форма во всех четырёх.
 - **MIME-константы** (напр. `_DOCX_MIME` дублируется в libreoffice + image).
 
-**Open questions:**
-- Что выносить и насколько глубоко: (а) только общий `async _run(argv, timeout)` хелпер; (б) + общая таблица MIME; (в) шаблонный `convert()` в `StreamConsumerBase`, вызывающий subclass-метод `_do_convert(src, src_fmt, target) -> Path` с матрицей/MIME как атрибутами класса (самый большой blast-radius — трогает все 4 воркера разом)?
-- Делать пошагово (по одному хелперу) или единым рефактором?
-- Объём регрессионного тестирования (у каждого воркера свои тесты — прогнать все).
-
 **Зависимости:** Делать после стабилизации воркеров (все уже Streams-consumer'ы).
 
-**Decisions:** —
+**Decisions:**
+- `workers/common/` + StreamConsumerBase already exist → "deepen base". Stepwise: (a) shared `_run` → (b) +MIME table → (c) template `convert()`/`_do_convert`, full per-worker test run after each. Do after worker stabilization.
+
+**Status:** grooming (LOW, post-stabilization).

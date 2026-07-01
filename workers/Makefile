@@ -58,6 +58,11 @@ TORCH_CUDA_ARCH ?= $(shell echo $(CUDA_ARCH) | sed 's/\([0-9]*\)\([0-9]\)/\1.\2/
 # Set to 1 to compile and embed llama-cpp-python with CUDA (larger image, slower build).
 # Default 0: Ollama backend works without it; the code path is always present (lazy import).
 WITH_LLAMACPP   ?= 0
+# App user UID/GID baked into the working images. Default 1000 (host-matchable, so
+# bind mounts + the /data volume stay writable). Override to match the build host:
+#   make build-ai-cuda APP_UID=$(id -u) APP_GID=$(id -g)
+APP_UID         ?= 1000
+APP_GID         ?= 1000
 
 .PHONY: build-ai-base
 build-ai-base: ## Build the LIGHT ai-base image (code + pure-python deps, no ML)
@@ -75,17 +80,40 @@ build-ai-cuda: ## LOCAL build: ai.cuda (FROM ai-base + CUDA ML). CUDA_ARCH=86 WI
 	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
 	    --build-arg TORCH_CUDA_ARCH=$(TORCH_CUDA_ARCH) \
 	    --build-arg WITH_LLAMACPP=$(WITH_LLAMACPP) \
+	    --build-arg APP_UID=$(APP_UID) \
+	    --build-arg APP_GID=$(APP_GID) \
 	    -f docker/workers/ai.cuda.Dockerfile .
 
 .PHONY: build-ai-cpu
 build-ai-cpu: ## LOCAL build: ai.cpu (FROM ai-base + CPU ML stack, no GPU required)
 	docker build -t $(AI_CPU_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_IMAGE) \
+	    --build-arg APP_UID=$(APP_UID) \
+	    --build-arg APP_GID=$(APP_GID) \
 	    -f docker/workers/ai.cpu.Dockerfile .
 
 .PHONY: worker-ai-check
 worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compose)
 	docker compose -f docker-compose.worker-ai.yml config -q
+
+# On-server run of the AI worker (CPU dev-server) as part of the convertor stack,
+# reachable via nginx at /worker-ai/. Explicit -f because the root Makefile
+# unexports COMPOSE_FILE and `docker compose` only auto-loads .env (not .env.local),
+# so the worker-ai overlay would otherwise be dropped. Image/env come from the
+# exported vars (set DOCKER_IMAGE_AI=...:cpu + DEVSERVER_HOST=0.0.0.0 in .env.local).
+WORKER_AI_DC = $(DC) -f docker-compose.yml -f docker-compose.worker-ai.yml
+
+.PHONY: worker-ai-up
+worker-ai-up: ## Run the AI worker (CPU dev-server) on this host, reachable via nginx /worker-ai/
+	$(WORKER_AI_DC) up -d worker-ai
+
+.PHONY: worker-ai-down
+worker-ai-down: ## Stop & remove the on-server AI worker
+	$(WORKER_AI_DC) rm -sf worker-ai
+
+.PHONY: worker-ai-logs
+worker-ai-logs: ## Tail the on-server AI worker logs
+	$(WORKER_AI_DC) logs -f worker-ai
 
 ##@ Queue / Workers
 
@@ -138,11 +166,13 @@ test-python-metrics: build-metrics-exporter ## Unit tests for metrics-exporter (
 	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/metrics-exporter:latest,workers/tests/test_metrics_exporter.py,)
 
 # AI worker is remote/Harbor-built; its image isn't built on-server. Its unit
-# tests only need httpx (worker.py imports the heavy STT/TTS libs lazily), so we
-# run them in the lean worker-ffmpeg image with httpx pip-installed at runtime.
+# tests need httpx + the dev-server stack (worker.py / devserver import the heavy
+# STT/TTS libs lazily), so we run them in the lean worker-ffmpeg image with those
+# deps pip-installed at runtime. FastAPI's TestClient covers the WS route
+# in-process; python-multipart is required for the /api/run multipart upload test.
 .PHONY: test-python-ai
-test-python-ai: build-ffmpeg ## AI-worker unit tests (httpx only; runs in worker-ffmpeg image, no Harbor pull)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py,httpx)
+test-python-ai: build-ffmpeg ## AI-worker + dev-server unit tests (runs in worker-ffmpeg image, no Harbor pull)
+	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py,httpx fastapi uvicorn[standard] python-multipart)
 
 .PHONY: test-drift
 test-drift: ## Routing-contract: PHP registry routing keys vs Python worker CAPABILITIES (may fail on known gaps — see .claude/kanban/grooming/)

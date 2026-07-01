@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI worker dev-server</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22256%22 height=%22256%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%237d6ee7%22></rect><text x=%2250%%22 y=%2250%%22 dominant-baseline=%22central%22 text-anchor=%22middle%22 font-size=%2250%22>🚀</text></svg>" />
+  <!-- Internal dev tool that must run on an offline/restricted GPU box: assets are vendored
+       locally (static/vendor/) — Pico.css (classless, no build step) + Alpine. Relative
+       (no leading slash) URLs so the page works both at :8877/ and under nginx /worker-ai/. -->
+  <link rel="stylesheet" href="vendor/pico.min.css" />
+  <!-- app.js MUST load before Alpine: it defines devserver(), which Alpine
+       evaluates in x-data the moment it auto-starts. Both defer → ordered. -->
+  <script defer src="app.js"></script>
+  <script defer src="vendor/alpine.min.js"></script>
+  <style>
+    [x-cloak]{ display:none !important; }
+    .accent{ color:var(--pico-primary); }
+    .muted{ color:var(--pico-muted-color); }
+    nav.tabs{ display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem; }
+    nav.tabs button{ width:auto; margin:0; }
+    nav.tabs button:not([aria-current="page"]){ --pico-background-color:transparent; --pico-color:var(--pico-muted-color); --pico-border-color:var(--pico-muted-border-color); }
+    .dropzone{ border:2px dashed var(--pico-muted-border-color); border-radius:var(--pico-border-radius); padding:1.5rem; text-align:center; cursor:pointer; }
+    .dropzone.dragover{ border-color:var(--pico-primary); background:var(--pico-card-sectioning-background-color); }
+    .rec{ color:#ef4444; font-weight:600; }
+    .rec::before{ content:"\25CF"; margin-right:.3rem; animation:blink 1s infinite; }
+    @keyframes blink{ 50%{ opacity:.25; } }
+    .badge{ padding:.05rem .4rem; border-radius:.4rem; font-size:.7rem; white-space:nowrap; }
+    .badge-hot{ background:#064e3b; color:#6ee7b7; }
+    .badge-restart{ background:#78350f; color:#fcd34d; }
+    .settings-group{ margin-bottom:1rem; }
+    .settings-group > header{ margin-bottom:.25rem; }
+    .setting{ padding:.65rem 0; border-top:1px solid var(--pico-muted-border-color); }
+    .setting:first-of-type{ border-top:0; }
+    .setting-head{ display:flex; align-items:center; gap:.5rem; margin-bottom:.3rem; }
+    .setting-head strong{ font-size:.92rem; }
+    .setting input, .setting select{ margin-bottom:.25rem; }
+    .setting input[type="checkbox"][role="switch"]{ width:auto; }
+    .setting-help{ display:block; margin-bottom:.2rem; }
+    .setting-meta{ display:flex; gap:.9rem; align-items:center; }
+    .setting-meta code{ font-size:.72rem; }
+    pre{ max-height:24rem; overflow:auto; white-space:pre-wrap; }
+  </style>
+</head>
+<body>
+<main class="container" x-data="devserver()" x-init="init()" x-cloak>
+
+  <!-- Header -->
+  <nav>
+    <ul><li><strong>AI&nbsp;worker <span class="accent">dev-server</span></strong></li></ul>
+    <ul><li>
+      <input type="password" x-model="token" @input.debounce.400ms="saveToken()"
+             placeholder="Bearer token (optional)" style="margin-bottom:0" />
+    </li></ul>
+  </nav>
+
+  <!-- Tabs -->
+  <nav class="tabs">
+    <template x-for="t in tabs" :key="t.id">
+      <button :aria-current="tab===t.id ? 'page' : null" @click="setTab(t.id)" x-text="t.label"></button>
+    </template>
+  </nav>
+
+  <!-- ============ METHODS ============ -->
+  <section x-show="tab==='methods'">
+    <form @submit.prevent="run()">
+      <div class="grid">
+        <label>Mode
+          <select x-model="m.mode" @change="onModeChange()">
+            <template x-for="me in methods" :key="me.mode">
+              <option :value="me.mode" x-text="me.label + ' (' + me.mode + ')'"></option>
+            </template>
+          </select>
+        </label>
+        <label>Source format
+          <select x-model="m.source">
+            <template x-for="s in currentMethod?.sources || []" :key="s"><option :value="s" x-text="s"></option></template>
+          </select>
+        </label>
+        <label>Target format
+          <select x-model="m.target">
+            <template x-for="t in currentMethod?.targets || []" :key="t"><option :value="t" x-text="t"></option></template>
+          </select>
+        </label>
+      </div>
+
+      <p x-show="currentMethod?.description" style="margin:-.25rem 0 1rem">
+        <small class="muted" x-text="currentMethod?.description"></small>
+      </p>
+
+      <label x-show="m.mode==='llm' || m.mode==='embedding'">
+        Model <small class="muted">(optional, llm/embedding)</small>
+        <input type="text" x-model="m.model" placeholder="leave empty for default" />
+      </label>
+
+      <!-- input mode toggle (text-input methods only: type OR upload) -->
+      <fieldset x-show="isTextInput" role="group" style="max-width:22rem">
+        <button type="button" @click="m.inputMode='text'"
+                :class="m.inputMode==='text' ? '' : 'secondary outline'">Type text</button>
+        <button type="button" @click="m.inputMode='file'"
+                :class="m.inputMode==='file' ? '' : 'secondary outline'">Upload file</button>
+      </fieldset>
+
+      <!-- textarea (text methods, type mode) -->
+      <label x-show="useTextarea">Input text
+        <textarea x-model="m.text" rows="6" placeholder="Type or paste text to convert…"></textarea>
+      </label>
+
+      <!-- drop zone (binary methods, or text methods in upload mode) -->
+      <div class="dropzone" x-show="!useTextarea" :class="m.drag ? 'dragover' : ''"
+           @dragover.prevent="m.drag=true" @dragleave.prevent="m.drag=false"
+           @drop.prevent="onDrop($event)" @click="$refs.file.click()">
+        <input type="file" x-ref="file" hidden @change="onPick($event)" />
+        <template x-if="!m.file"><p class="muted" style="margin:0">Drag &amp; drop a file here, or click to choose</p></template>
+        <template x-if="m.file"><p style="margin:0">&#128196; <span x-text="m.file.name"></span> <small class="muted" x-text="'('+fmtBytes(m.file.size)+')'"></small></p></template>
+      </div>
+
+      <button type="submit" :disabled="!canRun" :aria-busy="m.running"
+              x-text="m.running ? 'Running…' : 'Run conversion'"></button>
+    </form>
+
+    <article x-show="m.error" x-text="m.error" style="color:var(--pico-del-color)"></article>
+
+    <template x-if="m.result">
+      <article>
+        <p><small class="muted">
+          mime <code x-text="m.result.mime"></code> ·
+          ext <code x-text="m.result.ext"></code> ·
+          <span x-text="fmtBytes(m.result.bytes)"></span> ·
+          <span x-text="m.result.elapsedMs + ' ms'"></span>
+        </small></p>
+        <template x-if="m.result.text !== null">
+          <div>
+            <button class="secondary outline" @click="copy(m.result.text)">&#10697; copy</button>
+            <pre x-text="m.result.text"></pre>
+          </div>
+        </template>
+        <template x-if="m.result.text === null">
+          <a role="button" :href="resolveUrl(m.result.downloadUrl)" @click.prevent="download(m.result.downloadUrl)">&#11015; Download result</a>
+        </template>
+      </article>
+    </template>
+  </section>
+
+  <!-- ============ AUDIO STREAM ============ -->
+  <section x-show="tab==='stream'">
+    <div role="group" style="max-width:24rem">
+      <button @click="startStream()" :disabled="ws.active">&#9679; Start</button>
+      <button class="secondary" @click="stopStream()" :disabled="!ws.active">&#9632; Stop</button>
+    </div>
+    <p>
+      <span class="rec" x-show="ws.active">recording</span>
+      <small class="muted" x-text="ws.status"></small>
+    </p>
+
+    <article x-show="ws.error" x-text="ws.error" style="color:var(--pico-del-color)"></article>
+
+    <label>Final transcript
+      <pre x-text="ws.final || '—'"></pre>
+    </label>
+    <label>Partial (live) <small class="muted" x-show="ws.language" x-text="'· '+ws.language"></small>
+      <pre class="accent" x-text="ws.partial || '…'"></pre>
+    </label>
+    <article x-show="ws.segments.length">
+      <header>Segments</header>
+      <template x-for="(s,i) in ws.segments" :key="i">
+        <div><small class="muted" x-text="s.start.toFixed(1)+'–'+s.end.toFixed(1)+'s'"></small> <span x-text="s.text"></span></div>
+      </template>
+    </article>
+  </section>
+
+  <!-- ============ PULL STATS ============ -->
+  <section x-show="tab==='stats'">
+    <template x-if="stats && (stats.pullEnabled===false || stats.state==='stopped')">
+      <article>&#9208; Pull processing is <strong>disabled</strong> (PULL_ENABLED=false). Enable it in Settings to see live data.</article>
+    </template>
+
+    <template x-if="stats && stats.pullEnabled!==false && stats.state!=='stopped'">
+      <div>
+        <div class="grid">
+          <article><small class="muted">State</small><br /><strong class="accent" x-text="stats.state"></strong></article>
+          <article><small class="muted">Processed</small><br /><strong x-text="stats.processed ?? 0"></strong></article>
+          <article><small class="muted">Success</small><br /><strong x-text="stats.success ?? 0"></strong></article>
+          <article><small class="muted">Failed</small><br /><strong x-text="stats.failed ?? 0"></strong></article>
+        </div>
+
+        <div class="grid" x-show="stats.latencyMs">
+          <article><small class="muted">Latency avg</small><br /><span x-text="(stats.latencyMs?.avg ?? '–')+' ms'"></span></article>
+          <article><small class="muted">p95</small><br /><span x-text="(stats.latencyMs?.p95 ?? '–')+' ms'"></span></article>
+          <article><small class="muted">last</small><br /><span x-text="(stats.latencyMs?.last ?? '–')+' ms'"></span></article>
+        </div>
+
+        <article>
+          <small class="muted">Current job</small>
+          <template x-if="stats.currentJob">
+            <div x-text="stats.currentJob.conversionId+'  '+stats.currentJob.sourceFormat+'→'+stats.currentJob.targetFormat+'  @'+stats.currentJob.startedAt"></div>
+          </template>
+          <template x-if="!stats.currentJob"><div class="muted">idle</div></template>
+        </article>
+
+        <article>
+          <small class="muted">Started at: <span x-text="stats.startedAt || '–'"></span></small>
+          <p style="margin:.5rem 0 0"><small class="muted">Last errors</small></p>
+          <template x-if="(stats.lastErrors||[]).length===0"><div class="muted">none</div></template>
+          <template x-for="(e,i) in stats.lastErrors||[]" :key="i">
+            <div style="color:var(--pico-del-color)"><small class="muted" x-text="e.at"></small> · <span x-text="e.conversionId"></span>: <span x-text="e.error"></span></div>
+          </template>
+        </article>
+      </div>
+    </template>
+
+    <p class="muted" x-show="!stats">loading…</p>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section x-show="tab==='settings'">
+    <div role="group" style="max-width:24rem">
+      <button @click="saveSettings()" :disabled="!dirtyCount() || s.saving" :aria-busy="s.saving"
+              x-text="s.saving ? 'Saving…' : ('Save changes ('+dirtyCount()+')')"></button>
+      <button class="secondary" @click="loadSettings()">&#8635; Reload</button>
+    </div>
+
+    <article x-show="s.applied.length">Applied: <span x-text="s.applied.join(', ')"></span></article>
+    <article x-show="s.pendingRestart.length">Pending restart: <span x-text="s.pendingRestart.join(', ')"></span></article>
+    <article x-show="s.error" style="color:var(--pico-del-color)">
+      <strong x-show="s.errKey" x-text="s.errKey+': '"></strong><span x-text="s.error"></span>
+    </article>
+
+    <!-- PULL_ENABLED prominent -->
+    <template x-if="pullField">
+      <article>
+        <label>
+          <input type="checkbox" role="switch" x-model="pullField.value" />
+          <strong>Pull processing</strong>
+        </label>
+        <small class="muted">Starts/stops the in-process pull loop at runtime (hot)</small>
+      </article>
+    </template>
+
+    <template x-for="g in groups" :key="g">
+      <article class="settings-group">
+        <header><strong x-text="groupLabel(g)"></strong></header>
+        <template x-for="f in fieldsByGroup(g)" :key="f.key">
+          <div class="setting">
+            <div class="setting-head">
+              <strong x-text="f.label || f.key"></strong>
+              <small class="badge" :class="f.apply==='hot' ? 'badge-hot' : 'badge-restart'" x-text="f.apply"></small>
+            </div>
+            <!-- bool -->
+            <template x-if="f.type==='bool'">
+              <input type="checkbox" role="switch" x-model="f.value" :title="f.help || ''" />
+            </template>
+            <!-- enum -->
+            <template x-if="f.type==='enum'">
+              <select x-model="f.value" :title="f.help || ''">
+                <template x-for="o in f.options||[]" :key="o"><option :value="o" x-text="o"></option></template>
+              </select>
+            </template>
+            <!-- int/float -->
+            <template x-if="f.type==='int' || f.type==='float'">
+              <input type="number" :step="f.type==='float' ? '0.01' : '1'" x-model.number="f.value" :title="f.help || ''" />
+            </template>
+            <!-- str -->
+            <template x-if="f.type==='str'">
+              <input type="text" x-model="f.value" :title="f.help || ''" />
+            </template>
+            <small class="muted setting-help" x-show="f.help" x-text="f.help"></small>
+            <small class="setting-meta">
+              <code x-text="f.key"></code>
+              <a x-show="f.helpUrl" :href="f.helpUrl" target="_blank" rel="noopener">find models ↗</a>
+            </small>
+          </div>
+        </template>
+      </article>
+    </template>
+    <p class="muted" x-show="!settings.length">loading…</p>
+  </section>
+
+</main>
+</body>
+</html>

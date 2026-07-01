@@ -20,3 +20,8 @@ completed без промежуточного «processing»). On-server вор�
 **Приоритет:** Low (не блокирует MVP, статус виден через DB после завершения).
 
 **Контекст:** validate-ai-worker → task WorkerController (2026-06-23).
+
+**Decisions:**
+- Add **`write()` to `ConversionStatusReader`** (symmetric with existing `read()`); write `conv:status:{id}` = processing on claim, completed/failed on result/fail in WorkerController.
+
+**Status:** ready (todo).

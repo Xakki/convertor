@@ -22,13 +22,10 @@ Telegram-логин на фронте не заработает с реальн�
 - `app-front/js` фетчит конфиг на загрузке и проставляет `data-telegram-login` (учесть гонку с HTMX-загрузкой модалки — грузить конфиг блокирующе в `<head>` до HTMX-вызовов, либо ждать события `config:loaded`).
 - Сделать `TELEGRAM_BOT_USERNAME` доступным Symfony. По принятому в проекте правилу «переменная живёт там, где её реальный потребитель»: единственный потребитель — Symfony-контроллер конфига → положить значение в `app-symfony/.env*` (Symfony-only), НЕ возвращать инъекцию в `x-app-env`. (Сверить с тем, что юзер держит его и в корневом `.env`.)
 
-**Open questions:**
-- Делать эту карточку ДО или ВМЕСТЕ с задачей «подключить app-front к стеку» ([[upload-conversion-ui]])? Сейчас фронт не отдаётся, видимого эффекта нет.
-- Где канонически живёт `TELEGRAM_BOT_USERNAME` после правки: только `app-symfony/.env` (по consumer-правилу), или дублировать в корневом `.env` (как сейчас оставил юзер) для «общепроектной» доступности?
-- Формат и кэширование `/api/v1/public/config` (публичный, без auth; Cache-Control / CDN-friendly?).
-- Подтвердить итоговый механизм при старте (B по умолчанию; альтернативы — nginx `sub_filter` для чисто-статичной отдачи, или Twig-render если фронт сольют с Symfony).
-
 **Decisions:**
 - 2026-06-25: при дедупе `.env*` обнаружено, что `app-front` не отдаётся стеком и логин-флоу на бэке использует токен, не username. Реализацию отложили — по решению пользователя завести карточку (вариант доставки B рекомендован, но старт — после/вместе с подключением фронта).
+- `TELEGRAM_BOT_USERNAME` stays in **root `.env`** (Q12, user intent) and is made reachable by Symfony ; delivery = **Twig server-side render** (Q12.1) — widget rendered by Symfony template, no separate config endpoint needed. Depends on upload-conversion-ui (front served via Twig). Touch: login-modal.html:96.
+
+**Status:** ready (todo) — start after upload-conversion-ui.
 
 Siblings: [[upload-conversion-ui]] · [[docs-admin-panel]]

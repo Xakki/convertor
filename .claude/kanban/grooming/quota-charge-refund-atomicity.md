@@ -15,9 +15,7 @@
 **Решение (черновик):**
 - `@Version` (optimistic lock) на `Conversion` и/или `User`, либо атомарный decrement на уровне БД, либо счётчик в KeyDB с атомарными операциями.
 
-**Open questions:**
-- Нужно ли это вообще до фактического масштабирования консьюмера? (возможно, отложить до решения о scale-out)
-- Где держать счётчик квоты — Doctrine (`@Version`) или KeyDB (atomic INCR/DECR)?
-
 **Decisions:**
-- (заполнить при грумминге)
+- FROZEN. When done: atomic SQL decrement GREATEST(0,x-1) (not KeyDB) ; bundle with quota-unseeded-plans-fallback ; revisit at consumer scale-out.
+
+**Status:** grooming — FROZEN.

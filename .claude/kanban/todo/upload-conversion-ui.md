@@ -22,14 +22,10 @@
 - HTMX-поллинг статуса + ссылка на результат (presigned S3).
 - Подключить/доработать `templates/conversion/_upload_form.html.twig` как фрагмент формы.
 
-**Open questions:**
-- Где живёт страница: отдельный `ConversionController`-route (`GET /`) + Twig, или часть будущего дашборда ([[docs-admin-panel]])?
-- Источник списка форматов для UI: уже есть `GET` supported-formats (`ConversionRegistry::getSupportedFormats()`)? Если нет — нужен эндпоинт.
-- Когда показывать OCR-тоггл: вычислять валидность пары на клиенте (нужен machine-readable список OCR-пар из API) или всегда и валидировать на бэке?
-- `templates/` оказался root-owned (фрагмент создан через `docker cp`, www-data-owned) — нужно решить владение/права на каталог шаблонов, иначе хост-правки шаблонов блокируются.
-- Авторизация: страница за Telegram-login ([[Authentication]]) или публичная с лимитами для анонимов?
-
 **Decisions:**
 - Выделено при [[validate-image-worker]] (2026-06-21): OCR-тоггл прошит в API, но UI-хоста нет — вынесено отдельной карточкой по решению «всё в одной карточке» (UI признан вне scope воркер-карточки).
+- own `ConversionController::index` (GET /) + Twig ; formats from existing GET /api/v1/formats ; OCR-toggle client-side + backend re-validate ; auth = public + anon rate-limits, Telegram-login for history. Wire the orphan `_upload_form.html.twig`. Note real infra issue: `templates/` is root-owned (resolve for host-side edits).
+
+**Status:** ready (todo).
 
 Siblings: [[validate-image-worker]] · [[docs-admin-panel]]

@@ -3,3 +3,8 @@
 # Only packages imported at module level in workers/ai/ code.
 # Heavy ML deps (torch, faster-whisper, etc.) live in requirements-ai-ml.txt.
 httpx==0.28.1
+# Dev-server (workers.ai.devserver) — FastAPI + uvicorn + multipart upload support.
+# Pure-python; only imported by `python -m workers.ai devserver`.
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17

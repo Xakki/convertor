@@ -14,9 +14,7 @@
 **Решение (черновик):**
 - Логировать warning при fallback на free для не-free плана, ИЛИ healthcheck/`make`-проверка наличия сидов, ИЛИ бросать в non-prod.
 
-**Open questions:**
-- Достаточно ли warning-лога, или нужен жёсткий guard?
-- Стоит ли вообще держать хардкод-free-baseline как последний fallback?
-
 **Decisions:**
-- (заполнить при грумминге)
+- FROZEN. When done: warning log always + throw/healthcheck in non-prod ; keep FREE_FALLBACK as last resort. Bundle with quota-charge-refund-atomicity.
+
+**Status:** grooming — FROZEN.

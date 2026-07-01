@@ -32,10 +32,11 @@ Run after its prerequisites land. Steps:
 - Logs reviewed; no unhandled errors (or filed as follow-up cards).
 - PHP tests (`composer test:phpstan`, `test:cs-check`, PHPUnit) and worker pytest suite green.
 
-**Open questions:**
-- Manual smoke checklist vs an automated e2e/smoke script committed to the repo?
-- Which conversions are the canonical smoke set (one per category) using which `example_files`?
-- Acceptance for partial pass — if AI workers need models/keys not available locally, mark them skipped?
-
 **Decisions:**
-- (to be filled during grooming)
+- Form = **`make smoke` target built on `test-e2e`** (extend e2e to all categories), not a manual checklist (keep only a short manual log-review note).
+- markup category = **fold into the document check** for now (no separate .md fixture). Later: add dependent tests with reverse conversion.
+- AI leg = **hard-require green** (error out if not working) — all workers must be configured.
+- DE-STALE the body: `/shared-files` → S3 buckets + MCP minio verification ; bare `docker compose up` → `make up`/`make ps`/`make docker-check` ; `composer test:*` → `make phpstan`/`make cs-check`/`make test-php`/`make test-python`. Re-link the three `[[wiki]]` prereqs (not in grooming/) to live cards or drop.
+- Depends on `ci-test-db-provisioning`.
+
+**Status:** ready (todo).

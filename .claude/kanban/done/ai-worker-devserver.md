@@ -69,3 +69,21 @@ workers/ai/devserver/
 - Управление обработкой и всеми настройками — через UI, с persist на volume.
 - Безопасность dev-сервера: bind на `127.0.0.1` по умолчанию; опциональный bearer-токен
   для доступа по сети с GPU-хоста (не блокер, дефолт — только localhost).
+- **In-process pull-loop:** dev-сервер сам владеет управляемым фоновым pull-таском
+  (`PullRunner`), стартует/стопает его по эффективному `PULL_ENABLED` — так Stats видит
+  живые данные, а тумблер работает в рантайме без рестарта. Это рефактор поллинг-цикла
+  в `worker.py` (start/stop + инструментация stats); прод-режим `worker` поведения не
+  меняет, существующие `test_run_*` в `workers/tests/test_ai_worker.py` остаются зелёными.
+- **Scope настроек в UI:** показываем/редактируем все НЕсекретные настройки `Config`.
+  Секреты (`WORKER_API_TOKEN`, `LLM_MODEL_PATH`) намеренно НЕ выводим/не редактируем.
+  Инфраструктурные (`API_BASE_URL`, `WORKER_TYPE`, `WORK_DIR`) — опускаем
+  (не относятся к проверке методов/моделей).
+- **Persist настроек — на volume, НЕ под `WORK_DIR`** (тот = system tempdir, эфемерный):
+  оверлей `DEVSERVER_CONFIG_PATH` (дефолт `/data/devserver_settings.json`), docker-compose
+  монтирует named volume в `/data`.
+- **Launch flag:** поддержать и `--devserver`, и позиционный `devserver`.
+- **WS audio format** финализирует backend-dev по `streaming_stt.process_chunk` (raw PCM
+  vs encoded) ДО реализации mic-capture во фронте — контракт помечает поле провизорным.
+
+**Контракт API фронт↔бэк:** `.claude/skills/devserver-api-contract/SKILL.md`
+(оба исполнителя следуют ему дословно).
