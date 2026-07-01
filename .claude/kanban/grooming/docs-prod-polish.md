@@ -33,9 +33,6 @@ Tackle as independent hardening tasks; rate limiting is the highest-value remain
 - **24h cleanup = Symfony Scheduler cron** (PHP command deletes S3 objects + DB rows together;
   single source of logic) — NOT an S3 lifecycle policy (user, 2026-06-20). Covers input + result
   buckets `${S3_BUCKET_PREFIX}-inputs` / `-results`.
+- on todo-move, SPLIT into 4 cards (rate-limit / cleanup / metrics / SMS), rate-limit first ; metrics = reuse cross-project Grafana/Prometheus ; SMS = SMSC.ru ; cleanup = Symfony Scheduler deletes S3+DB rows.
 
-**Open questions (remaining):**
-- Rate-limit thresholds for free vs paid tiers?
-- Reuse the cross-project monitoring stack (Grafana/Prometheus) or app-local metrics?
-- SMS provider: SMSC.ru (per CLAUDE.md) confirmed?
-- Split remaining items into per-card (rate-limit / cleanup / metrics / SMS) when moving to todo?
+**Status:** grooming (Stage 6, not imminent).

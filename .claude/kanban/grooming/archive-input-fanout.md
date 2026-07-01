@@ -32,15 +32,9 @@
 - Защита: лимит размера/числа файлов, анти-zip-bomb, path-traversal при распаковке.
 - Квоты и агрегация статусов работают по выбранной модели (см. Decisions).
 
-**Open questions:**
-- **Кто распаковывает и раскидывает:** PHP на submit, или отдельный **archive-воркер** (consumer `conv.archive`), который распаковывает и сам делает XADD дочерних задач? (второе чище для тяжёлых архивов и асинхронности).
-- **Критерий «подходит под формат»:** по категории целевого формата (target=png → только изображения) или строго по input→output матрице конкретной пары?
-- **Агрегация результата:** отдавать N отдельных результатов, или собрать сконвертированные файлы обратно в один архив на скачивание?
-- **Квоты:** считать N конвертаций (по числу файлов) или 1 (за архив)? Связь с моделью лимитов (per-conversion, Стадия 6).
-- **Вложенные архивы:** разворачивать рекурсивно или игнорировать?
-- **Стадия:** MVP или Стадия 7 (вместе с архивами-как-форматом)?
-
 **Decisions:**
-- (to be filled during grooming)
+- dedicated **conv.archive worker** (Q16) that unpacks + XADDs child jobs. PREREQ: `conv_archive` transport is missing in messenger.yaml — add it. fit = strict matrix per pair ; aggregation = N results + parent rollup ; quota = count N ; nested = ignore one level, report skipped ; Stage 7.
+
+**Status:** grooming (Stage 7).
 
 Siblings: [[post-mvp-conversion-formats]] · [[backend-hardening-bugs]] · [[stream-subscription-distribution]]

@@ -19,9 +19,11 @@
 - Прокинуть это в CI перед `make test-php`, чтобы live-dep тесты реально выполнялись.
 - Убедиться, что test-окружение поднимает KeyDB db1 (`REDIS_SESSIONS_DSN`).
 
-**Открытые вопросы:**
-- Где провизионить (docker-compose test-сервис vs CI-шаг)?
-- Гонять миграции или dedicated test-fixtures?
-
 **Decisions:**
 - 2026-06-22: вынесено из `auth-refresh-token` как отдельная инфра-задача (вне скоупа фичи).
+- Provision via a **Makefile target** `test-db-setup`. RULE: if the action runs inside app-symfony, write a **composer script** (composer.json) first and have the Makefile target call the composer script (not raw symfony console in the Makefile).
+- Schema via **`doctrine:migrations:migrate`** under APP_ENV=test (NOT schema:create/fixtures).
+- MUST FIX the naming mismatch: existing `docker/mariadb/dev/init/create-test-db.sh` makes `convertor-test` (hyphen) + wrong user; Symfony needs DB `convertor_test` (underscore) accessed as user `convertor`. Target must create+grant correctly then migrate.
+- No seed-plans needed (users.plan is VARCHAR default, not FK).
+
+**Status:** ready (todo). Unblocks: smoke-run-verify, auth-refresh-token tests, api-integration-tests.

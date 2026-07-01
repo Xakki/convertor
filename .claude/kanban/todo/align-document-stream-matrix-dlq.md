@@ -14,11 +14,12 @@
 - Но база (`workers/common/stream_consumer.py`) трактует ВСЕ исключения `convert()` как ретраябельные: запись не ACK-ается, редоставка через `XAUTOCLAIM` раз в `_IDLE_MS` (~5 мин) × `_MAX_RETRIES=3` → ~15-20 мин болтанки прежде чем задача умрёт.
 - В DLQ/`conv.result` уходит обобщённая причина `"max_retries (3) exceeded"`, а не реальная `"unsupported conversion"` → оператор/юзер видит вводящую в заблуждение причину.
 
-**Open questions:**
-- Где источник истины матрицы `conv.document` — PHP-реестр или воркер? Должны сойтись (один не рекламирует то, чего не умеет другой).
-- Убрать Stage-7 пары из PHP-реестра (до их реализации) ИЛИ научить базу различать перманентные (fast-DLQ, без ретраев) и транзиентные ошибки?
-- Перманентную ошибку различать по типу исключения (напр. `ValueError`/спец-класс `PermanentError`) → база сразу DLQ с реальной причиной. Это касается ВСЕХ воркеров, не только libreoffice — менять в базе.
-
 **Зависимости:** [[validate-libreoffice-worker]] (откуда всплыло).
 
-**Decisions:** —
+**Decisions:**
+- Matrix source-of-truth: long-term = **dynamic worker self-registration in DB** (Q2.1) → moved to NEW epic `registry-self-registration` (not this card).
+- The "registry advertises unhandled Stage-7 pairs" structural fix = **chaining** (offer A→B→C via two available conversions) → moved to NEW Stage-7 card `conversion-chaining`. Do NOT remove the Stage-7 pairs from the registry *in this card*.
+- ⚠ UPDATE [USER DECISION 2026-07-01]: long-term those Stage-7 pairs **will disappear** — once `registry-self-registration` Phase 2 lands, the matrix holds only live-worker-declared pairs and the API 400-rejects unhandled pairs at submit (see `registry-self-registration`). This **supersedes** the "do NOT remove" line above going forward. Until then, THIS card's `PermanentError` fast-DLQ is the interim coverage.
+- NEAR-TERM deliverable of THIS card = **permanent-vs-transient fast-DLQ in the Python base consumer** via a dedicated **`PermanentError`** class (Q2.3). Base: `except PermanentError → fast-DLQ with str(exc) as the real reason; except Exception → existing retry path`. Migrate the 4 workers' "unsupported source/conversion/format" raises (currently `ValueError`) to `PermanentError`. Fix `_send_to_dlq` to surface the real reason (not hardcoded "max_retries exceeded"). Stream: `conv.dead` (canonical).
+
+**Status:** ready (todo) — scope = PermanentError fast-DLQ only.

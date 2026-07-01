@@ -32,6 +32,7 @@ Dev-сервер AI-воркера (`workers/ai/devserver`) стримит ау�
 реальном раннере с GPU. Не блокер MVP dev-сервера, но нужно закрыть до полагания на
 live-транскрипт.
 
-**Open questions:**
-- Достаточно ли мягкого skip-on-decode-error для partial, или нужен кластер-aware
-  парсинг webm?
+**Decisions:**
+- On undecodable partial = **emit an error frame (noisy), keep socket open** (not silent skip-tick). Plus the in-image verification task: synthesize+truncate webm/opus, run av.open() + StreamingWhisper.process_file.
+
+**Status:** ready (todo).

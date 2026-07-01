@@ -113,5 +113,14 @@ Live-цифры: из 76 working-провайдеров только 19 реал
 └────────────────────────────────────────────────────┴──────┴────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 /static/ нет — Flask отдаёт статику под /dist/. Контейнер g4f не публикует портов наружу — только через shared-nginx-1 (сеть common).
+
+**Rename intent:** this card is to be renamed `external-ai-worker` (file kept as-is for now).
+
+**Decisions:**
+- Implement external/hosted AI as a **SEPARATE worker** ("external-ai" worker) whose ONLY job is calling an external AI API (Q7.1, Q7.3) — kept apart from the local-only inference AI worker, so the local-only design of the existing AI worker is NOT reversed.
+- OPEN (Q7.2, research subtask): study exactly what the external endpoint (OpenAI / g4f aip.xakki.ru) supports before scoping interfaces. The 4 interfaces are heterogeneous: STT/TTS = hosted alt-backend ; markitdown = new doc→md (overlaps OCR) ; text→image = NEW conversion category (absent from FileCategory). Scope per research.
+- Card endpoint nit: textToImage generation = POST /v1/images/generate (card's GET /images/{f} is retrieval).
+
+**Status:** grooming — blocked on Q7.2 research. Rename intent: external-ai-worker.
                                                                                                                                      
 
