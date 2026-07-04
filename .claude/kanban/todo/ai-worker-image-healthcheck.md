@@ -1,4 +1,4 @@
-### AI-воркер — продублировать HEALTHCHECK в рабочие образы ai.cuda/ai.cpu
+### AI-воркер — продублировать HEALTHCHECK в workers
 
 **Критичность:** Low
 

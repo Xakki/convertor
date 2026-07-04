@@ -80,12 +80,12 @@ def _methods() -> list[dict[str, Any]]:
                         "(txt) or subtitles (srt/vtt) for the whole audio file."},
         {"mode": "stt_stream", "label": "Speech → Segments",
          "sources": audio, "targets": ["json"],
-         "description": "Streaming transcription: audio is processed in overlapping "
-                        "sliding windows (STREAM_WINDOW_SEC, default 20s; "
-                        "STREAM_OVERLAP_SEC, default 2s) and incremental segments are "
-                        "emitted progressively over the Audio-stream WebSocket. Use it "
-                        "for live mic input; vs plain stt which returns one final "
-                        "transcript for the whole file."},
+         "description": "Streaming transcription: audio is segmented in real time by a "
+                        "WebRTC VAD (voice-activity detector); each detected speech "
+                        "segment is transcribed immediately and emitted as a partial "
+                        "frame over the Audio-stream WebSocket. Use it for live mic "
+                        "input; vs plain stt which returns one final transcript for "
+                        "the whole file."},
         {"mode": "tts", "label": "Text → Speech",
          "sources": text, "targets": _ordered(TTS_OUTPUTS, ["mp3", "wav", "ogg"]),
          "description": "Speech synthesis: turns input text into an audio file "

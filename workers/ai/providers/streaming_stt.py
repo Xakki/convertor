@@ -60,6 +60,24 @@ class StreamingWhisper:
             "language": info.language,
         }
 
+    def transcribe_pcm(self, pcm: bytes, sample_rate: int = 16000) -> dict:
+        """Транскрибировать сегмент PCM (s16le, моно) напрямую через numpy — без temp-файла."""
+        import numpy as np
+
+        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        segments, info = self.model.transcribe(audio, beam_size=5)
+        result = [
+            {"start": s.start, "end": s.end, "text": s.text.strip()}
+            for s in segments
+        ]
+        text = " ".join(s["text"] for s in result)
+        return {
+            "partial": text,
+            "final": text,
+            "segments": result,
+            "language": info.language,
+        }
+
     def process_chunk(
         self,
         chunk_bytes: bytes,

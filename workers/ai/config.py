@@ -69,6 +69,9 @@ class Config:
     # --- streaming STT ---
     stream_window_sec: int
     stream_overlap_sec: int
+    vad_aggressiveness: int
+    vad_silence_frames: int
+    stream_segment_max_sec: int
 
     # --- TTS (espeak-ng / pyttsx3, local only) ---
     tts_engine: str
@@ -135,6 +138,9 @@ def load_config() -> Config:
         whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
         stream_window_sec=_getenv_int("STREAM_WINDOW_SEC", 20),
         stream_overlap_sec=_getenv_int("STREAM_OVERLAP_SEC", 2),
+        vad_aggressiveness=_getenv_int("VAD_AGGRESSIVENESS", 2),
+        vad_silence_frames=_getenv_int("VAD_SILENCE_FRAMES", 10),
+        stream_segment_max_sec=_getenv_int("STREAM_SEGMENT_MAX_SEC", 30),
         tts_engine=os.getenv("TTS_ENGINE", "espeak"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"),
         embedding_device=os.getenv("EMBEDDING_DEVICE", whisper_device),

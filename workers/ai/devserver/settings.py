@@ -82,12 +82,23 @@ SETTINGS: tuple[Setting, ...] = (
             options=("int8", "int16", "float16", "float32")),
     Setting("STREAM_WINDOW_SEC", "stream_window_sec", "int", "stt_stream", "restart",
             label="Window (s)",
-            help="Streaming-STT window length in seconds: how much audio each "
-                 "incremental transcription covers."),
+            help="Устаревший псевдоним; реальный лимит длины сегмента — STREAM_SEGMENT_MAX_SEC."),
     Setting("STREAM_OVERLAP_SEC", "stream_overlap_sec", "int", "stt_stream", "restart",
             label="Overlap (s)",
-            help="Overlap in seconds between consecutive streaming windows; prevents "
-                 "words being cut at window edges."),
+            help="Секунды PCM-контекста, переносимые с конца предыдущего VAD-сегмента в начало "
+                 "следующего; предотвращает обрыв слов на границе сегмента."),
+    Setting("VAD_AGGRESSIVENESS", "vad_aggressiveness", "int", "stt_stream", "restart",
+            label="VAD aggressiveness",
+            help="Агрессивность webrtcvad (0–3): 0 = мягкий (меньше ложных тишин), "
+                 "3 = жёсткий (активнее отфильтровывает нережимную речь)."),
+    Setting("VAD_SILENCE_FRAMES", "vad_silence_frames", "int", "stt_stream", "restart",
+            label="Silence frames",
+            help="Сколько подряд тихих 30-мс фреймов считать концом речевого сегмента "
+                 "(10 фреймов = 300 мс тишины)."),
+    Setting("STREAM_SEGMENT_MAX_SEC", "stream_segment_max_sec", "int", "stt_stream", "restart",
+            label="Max segment (s)",
+            help="Максимальная длина одного VAD-сегмента в секундах; при достижении лимита "
+                 "сегмент принудительно завершается, даже если речь продолжается."),
     Setting("TTS_ENGINE", "tts_engine", "enum", "tts", "restart",
             label="TTS engine",
             help="Text-to-speech backend. espeak = lightweight/offline; pyttsx3 = system voices.",

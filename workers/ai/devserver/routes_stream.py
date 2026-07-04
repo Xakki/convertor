@@ -1,67 +1,62 @@
 """Audio stream tab — WS /ws/stream, dev-only live STT.
 
 Wire format (FINALIZED by backend-dev, see card decision A):
-  Browser captures mic with MediaRecorder → emits `audio/webm;codecs=opus` blobs.
-  The client sends each blob as a binary frame; the SERVER ACCUMULATES all frames
-  (the first carries the container header, so the running buffer is always a valid
-  decodable file). On a cadence, and again on stop, the server writes the buffer to
-  a temp file and runs faster-whisper, which decodes webm/opus via PyAV+ffmpeg.
+  Браузер захватывает микрофон через MediaRecorder → шлёт audio/webm;codecs=opus блобы.
+  Клиент отправляет каждый блоб бинарным фреймом. Сервер пропускает PCM через VAD
+  (webrtcvad), накапливает речевые сегменты и транскрибирует каждый завершённый сегмент
+  через StreamingWhisper.transcribe_pcm(). Partial-фреймы несут накопленный текст всех
+  сегментов сессии (UI заменяет .partial при каждом сообщении).
 
-  `StreamingWhisper.process_chunk(bytes)` only returns {"partial"} (no segments /
-  language), so we use `process_file()` over the accumulated buffer to populate the
-  contract's partial/final shape (text + segments + language). Partials are
-  cumulative re-transcriptions — fine for a dev tester.
+  pcm_s16le: сырой s16le 16 кГц моно — декодер не создаётся, байты идут напрямую в VAD.
 
-  The format is negotiated in the start handshake. `pcm_s16le` is also supported:
-  raw 16-bit mono PCM frames are wrapped in a WAV container server-side (handshake
-  `sampleRate`, default 16000) before transcription — no extra deps.
-
-This route NEVER touches the backend pull-API.
+Этот маршрут НИКОГДА не обращается к backend pull-API.
 """
 
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import logging
 import os
-import tempfile
-import time
-import wave
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketState
 
 from workers.ai.worker import _safe_err
 
+if TYPE_CHECKING:
+    from workers.ai.config import Config
+    from workers.ai.devserver.pcm_decoder import PcmStreamDecoder
+    from workers.ai.devserver.vad_chunker import VadChunker
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_EXT_BY_FORMAT = {
-    "webm/opus": ".webm",
-    "webm": ".webm",
-    "ogg/opus": ".ogg",
-    "ogg": ".ogg",
-    "wav": ".wav",
-    "mp3": ".mp3",
-    "m4a": ".m4a",
-}
+
+# --- фабрики (заменяются monkeypatch'ем в тестах) ---
+
+def _new_pcm_decoder(sample_rate: int = 16000) -> "PcmStreamDecoder":
+    from workers.ai.devserver.pcm_decoder import PcmStreamDecoder
+    return PcmStreamDecoder(sample_rate=sample_rate)
+
+
+def _new_vad_chunker(cfg: "Config") -> "VadChunker":
+    from workers.ai.devserver.vad_chunker import VadChunker
+    return VadChunker(
+        aggressiveness=cfg.vad_aggressiveness,
+        silence_frames=cfg.vad_silence_frames,
+        max_segment_sec=cfg.stream_segment_max_sec,
+        overlap_sec=cfg.stream_overlap_sec,
+    )
 
 
 def _allowed_origins() -> set[str]:
-    """Same-origin allowlist for the WS handshake (anti-CSWSH).
+    """Same-origin allowlist для WS-хендшейка (anti-CSWSH).
 
-    A browser always sends Origin on a WS connect; we accept only trusted origins.
-    Localhost defaults always apply (direct :8877 dev). When the dev-server is
-    exposed off-loopback (DEVSERVER_HOST=0.0.0.0) or proxied behind nginx at a
-    public origin (e.g. https://convertor.xakki.pro/worker-ai/), the browser Origin
-    is NOT localhost — so add those absolute origins via DEVSERVER_ALLOWED_ORIGINS
-    (comma-separated, e.g. "https://convertor.xakki.pro,http://host:8877"). This is
-    decoupled from the bind host (DEVSERVER_HOST=0.0.0.0 says nothing about the
-    public origin and a proxied origin carries no port).
+    Браузер всегда шлёт Origin на WS connect — принимаем только доверенные origins.
+    Localhost по умолчанию всегда. При экспозиции за nginx добавляй публичный origin
+    через DEVSERVER_ALLOWED_ORIGINS (через запятую, напр. "https://host,http://host:8877").
     """
     port = os.getenv("DEVSERVER_PORT", "8877")
     origins: set[str] = set()
@@ -75,49 +70,23 @@ def _allowed_origins() -> set[str]:
     return origins
 
 
-def _to_input_bytes(data: bytes, fmt: str, sample_rate: int) -> tuple[bytes, str]:
-    """Map the accumulated buffer to a decodable file payload + extension."""
-    if fmt.startswith("pcm"):
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)  # s16le
-            w.setframerate(sample_rate)
-            w.writeframes(data)
-        return buf.getvalue(), ".wav"
-    return data, _EXT_BY_FORMAT.get(fmt, ".webm")
-
-
-def _transcribe(model: Any, data: bytes, fmt: str, sample_rate: int) -> dict:
-    payload, ext = _to_input_bytes(data, fmt, sample_rate)
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-        tmp.write(payload)
-        path = Path(tmp.name)
-    try:
-        return model.process_file(path)
-    finally:
-        path.unlink(missing_ok=True)
-
-
 @router.websocket("/ws/stream")
 async def stream(ws: WebSocket) -> None:
-    # Anti-CSWSH: a browser sends Origin on WS connect — reject foreign origins so a
-    # random page the dev visits can't drive the mic-STT route. A missing Origin
-    # (non-browser client / CLI / TestClient) is allowed; the token check still applies.
+    # Anti-CSWSH: браузер шлёт Origin — отклонять чужие origins
     origin = ws.headers.get("origin")
     if origin is not None and origin not in _allowed_origins():
-        await ws.close(code=1008)  # policy violation
+        await ws.close(code=1008)
         return
 
     token = os.getenv("DEVSERVER_TOKEN")
     if token and ws.query_params.get("token") != token:
-        await ws.close(code=1008)  # policy violation
+        await ws.close(code=1008)
         return
 
     await ws.accept()
     cfg = ws.app.state.cfg
 
-    # Handshake (first message): {type:"start", format, sampleRate, lang}
+    # Хендшейк: {type:"start", format, sampleRate, lang}
     try:
         first = await ws.receive_json()
     except Exception:
@@ -131,7 +100,7 @@ async def stream(ws: WebSocket) -> None:
     except (TypeError, ValueError):
         sample_rate = 16000
 
-    # Build the model in a worker thread (heavy import + load).
+    # Загрузить модель в worker-потоке (тяжёлый импорт + инициализация)
     try:
         from workers.ai.providers.streaming_stt import StreamingWhisper
 
@@ -143,31 +112,46 @@ async def stream(ws: WebSocket) -> None:
             cfg.stream_window_sec,
             cfg.stream_overlap_sec,
         )
-    except Exception as exc:  # noqa: BLE001 — model/load errors are reported, not raised
+    except Exception as exc:  # noqa: BLE001
         logger.warning("stream model load failed: %s", _safe_err(exc))
         await ws.send_json({"type": "error", "message": f"model load failed: {_safe_err(exc)}"})
         await ws.close()
         return
 
-    buffer = bytearray()
-    window = max(2, int(cfg.stream_window_sec or 20))
-    last_emit = 0.0
+    # VAD chunker — создаём сразу (fail-fast если webrtcvad не установлен)
+    try:
+        chunker = _new_vad_chunker(cfg)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("VAD chunker init failed: %s", _safe_err(exc))
+        await ws.send_json({"type": "error", "message": f"VAD init failed: {_safe_err(exc)}"})
+        await ws.close()
+        return
 
-    async def emit(is_final: bool) -> None:
-        if not buffer:
-            if is_final:
-                await ws.send_json({"type": "final", "text": "", "segments": [], "language": None})
-            return
+    # Декодер — лениво (только при первом бинарном фрейме WebM/Opus)
+    decoder: Any = None  # PcmStreamDecoder | None
+
+    # Накопленные результаты всей сессии
+    all_texts: list[str] = []
+    all_segs: list[dict] = []
+    last_language: str | None = None
+
+    async def _transcribe_seg(pcm: bytes) -> None:
+        """Транскрибировать один VAD-сегмент → отправить partial с накопленным текстом."""
+        nonlocal last_language
         try:
-            result = await asyncio.to_thread(_transcribe, model, bytes(buffer), fmt, sample_rate)
-        except Exception as exc:  # noqa: BLE001 — transcription failure → error frame, keep socket
+            result = await asyncio.to_thread(model.transcribe_pcm, pcm)
+        except Exception as exc:  # noqa: BLE001
             await ws.send_json({"type": "error", "message": _safe_err(exc)})
             return
+        last_language = result.get("language")
+        seg_text = result.get("final", "")
+        all_texts.append(seg_text)
+        all_segs.extend(result.get("segments", []))
         await ws.send_json({
-            "type": "final" if is_final else "partial",
-            "text": result.get("final", ""),
+            "type": "partial",
+            "text": " ".join(all_texts),
             "segments": result.get("segments", []),
-            "language": result.get("language"),
+            "language": last_language,
         })
 
     try:
@@ -178,11 +162,18 @@ async def stream(ws: WebSocket) -> None:
 
             data = msg.get("bytes")
             if data is not None:
-                buffer += data
-                now = time.monotonic()
-                if (now - last_emit) >= window:
-                    last_emit = now
-                    await emit(is_final=False)
+                # Декодируем аудио → PCM (или берём сырой PCM напрямую)
+                if fmt.startswith("pcm"):
+                    pcm = bytes(data)
+                else:
+                    if decoder is None:
+                        decoder = _new_pcm_decoder(sample_rate)
+                    decoder.feed(data)
+                    pcm = decoder.drain()
+
+                # VAD-разбивка; каждый готовый сегмент → transcribe
+                for seg in chunker.push(pcm):
+                    await _transcribe_seg(seg)
                 continue
 
             text = msg.get("text")
@@ -192,14 +183,39 @@ async def stream(ws: WebSocket) -> None:
                 except (json.JSONDecodeError, TypeError):
                     continue
                 if payload.get("type") == "stop":
-                    await emit(is_final=True)
+                    # Дренировать декодер → хвост PCM в VAD
+                    if decoder is not None:
+                        tail_pcm = await asyncio.to_thread(decoder.close)
+                        dec_err = decoder._decode_error
+                        decoder = None
+                        if dec_err is not None:
+                            await ws.send_json({"type": "error", "message": _safe_err(dec_err)})
+                            break
+                        for seg in chunker.push(tail_pcm):
+                            await _transcribe_seg(seg)
+                    # Дренировать VAD (незавершённый сегмент)
+                    last_seg = chunker.flush()
+                    if last_seg:
+                        await _transcribe_seg(last_seg)
+                    # Финальный результат
+                    await ws.send_json({
+                        "type": "final",
+                        "text": " ".join(all_texts),
+                        "segments": all_segs,
+                        "language": last_language,
+                    })
                     break
-    except Exception as exc:  # noqa: BLE001 — never let a stream bug crash the server
+    except Exception as exc:  # noqa: BLE001 — не ронять сервер из-за ошибки потока
         logger.warning("ws stream error: %s", _safe_err(exc))
         try:
             await ws.send_json({"type": "error", "message": _safe_err(exc)})
         except Exception:
             pass
     finally:
+        if decoder is not None:
+            try:
+                await asyncio.to_thread(decoder.close)
+            except Exception:
+                pass
         if ws.client_state != WebSocketState.DISCONNECTED:
             await ws.close()
