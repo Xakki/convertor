@@ -24,7 +24,8 @@ doctrine:
 when@test:
     doctrine:
         dbal:
-            dbname_suffix: '_test%env(default::TEST_TOKEN)%'
+            # No suffix: create-test-db.sh creates `convertor-test`; keep exact dbname.
+            dbname_suffix: ''
 
 when@prod:
     doctrine:

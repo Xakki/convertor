@@ -41,24 +41,16 @@ def _make_job(conv_id: int, input_path: Path, src_ext: str, tgt_fmt: str) -> dic
         "targetFormat": tgt_fmt,
         "category": "image",
         "isAi": False,
-        "subType": None,
         "options": [],
     }
 
 
 def _worker_with_share(tmp_path: Path) -> ImageWorker:
-    """Return an ImageWorker with WORK_DIR and redis mocked."""
-    from unittest.mock import MagicMock
+    """Return an ImageWorker with WORK_DIR mocked."""
     import workers.common.stream_consumer as sc_mod
     import workers.image.worker as iw_mod
 
-    mock_redis = MagicMock()
-    mock_redis.xgroup_create.side_effect = None
-
-    with patch.object(sc_mod, "REDIS_HOST", "localhost"), \
-         patch("workers.common.stream_consumer.redis.Redis", return_value=mock_redis):
-        worker = ImageWorker()
-
+    worker = ImageWorker()
     # Redirect WORK_DIR so output tmp files resolve inside tmp_path
     patch.object(iw_mod, "WORK_DIR", tmp_path).start()
     patch.object(sc_mod, "WORK_DIR", tmp_path).start()

@@ -67,5 +67,27 @@ generalized router the static matrix can't express.
 - `php-ai-virtual-key-submit-resolution` (todo) — blocks **Phase 2** specifically (not Phase 1).
 - `align-document-stream-matrix-dlq` (todo) — interacts via the Stage-7-pairs decision above.
 - `conversion-chaining` (grooming, Stage 7) — needs Phase 3's live capability graph for path-finding.
+- **S1 WS-transport (in-flight) — Phase 1 register-hook seam MOVED.** The design note
+  "workers call register at startup (`StreamConsumerBase.__init__`)" predates S1.
+  `[[s1-10-streamconsumer-refactor-unify]]` splits `StreamConsumerBase` into transport-agnostic
+  `process_job` + a transport layer, and `[[s1-08-shared-ws-client]]` introduces the shared WS client.
+  → Phase 1 must hook `register()` into the **shared WS-client startup (s1-08 seam)**, not the old
+  `StreamConsumerBase.__init__`, and start only AFTER `[[s1-11-onserver-workers-migrate]]` (else it
+  targets a seam S1 is deleting). Best-effort/non-fatal rule unchanged.
 
-**Status:** grooming (epic, Stage 2+). Design settled; break into per-phase todo cards when Phase 1 starts.
+**Status:** grooming (epic, Stage 2+). Design settled.
+- **Phase 1 выделен в todo** → `[[registry-phase1-worker-register]]` (2026-07-07, после приземления
+  s1-11). Seam register() уточнён: хук в `WsClient` на `ready` (единообразно для всех воркеров),
+  а не старый `StreamConsumerBase.__init__`. Register-контракт закреплён в карточке Phase 1.
+- Phase 2/3 остаются здесь до своей очереди (Phase 2 блокирована `[[php-ai-virtual-key-submit-resolution]]`;
+  Phase 3 — нужен дизайн multi-candidate router).
+
+**Carry-over из ревью Phase 1 (в Phase 2):**
+- **Семантика `streams` vs `routingKeys`.** Сейчас Python шлёт в оба поля одно и то же (`routing_keys` из
+  CAPABILITIES, напр. `["image"]`). Phase 2 должна решить: это разные сущности (имена stream-каналов
+  `conv.<type>` vs routing-суффиксы) или их схлопнуть. Пока хранятся оба в blob как есть.
+- **`isAi` источник.** Python выводит `isAi` из `worker_type == "ai"`, а не из `CAPABILITIES["isAi"]`.
+  Для Phase 1 корректно (единственный AI — `worker_type="ai"`); в Phase 2 брать из `caps.get("isAi", False)`.
+- **Upsert TOCTOU.** `WorkerCapabilityRepository::upsert()` — find-then-update на уровне PHP; при гонке двух
+  одновременных register одного `workerType` второй `flush()` упрётся в UNIQUE и даст 500. Для Phase 1
+  безвредно (register единожды на старте). В Phase 2 — нативный `INSERT ... ON DUPLICATE KEY UPDATE`.

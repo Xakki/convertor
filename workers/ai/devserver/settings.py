@@ -45,14 +45,6 @@ class Setting:
 
 # Authoritative grouping / apply-mode — mirrors the API contract list.
 SETTINGS: tuple[Setting, ...] = (
-    Setting("PULL_ENABLED", "pull_enabled", "bool", "pull", "hot",
-            label="Enable pull processing",
-            help="Master switch for the in-process pull loop. On = the dev-server "
-                 "claims and converts jobs from the backend queue; off = idle. Applies instantly."),
-    Setting("POLL_INTERVAL", "poll_interval", "int", "pull", "hot",
-            label="Poll interval (s)",
-            help="Seconds the pull loop waits between polls when the queue is empty. "
-                 "Lower = more responsive, higher = less load. Integer seconds."),
     Setting("LLM_MAX_TOKENS", "llm_max_tokens", "int", "llm", "hot",
             label="Max tokens",
             help="Maximum tokens the LLM may generate per request. Higher = longer "

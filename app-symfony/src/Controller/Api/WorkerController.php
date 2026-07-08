@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
+use App\Repository\WorkerCapabilityRepository;
+use App\Service\Conversion\ConversionRegistry;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Storage\S3Storage;
+use App\Service\Worker\ResultKeyBuilder;
 use App\Service\Worker\WorkerStreamGateway;
 use AsyncAws\S3\Exception\NoSuchKeyException;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -20,59 +22,77 @@ use Symfony\Component\Routing\Attribute\Route;
 /**
  * Universal worker pull-API — HTTP gateway over KeyDB Streams.
  *
- * Off-server workers (e.g. AI worker on home WSL+GPU) poll this API every
- * ~10 s to claim jobs, download input files, and post results/failures back.
+ * Off-server workers download input files and post large results back here.
  * Auth: static bearer token (WORKER_API_TOKEN) via WorkerAuthenticator on the
  * `worker_api` firewall — no per-action checks needed here.
+ *
+ * XACK-владение перенесено в WS-Gateway (§5 spec): эндпоинты ЗДЕСЬ больше НЕ
+ * ацкают. Чтение Stream (claim) и inline-result/fail ушли в gateway +
+ * InternalWorkerController. Остаётся только large-multipart result и стриминг
+ * входного файла.
  *
  * Contract and rationale: .claude/kanban/progress/validate-ai-worker.md
  */
 #[Route('/api/v1/worker')]
 final class WorkerController extends AbstractController
 {
-    /** Allowed stream types — must match conv.<type> keys in messenger.yaml. */
-    private const ALLOWED_TYPES = ['ai', 'document', 'image', 'audio', 'video', 'data'];
-
     public function __construct(
         private readonly WorkerStreamGateway $gateway,
         private readonly ConversionResultPersister $persister,
         private readonly S3Storage $s3,
+        private readonly ResultKeyBuilder $keyBuilder,
         private readonly LoggerInterface $logger,
-        #[Autowire('%env(S3_PREFIX)%')]
-        private readonly string $s3Prefix,
+        private readonly WorkerCapabilityRepository $workerCapabilityRepository,
+        private readonly ConversionRegistry $registry,
     ) {
     }
 
     /**
-     * POST /api/v1/worker/claim
-     * Body: {"type":"ai", "consumer":"<id>"}
-     * 204 — no job available; 200 — job claimed.
+     * POST /api/v1/worker/register
+     * Регистрирует возможности воркера; upsert по workerType, инвалидирует кеш матрицы.
      */
-    #[Route('/claim', methods: ['POST'])]
-    public function claim(Request $request): JsonResponse|Response
+    #[Route('/register', methods: ['POST'])]
+    public function register(Request $request): JsonResponse
     {
-        $body     = json_decode((string) $request->getContent(), true, 512, 0);
-        $type     = is_array($body) && isset($body['type']) ? (string) $body['type'] : '';
-        $consumer = is_array($body) && isset($body['consumer']) ? (string) $body['consumer'] : '';
+        $data = json_decode($request->getContent(), true);
 
-        if ($type === '' || $consumer === '') {
-            return $this->json(['error' => '"type" and "consumer" are required'], Response::HTTP_BAD_REQUEST);
+        if (! is_array($data)) {
+            return $this->json(['error' => 'Invalid JSON body'], Response::HTTP_BAD_REQUEST);
         }
 
-        if (! in_array($type, self::ALLOWED_TYPES, true)) {
-            return $this->json(
-                ['error' => sprintf('Unknown type "%s". Allowed: %s', $type, implode(', ', self::ALLOWED_TYPES))],
-                Response::HTTP_BAD_REQUEST,
-            );
+        $err = $this->validateRegisterPayload($data);
+        if ($err !== null) {
+            return $this->json(['error' => $err], Response::HTTP_BAD_REQUEST);
         }
 
-        $job = $this->gateway->claim($type, $consumer);
+        $this->workerCapabilityRepository->upsert((string) $data['workerType'], $data);
+        $this->registry->invalidateMatrix();
 
-        if ($job === null) {
-            return new Response('', Response::HTTP_NO_CONTENT);
+        return $this->json(['ok' => true]);
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function validateRegisterPayload(array $data): ?string
+    {
+        if (! isset($data['workerType']) || ! is_string($data['workerType']) || $data['workerType'] === '') {
+            return 'workerType must be a non-empty string';
+        }
+        if (! array_key_exists('isAi', $data) || ! is_bool($data['isAi'])) {
+            return 'isAi must be a boolean';
+        }
+        if (! isset($data['streams']) || ! is_array($data['streams'])) {
+            return 'streams must be an array';
+        }
+        if (! isset($data['routingKeys']) || ! is_array($data['routingKeys'])) {
+            return 'routingKeys must be an array';
+        }
+        if (! isset($data['matrix']) || ! is_array($data['matrix'])) {
+            return 'matrix must be an object';
         }
 
-        return $this->json($job);
+        return null;
     }
 
     /**
@@ -103,8 +123,9 @@ final class WorkerController extends AbstractController
 
     /**
      * POST /api/v1/worker/jobs/{jobId}/result
-     * Multipart: field `file` = result file.
-     * Uploads to S3 results, marks Conversion completed, XACKs the stream entry.
+     * Multipart: field `file` = result file (large-result path, payload минует gateway).
+     * Загружает в S3 results и помечает Conversion completed. НЕ ацкает — XACK
+     * делает gateway на доверии к WS-сообщению {type:"result", jobId, resultKey}.
      */
     #[Route('/jobs/{jobId}/result', methods: ['POST'], requirements: ['jobId' => '[0-9]+-[0-9]+'])]
     public function result(string $jobId, Request $request): JsonResponse
@@ -120,7 +141,7 @@ final class WorkerController extends AbstractController
         }
 
         $conversionId = $meta['conversionId'];
-        $resultKey    = $this->buildResultKey($conversionId, $meta['targetFormat']);
+        $resultKey    = $this->keyBuilder->build($conversionId, $meta['targetFormat']);
         $mimeType     = $file->getMimeType() ?? 'application/octet-stream';
         $rawSize      = $file->getSize();
         $size         = is_int($rawSize) ? $rawSize : 0;
@@ -148,58 +169,6 @@ final class WorkerController extends AbstractController
             'processingMs' => null,
         ]);
 
-        $this->gateway->ack($meta['stream'], $jobId);
-
         return $this->json(['ok' => true]);
-    }
-
-    /**
-     * POST /api/v1/worker/jobs/{jobId}/fail
-     * Body: {"error":"<reason>"}
-     * Marks Conversion failed, refunds quota (via ConversionResultPersister), XACKs.
-     *
-     * XACKing on fail is intentional and consistent with the Python worker DLQ path:
-     * the worker has given up, so the entry must leave the PEL. Transient crashes
-     * are handled by XAUTOCLAIM reclaim in WorkerStreamGateway::reclaimStale().
-     */
-    #[Route('/jobs/{jobId}/fail', methods: ['POST'], requirements: ['jobId' => '[0-9]+-[0-9]+'])]
-    public function fail(string $jobId, Request $request): JsonResponse
-    {
-        $meta = $this->gateway->getJobMeta($jobId);
-        if ($meta === null) {
-            return $this->json(['error' => 'Job not found or already completed'], Response::HTTP_NOT_FOUND);
-        }
-
-        $body  = json_decode((string) $request->getContent(), true, 512, 0);
-        $error = is_array($body) && isset($body['error']) ? (string) $body['error'] : 'Worker reported failure';
-        $error = mb_substr($error, 0, 500);
-
-        $this->persister->persist([
-            'conversionId' => $meta['conversionId'],
-            'state'        => 'failed',
-            'error'        => $error,
-            'processingMs' => null,
-        ]);
-
-        $this->gateway->ack($meta['stream'], $jobId);
-
-        return $this->json(['ok' => true]);
-    }
-
-    /**
-     * S3 object key for a conversion result — must match the Python worker format:
-     * {S3_PREFIX}results/{Y}/{m-d}/{id}.{ext}
-     *
-     * $targetFormat is sanitized to [a-z0-9]+ before use in the key (defense
-     * against path-injection or unexpected characters from the stream payload).
-     */
-    private function buildResultKey(int $conversionId, string $targetFormat): string
-    {
-        $ext = preg_replace('/[^a-z0-9]/', '', strtolower($targetFormat)) ?: 'bin';
-
-        return $this->s3Prefix
-            . 'results/'
-            . (new \DateTimeImmutable())->format('Y/m-d')
-            . '/' . $conversionId . '.' . $ext;
     }
 }

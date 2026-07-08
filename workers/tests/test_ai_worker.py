@@ -1,4 +1,4 @@
-"""Tests for the AI worker (local-only, flag-agnostic).
+"""Tests for the AI worker (local-only, flag-agnostic, WS transport).
 
 Covers:
 - CAPABILITIES routing key (routing-drift contract: single 'ai' stream)
@@ -6,24 +6,24 @@ Covers:
 - ROADMAP.md format matrix validation (STT/TTS rows)
 - convert() routing: format pair → mode (STT / TTS / embedding / LLM), no flags read
 - LLM text→text: routing + mocked Ollama backend + backend factory selection
-- Poll-client flow: download → convert → result (happy path) + failure paths
-- PULL_ENABLED gate: false → worker stays idle and does not claim
+- handle_job seam: direct unit tests (happy/fail/permanent/progress)
+- WS transport: FakeGateway end-to-end (connect → ready{workerType:"ai"} → job →
+  convert mocked → result delivered)
 - Real TTS e2e with espeak-ng (integration marker, skipped if binary absent)
-
-External-provider (OpenAI/Gemini/Claude) and fallback tests were DELETED in
-ai-worker-refactor-core — the worker is local-inference only.
 """
 
 from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import os
 import shutil
-from contextlib import asynccontextmanager
+import signal as _signal
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -38,12 +38,80 @@ from workers.ai.convert import (
     convert,
     derive_mode,
 )
-from workers.ai.worker import CAPABILITIES, _process_job, run
+from workers.ai.worker import CAPABILITIES, build_handle_job
+from workers.common.ws_client import ProgressReporter, WsClient, WsClientConfig
 
 
 def _cfg(tmp_path: Path):
     """A load_config() snapshot with work_dir pointed at the test tmp_path."""
     return replace(load_config(), work_dir=tmp_path)
+
+
+def _ws_cfg(port: int, tmp_path: Path, token: str = "tok") -> WsClientConfig:
+    return WsClientConfig(
+        worker_id="test-ai-worker",
+        worker_type="ai",
+        gateway_ws_url=f"ws://127.0.0.1:{port}",
+        api_base_url="http://127.0.0.1:9999",  # overridden by FakeSymfony transport
+        worker_api_token=token,
+        version="0.1",
+        work_dir=tmp_path,
+        ws_ping_interval_s=999.0,    # keep pings silent in tests
+        ws_reconnect_backoff_base_s=0.05,
+        ws_reconnect_backoff_max_s=0.1,
+    )
+
+
+async def _wait_for(pred, timeout: float = 3.0, interval: float = 0.02) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if pred():
+            return
+        await asyncio.sleep(interval)
+    raise TimeoutError(f"condition not met within {timeout}s")
+
+
+class FakeGateway:
+    """Minimal WS gateway: accepts connection, records frames, can push jobs."""
+
+    def __init__(self, input_bytes: bytes = b"fake-audio") -> None:
+        self.received: list[dict] = []
+        self.input_bytes = input_bytes
+        self._ws = None
+
+    async def handler(self, ws) -> None:
+        self._ws = ws
+        try:
+            async for raw in ws:
+                try:
+                    frame = json.loads(raw)
+                except Exception:
+                    continue
+                self.received.append(frame)
+        except Exception:
+            pass
+
+    def frames_of_type(self, ftype: str) -> list[dict]:
+        return [f for f in self.received if f.get("type") == ftype]
+
+    async def send(self, frame: dict) -> None:
+        if self._ws is not None:
+            await self._ws.send(json.dumps(frame))
+
+    def make_http_transport(self) -> httpx.MockTransport:
+        """Симулирует /jobs/{id}/input и /jobs/{id}/result на стороне Symfony."""
+        gw = self
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if "/input" in path:
+                return httpx.Response(200, content=gw.input_bytes)
+            if "/result" in path:
+                return httpx.Response(200, json={"ok": True})
+            return httpx.Response(404)
+
+        return httpx.MockTransport(handler)
 
 
 # ---------------------------------------------------------------------------
@@ -55,10 +123,25 @@ def test_capabilities_routing_key():
     assert CAPABILITIES["routing_keys"] == ["ai"]
 
 
-def test_capabilities_matrix_empty():
-    # AI (from→to) pairs live in the PHP registry only as virtual *_stt/*_tts keys
-    # (skipped by the drift subset assertion); advertising concrete pairs would fail it.
-    assert CAPABILITIES["matrix"] == {}
+def test_capabilities_matrix_flat_pairs():
+    """Matrix теперь содержит плоские пары (без виртуальных _stt/_tts ключей)."""
+    matrix = CAPABILITIES["matrix"]
+    # STT: все аудио-форматы → текст
+    for src in ("mp3", "wav", "ogg", "m4a", "opus", "flac"):
+        assert src in matrix, f"{src} must be an STT source"
+        assert "txt" in matrix[src]
+        assert "srt" in matrix[src]
+        assert "vtt" in matrix[src]
+    # TTS: txt → аудио + embedding json
+    assert set(matrix["txt"]) >= {"mp3", "wav", "ogg", "json"}
+    # TTS: md → аудио (без embedding)
+    assert set(matrix["md"]) >= {"mp3", "wav", "ogg"}
+    # matrix_categories присутствует и корректен
+    cats = CAPABILITIES["matrix_categories"]
+    for src in ("mp3", "wav", "ogg", "m4a", "opus", "flac"):
+        assert cats[src] == "audio"
+    assert cats["txt"] == "document"
+    assert cats["md"] == "document"
 
 
 # ---------------------------------------------------------------------------
@@ -101,12 +184,12 @@ class TestDeriveMode:
         assert derive_mode(src, tgt) is Mode.LLM
 
     @pytest.mark.parametrize("src,tgt", [
-        ("mp3", "mp4"),    # audio → video: ffmpeg, not ai
-        ("xyz", "txt"),    # unknown input
-        ("txt", "pdf"),    # text → pdf: libreoffice, not ai
-        ("pdf", "txt"),    # ocr: image worker, not ai
-        ("mp3", "mp3"),    # same format
-        ("wav", "ogg"),    # audio → audio: ffmpeg, not ai
+        ("mp3", "mp4"),
+        ("xyz", "txt"),
+        ("txt", "pdf"),
+        ("pdf", "txt"),
+        ("mp3", "mp3"),
+        ("wav", "ogg"),
     ])
     def test_invalid_pairs_raise(self, src, tgt):
         with pytest.raises(ValueError, match="cannot derive"):
@@ -135,7 +218,6 @@ class TestDeriveMode:
 
 
 async def test_convert_mp3_to_txt_calls_stt(tmp_path, example_files):
-    """convert() derives STT from mp3→txt and uses SpeechToTextProvider.transcribe."""
     story = example_files / "story.mp3"
 
     async def fake_transcribe(self, src, fmt):
@@ -157,7 +239,6 @@ async def test_convert_mp3_to_txt_calls_stt(tmp_path, example_files):
 
 
 async def test_convert_txt_to_mp3_calls_tts(tmp_path):
-    """convert() derives TTS from txt→mp3 and uses TextToSpeechProvider.synthesize."""
     src = tmp_path / "text.txt"
     src.write_text("hello world", encoding="utf-8")
 
@@ -178,7 +259,6 @@ async def test_convert_txt_to_mp3_calls_tts(tmp_path):
 
 
 async def test_convert_txt_to_json_calls_embedding(tmp_path):
-    """convert() derives embedding from txt→json and calls generate_embedding."""
     src = tmp_path / "text.txt"
     src.write_text("hello world", encoding="utf-8")
 
@@ -199,7 +279,6 @@ async def test_convert_txt_to_json_calls_embedding(tmp_path):
 
 
 async def test_convert_txt_to_txt_calls_llm(tmp_path):
-    """convert() derives LLM from txt→txt and dispatches to the llm provider."""
     src = tmp_path / "text.txt"
     src.write_text("summarize this", encoding="utf-8")
 
@@ -222,7 +301,6 @@ async def test_convert_txt_to_txt_calls_llm(tmp_path):
 
 
 async def test_convert_md_to_md_calls_llm(tmp_path):
-    """md→md is part of the text family → LLM, mime is markdown."""
     src = tmp_path / "doc.md"
     src.write_text("# heading", encoding="utf-8")
 
@@ -244,7 +322,6 @@ async def test_convert_md_to_md_calls_llm(tmp_path):
 
 
 async def test_convert_llm_ignores_flags(tmp_path):
-    """A taskType/subType flag must NOT change the txt→txt LLM derivation."""
     src = tmp_path / "text.txt"
     src.write_text("hello", encoding="utf-8")
 
@@ -258,16 +335,14 @@ async def test_convert_llm_ignores_flags(tmp_path):
             "conversionId": 23,
             "sourceFormat": "txt",
             "targetFormat": "txt",
-            "taskType": "embedding",   # bogus flag — must be ignored
-            "subType": "ocr",
+            "taskType": "embedding",
             "ocr": True,
         }, _cfg(tmp_path))
 
-    assert ext == "txt"  # LLM derived from txt→txt, flags ignored
+    assert ext == "txt"
 
 
 async def test_convert_empty_llm_output_raises(tmp_path):
-    """A whitespace-only backend reply must not be written silently."""
     src = tmp_path / "text.txt"
     src.write_text("summarize this", encoding="utf-8")
 
@@ -303,7 +378,6 @@ async def test_convert_empty_llm_input_raises(tmp_path):
 
 
 async def test_ollama_provider_generate(monkeypatch):
-    """OllamaProvider POSTs the expected payload and returns the stripped response."""
     from workers.ai.providers.llm import OllamaProvider
 
     captured: dict = {}
@@ -341,7 +415,7 @@ async def test_ollama_provider_generate(monkeypatch):
     )
     out = await provider.generate("translate this")
 
-    assert out == "summarized text"  # stripped
+    assert out == "summarized text"
     assert captured["url"] == "http://ollama:11434/api/generate"
     payload = captured["payload"]
     assert payload["model"] == "qwen2.5"
@@ -445,7 +519,6 @@ async def test_convert_empty_tts_input_raises(tmp_path):
 
 
 async def test_convert_ignores_flags(tmp_path):
-    """A taskType/subType flag in the job must NOT change the derived mode."""
     src = tmp_path / "text.txt"
     src.write_text("hello", encoding="utf-8")
 
@@ -458,175 +531,416 @@ async def test_convert_ignores_flags(tmp_path):
             "conversionId": 8,
             "sourceFormat": "txt",
             "targetFormat": "mp3",
-            "taskType": "embedding",   # bogus flag — must be ignored
-            "subType": "ocr",
+            "taskType": "embedding",
         }, _cfg(tmp_path))
 
-    assert ext == "mp3"  # TTS derived from txt→mp3, flag ignored
+    assert ext == "mp3"
 
 
 # ---------------------------------------------------------------------------
-# _process_job — poll-client flow
+# handle_job seam — прямые unit-тесты (без WS)
 # ---------------------------------------------------------------------------
 
-JOB_META = {
-    "jobId": "1234-5678",
-    "conversionId": 42,
-    "sourceFormat": "mp3",
-    "targetFormat": "txt",
-}
 
-_DUMMY_REQUEST = httpx.Request("GET", "http://test-server/")
+async def test_handle_job_happy_path(tmp_path):
+    """handle_job: корректный job → ResultSignal.completed с path/mime/ext."""
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
 
+    input_file = tmp_path / "in.mp3"
+    input_file.write_bytes(b"fake-audio")
 
-def _ok_resp(content: bytes = b"") -> httpx.Response:
-    return httpx.Response(200, content=content, request=_DUMMY_REQUEST)
+    job = {
+        "jobId": "j-1",
+        "conversionId": 42,
+        "sourceFormat": "mp3",
+        "targetFormat": "txt",
+        "_localInput": str(input_file),
+    }
 
-
-async def test_process_job_happy_path(tmp_path):
-    """input streamed → convert mocked → result POSTed."""
-    input_content = b"fake-audio-bytes"
-    stream_calls: list[str] = []
-
-    @asynccontextmanager
-    async def mock_stream(method, url, **kw):
-        stream_calls.append(url)
-        yield httpx.Response(200, content=input_content, request=_DUMMY_REQUEST)
-
-    mock_client = AsyncMock()
-    mock_client.stream = mock_stream
-    mock_client.post = AsyncMock(return_value=_ok_resp())
-
-    async def fake_convert(job, cfg):
-        out = tmp_path / "out-42-abc.txt"
+    async def fake_convert(job_payload, cfg):
+        out = tmp_path / f"out-{job_payload['conversionId']}.txt"
         out.write_text("transcript", encoding="utf-8")
         return str(out), "text/plain", "txt"
 
+    reporter = ProgressReporter()
     with patch("workers.ai.worker.convert", side_effect=fake_convert):
-        await _process_job(mock_client, _cfg(tmp_path), JOB_META)
+        result = await handle_job(job, reporter)
 
-    assert len(stream_calls) == 1
-    assert "jobs/1234-5678/input" in stream_calls[0]
-
-    assert mock_client.post.call_count == 1
-    call_args = mock_client.post.call_args
-    assert "/api/v1/worker/jobs/1234-5678/result" in call_args.args[0]
-    assert "file" in call_args.kwargs["files"]
+    assert result.ok is True
+    assert result.path == str(tmp_path / "out-42.txt")
+    assert result.mime == "text/plain"
+    assert result.ext == "txt"
 
 
-async def test_process_job_convert_fails_calls_fail_endpoint(tmp_path):
-    @asynccontextmanager
-    async def mock_stream(method, url, **kw):
-        yield httpx.Response(200, content=b"fake-audio", request=_DUMMY_REQUEST)
+async def test_handle_job_invalid_pair_permanent_fail(tmp_path):
+    """Неверная пара форматов (ValueError из derive_mode) → permanent=True."""
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
 
-    mock_client = AsyncMock()
-    mock_client.stream = mock_stream
-    mock_client.post = AsyncMock(return_value=_ok_resp())
+    input_file = tmp_path / "in.xyz"
+    input_file.write_bytes(b"data")
+
+    job = {
+        "jobId": "j-2",
+        "conversionId": 99,
+        "sourceFormat": "xyz",
+        "targetFormat": "txt",
+        "_localInput": str(input_file),
+    }
+
+    reporter = ProgressReporter()
+    result = await handle_job(job, reporter)
+
+    assert result.ok is False
+    assert result.permanent is True
+    assert "cannot derive" in result.error.lower() or "ValueError" in result.error
+
+
+async def test_handle_job_missing_input_retryable(tmp_path):
+    """FileNotFoundError (пропавший бинарник/модель) → permanent=False (ресурсная проблема воркера)."""
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    job = {
+        "jobId": "j-3",
+        "conversionId": 99,
+        "sourceFormat": "mp3",
+        "targetFormat": "txt",
+        "_localInput": str(tmp_path / "ghost.mp3"),
+    }
+
+    reporter = ProgressReporter()
+    result = await handle_job(job, reporter)
+
+    assert result.ok is False
+    assert result.permanent is False  # не дефект задачи, а ресурсная проблема
+
+
+async def test_handle_job_runtime_error_retryable(tmp_path):
+    """Неожиданная ошибка в convert() → permanent=False (повторяемая)."""
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    input_file = tmp_path / "in.mp3"
+    input_file.write_bytes(b"data")
 
     async def fail_convert(job, cfg):
-        raise RuntimeError("whisper exploded")
+        raise RuntimeError("gpu out of memory")
 
+    job = {
+        "jobId": "j-4",
+        "conversionId": 10,
+        "sourceFormat": "mp3",
+        "targetFormat": "txt",
+        "_localInput": str(input_file),
+    }
+
+    reporter = ProgressReporter()
     with patch("workers.ai.worker.convert", side_effect=fail_convert):
-        await _process_job(mock_client, _cfg(tmp_path), JOB_META)
+        result = await handle_job(job, reporter)
 
-    mock_client.post.assert_awaited_once()
-    args = mock_client.post.call_args
-    assert "/fail" in args.args[0]
-    assert "whisper exploded" in args.kwargs["json"]["error"]
-
-
-async def test_process_job_input_download_fails_calls_fail_endpoint(tmp_path):
-    @asynccontextmanager
-    async def fail_stream(method, url, **kw):
-        raise httpx.RequestError("connection refused", request=httpx.Request("GET", url))
-        yield  # unreachable — required to make this an async generator
-
-    mock_client = AsyncMock()
-    mock_client.stream = fail_stream
-    mock_client.post = AsyncMock(return_value=_ok_resp())
-
-    await _process_job(mock_client, _cfg(tmp_path), JOB_META)
-
-    mock_client.post.assert_awaited_once()
-    assert "/fail" in mock_client.post.call_args.args[0]
+    assert result.ok is False
+    assert result.permanent is False
+    assert "gpu out of memory" in result.error
 
 
-async def test_process_job_result_upload_fails_calls_fail_and_cleans_output(tmp_path):
-    input_content = b"fake-audio-bytes"
+async def test_handle_job_reports_progress(tmp_path):
+    """handle_job вызывает progress.report() как минимум дважды (start + done)."""
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
 
-    @asynccontextmanager
-    async def mock_stream(method, url, **kw):
-        yield httpx.Response(200, content=input_content, request=_DUMMY_REQUEST)
+    input_file = tmp_path / "in.mp3"
+    input_file.write_bytes(b"data")
 
-    mock_client = AsyncMock()
-    mock_client.stream = mock_stream
-    # First call (POST /result) raises; second call (POST /fail) succeeds.
-    mock_client.post = AsyncMock(side_effect=[
-        RuntimeError("upload connection reset"),
-        _ok_resp(),
-    ])
+    reports: list[tuple] = []
 
-    output_file = tmp_path / "out-42-xyz.txt"
+    class RecordingReporter(ProgressReporter):
+        def report(self, percent, stage=None):
+            super().report(percent, stage)
+            reports.append((percent, stage))
 
     async def fake_convert(job, cfg):
-        output_file.write_text("transcript", encoding="utf-8")
-        return str(output_file), "text/plain", "txt"
+        out = tmp_path / "out.txt"
+        out.write_text("ok", encoding="utf-8")
+        return str(out), "text/plain", "txt"
+
+    job = {
+        "jobId": "j-5",
+        "conversionId": 55,
+        "sourceFormat": "mp3",
+        "targetFormat": "txt",
+        "_localInput": str(input_file),
+    }
 
     with patch("workers.ai.worker.convert", side_effect=fake_convert):
-        await _process_job(mock_client, _cfg(tmp_path), JOB_META)
+        await handle_job(job, RecordingReporter())
 
-    assert mock_client.post.call_count == 2
-    assert "/result" in mock_client.post.call_args_list[0].args[0]
-    assert "/fail" in mock_client.post.call_args_list[1].args[0]
-    assert not output_file.exists(), "output temp file should be deleted after upload failure"
+    assert len(reports) >= 2
+    assert reports[0][0] == 5   # starting
+    assert reports[-1][0] == 95  # done
+
+
+async def test_handle_job_does_not_delete_input_or_output(tmp_path):
+    """handle_job НЕ удаляет input или output — это делает ws_client."""
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    input_file = tmp_path / "in.mp3"
+    input_file.write_bytes(b"data")
+    out_file = tmp_path / "out-66.txt"
+
+    async def fake_convert(job, cfg):
+        out_file.write_text("result", encoding="utf-8")
+        return str(out_file), "text/plain", "txt"
+
+    job = {
+        "jobId": "j-6",
+        "conversionId": 66,
+        "sourceFormat": "mp3",
+        "targetFormat": "txt",
+        "_localInput": str(input_file),
+    }
+
+    with patch("workers.ai.worker.convert", side_effect=fake_convert):
+        await handle_job(job, ProgressReporter())
+
+    # Оба файла должны существовать — удалит ws_client
+    assert input_file.exists(), "handle_job не должен удалять input"
+    assert out_file.exists(), "handle_job не должен удалять output"
 
 
 # ---------------------------------------------------------------------------
-# PULL_ENABLED gate
+# WS transport — FakeGateway end-to-end
 # ---------------------------------------------------------------------------
 
 
-def test_run_idle_when_pull_disabled(tmp_path):
-    """PULL_ENABLED=false → run() returns without starting the poll loop / claiming."""
-    cfg = replace(load_config(), pull_enabled=False, work_dir=tmp_path)
-    with patch("workers.ai.worker._poll_loop") as poll, \
-         patch("workers.ai.worker.asyncio.run") as arun:
-        run(cfg)
-    poll.assert_not_called()
-    arun.assert_not_called()
+async def test_ws_ready_frame_has_worker_type_ai(tmp_path):
+    """AI-воркер при подключении шлёт ready{workerType:"ai"}."""
+    from websockets.asyncio.server import serve
+
+    gw = FakeGateway()
+
+    async def fake_convert(job, cfg):
+        out = tmp_path / "out.txt"
+        out.write_text("x")
+        return str(out), "text/plain", "txt"
+
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    async with serve(gw.handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        ws_cfg = _ws_cfg(port, tmp_path)
+        http = httpx.AsyncClient(transport=gw.make_http_transport())
+        client = WsClient(ws_cfg, handle_job, http_client=http)
+        runner = asyncio.create_task(client.run())
+        try:
+            await _wait_for(lambda: gw.frames_of_type("ready"), 3.0)
+            ready_frames = gw.frames_of_type("ready")
+            assert len(ready_frames) >= 1
+            assert ready_frames[0]["workerType"] == "ai"
+            assert ready_frames[0]["workerId"] == "test-ai-worker"
+        finally:
+            client.stop()
+            await asyncio.wait_for(runner, timeout=3.0)
 
 
-def test_run_claims_when_pull_enabled(tmp_path):
-    """PULL_ENABLED=true → run() enters the poll loop via asyncio.run."""
-    cfg = replace(
-        load_config(),
-        pull_enabled=True,
-        worker_api_token="tok",
-        work_dir=tmp_path,
-    )
-    from unittest.mock import MagicMock
+async def test_ws_job_inline_result(tmp_path):
+    """Gateway отправляет job → воркер конвертирует → шлёт inline result (текст ≤256 KB)."""
+    from websockets.asyncio.server import serve
 
-    sentinel = object()
-    poll = MagicMock(return_value=sentinel)
-    with patch("workers.ai.worker._poll_loop", poll), \
-         patch("workers.ai.worker.asyncio.run") as arun:
-        run(cfg)
-    poll.assert_called_once()
-    arun.assert_called_once_with(sentinel)
+    gw = FakeGateway(input_bytes=b"fake-audio")
+
+    async def fake_convert(job_payload, cfg):
+        out = tmp_path / f"out-{job_payload['conversionId']}.txt"
+        out.write_text("transcript", encoding="utf-8")
+        return str(out), "text/plain", "txt"
+
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    async with serve(gw.handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        ws_cfg = _ws_cfg(port, tmp_path)
+        http = httpx.AsyncClient(transport=gw.make_http_transport())
+        client = WsClient(ws_cfg, handle_job, http_client=http)
+        runner = asyncio.create_task(client.run())
+        try:
+            # Ждём ready
+            await _wait_for(lambda: gw.frames_of_type("ready"), 3.0)
+
+            # Отправляем job и ждём result
+            with patch("workers.ai.worker.convert", side_effect=fake_convert):
+                await gw.send({
+                    "type": "job",
+                    "jobId": "j-ws-1",
+                    "conversionId": 77,
+                    "sourceFormat": "mp3",
+                    "targetFormat": "txt",
+                    "inputKey": "inputs/test.mp3",
+                })
+                await _wait_for(lambda: gw.frames_of_type("result"), 5.0)
+
+            result_frames = gw.frames_of_type("result")
+            assert len(result_frames) == 1
+            rf = result_frames[0]
+            assert rf["jobId"] == "j-ws-1"
+            assert "inline" in rf           # текст ≤256 KB идёт inline
+
+        finally:
+            client.stop()
+            await asyncio.wait_for(runner, timeout=3.0)
 
 
-def test_run_pull_enabled_without_token_raises(tmp_path):
-    """PULL_ENABLED=true but no token → config validation raises before claiming."""
-    cfg = replace(
-        load_config(),
-        pull_enabled=True,
-        worker_api_token="",
-        work_dir=tmp_path,
-    )
-    with patch("workers.ai.worker.asyncio.run") as arun:
-        with pytest.raises(ValueError, match="WORKER_API_TOKEN"):
-            run(cfg)
-    arun.assert_not_called()
+async def test_ws_on_pong_callback_fires(tmp_path):
+    """Gateway шлёт pong → on_pong callback вызван."""
+    from websockets.asyncio.server import serve
+
+    gw = FakeGateway()
+    pong_calls: list[int] = []
+
+    def on_pong() -> None:
+        pong_calls.append(1)
+
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    async with serve(gw.handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        ws_cfg = _ws_cfg(port, tmp_path)
+        http = httpx.AsyncClient(transport=gw.make_http_transport())
+        client = WsClient(ws_cfg, handle_job, http_client=http, on_pong=on_pong)
+        runner = asyncio.create_task(client.run())
+        try:
+            await _wait_for(lambda: gw.frames_of_type("ready"), 3.0)
+            await gw.send({"type": "pong"})
+            await _wait_for(lambda: len(pong_calls) > 0, 3.0)
+            assert len(pong_calls) >= 1
+        finally:
+            client.stop()
+            await asyncio.wait_for(runner, timeout=3.0)
+
+
+async def test_ws_on_reconnect_start_fires_on_disconnect(tmp_path):
+    """Gateway закрывает соединение → on_reconnect_start вызывается перед backoff-сном.
+
+    Smoke-тест полного пути: реальный WS-сервер, реальный WsClient, реальный
+    on_reconnect_start колбэк — гарантирует, что подключение Stats.on_disconnected
+    через этот колбэк не сломается при будущем рефакторинге транспортного слоя."""
+    from websockets.asyncio.server import serve
+
+    reconnect_calls: list[int] = []
+    close_event = asyncio.Event()
+    conn_count = 0
+
+    async def gateway_handler(ws) -> None:
+        nonlocal conn_count
+        conn_count += 1
+        try:
+            async for raw in ws:
+                try:
+                    frame = json.loads(raw)
+                except Exception:
+                    continue
+                if frame.get("type") == "ready" and conn_count == 1:
+                    # Первое соединение: подтвердить хэндшейк и сразу закрыть.
+                    await ws.send(json.dumps({"type": "pong"}))
+                    await ws.close()
+                    close_event.set()
+                    return
+        except Exception:
+            pass
+
+    def on_reconnect_start() -> None:
+        reconnect_calls.append(1)
+
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    async with serve(gateway_handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        ws_cfg = _ws_cfg(port, tmp_path)
+        http = httpx.AsyncClient(transport=FakeGateway().make_http_transport())
+        client = WsClient(
+            ws_cfg, handle_job, http_client=http, on_reconnect_start=on_reconnect_start
+        )
+        runner = asyncio.create_task(client.run())
+        try:
+            await asyncio.wait_for(close_event.wait(), timeout=3.0)
+            await _wait_for(lambda: len(reconnect_calls) > 0, 3.0)
+            assert len(reconnect_calls) >= 1
+        finally:
+            client.stop()
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(runner, timeout=3.0)
+
+
+async def test_sigterm_stops_client_run(tmp_path):
+    """SIGTERM → зарегистрированный handler вызывает client.stop() → run() возвращается."""
+    from websockets.asyncio.server import serve
+
+    gw = FakeGateway()
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    async with serve(gw.handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        ws_cfg = _ws_cfg(port, tmp_path)
+        http = httpx.AsyncClient(transport=gw.make_http_transport())
+        client = WsClient(ws_cfg, handle_job, http_client=http)
+
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(_signal.SIGTERM, client.stop)
+        runner = asyncio.create_task(client.run())
+        try:
+            await _wait_for(lambda: gw.frames_of_type("ready"), 3.0)
+            os.kill(os.getpid(), _signal.SIGTERM)
+            await asyncio.wait_for(runner, timeout=3.0)  # должен выйти, не висеть
+        finally:
+            loop.remove_signal_handler(_signal.SIGTERM)
+            if not runner.done():
+                client.stop()
+                with suppress(asyncio.CancelledError, Exception):
+                    await runner
+
+
+async def test_ws_job_permanent_fail_on_bad_format(tmp_path):
+    """Неверная пара форматов → воркер шлёт fail{permanent:true}."""
+    from websockets.asyncio.server import serve
+
+    gw = FakeGateway()
+
+    cfg = _cfg(tmp_path)
+    handle_job = build_handle_job(cfg)
+
+    async with serve(gw.handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        ws_cfg = _ws_cfg(port, tmp_path)
+        http = httpx.AsyncClient(transport=gw.make_http_transport())
+        client = WsClient(ws_cfg, handle_job, http_client=http)
+        runner = asyncio.create_task(client.run())
+        try:
+            await _wait_for(lambda: gw.frames_of_type("ready"), 3.0)
+
+            await gw.send({
+                "type": "job",
+                "jobId": "j-ws-bad",
+                "conversionId": 0,
+                "sourceFormat": "xyz",
+                "targetFormat": "txt",
+                "inputKey": "inputs/x.xyz",
+            })
+            await _wait_for(lambda: gw.frames_of_type("fail"), 5.0)
+
+            fail_frames = gw.frames_of_type("fail")
+            assert len(fail_frames) == 1
+            assert fail_frames[0]["jobId"] == "j-ws-bad"
+            assert fail_frames[0].get("permanent") is True
+
+        finally:
+            client.stop()
+            await asyncio.wait_for(runner, timeout=3.0)
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +956,6 @@ def test_story_mp3_fixture_exists_and_small(example_files):
 
 
 async def test_stt_from_story_fixture(tmp_path, example_files):
-    """Real committed fixture through convert() with STT mocked."""
     story = example_files / "story.mp3"
 
     async def fake_transcribe(self, src, fmt):
@@ -672,7 +985,6 @@ async def test_stt_from_story_fixture(tmp_path, example_files):
     reason="espeak-ng not installed — skipping real TTS e2e",
 )
 def test_tts_espeak_real_e2e_wav(tmp_path):
-    """espeak-ng produces a non-empty WAV file without ffmpeg (wav = direct copy)."""
     out = tmp_path / "speech.wav"
 
     from workers.ai.providers.tts import espeak

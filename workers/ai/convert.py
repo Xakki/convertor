@@ -1,7 +1,7 @@
 """Flag-agnostic conversion core.
 
 The conversion MODE is derived from the (sourceFormat, targetFormat) pair ONLY.
-The worker never reads `taskType`/`subType`/`ocr` or any other flag — behaviour is
+The worker never reads `taskType`/`ocr` or any other flag — behaviour is
 a pure function of the format pair:
 
     audio → {txt, srt, vtt}   = batch STT (faster-whisper)
@@ -87,8 +87,9 @@ async def convert(job: dict[str, Any], cfg: Config) -> tuple[str, str, str]:
 
     mode = derive_mode(src_fmt, tgt_fmt)
 
-    cfg.work_dir.mkdir(parents=True, exist_ok=True)
-    out_path = cfg.work_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{tgt_fmt}"
+    out_dir = Path(job.get("_jobDir") or str(cfg.work_dir))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{tgt_fmt}"
 
     if mode is Mode.STT:
         from workers.ai.providers.stt import SpeechToTextProvider

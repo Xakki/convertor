@@ -1,4 +1,4 @@
-"""FastAPI app factory + uvicorn launcher for the AI-worker dev-server.
+"""FastAPI app factory + uvicorn launcher для AI-worker dev-server.
 
 Binds 127.0.0.1:8877 by default (DEVSERVER_HOST/DEVSERVER_PORT). Optional bearer
 (DEVSERVER_TOKEN): when set, every /api/* request and the /ws/* handshake must
@@ -6,7 +6,8 @@ present it (header `Authorization: Bearer <token>` or `?token=`). Static UI is
 served from ./static.
 
 Lifespan: load the effective config (env + overlay), build the shared Stats +
-PullRunner, and start the runner if effective PULL_ENABLED is true.
+WsRunner, and start the runner unconditionally (WsClient.validate() handles the
+"no gateway configured" case gracefully — it logs and returns instead of looping).
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ from workers.ai.devserver import (
     routes_stats,
     routes_stream,
 )
-from workers.ai.devserver.pull_runner import PullRunner
 from workers.ai.devserver.settings import effective_config
 from workers.ai.devserver.stats import Stats
+from workers.ai.devserver.ws_runner import WsRunner
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +42,10 @@ async def lifespan(app: FastAPI):
     cfg = effective_config()
     app.state.cfg = cfg
     app.state.stats = Stats()
-    app.state.runner = PullRunner(cfg, app.state.stats)
+    app.state.runner = WsRunner(cfg, app.state.stats)
     app.state.results = OrderedDict()  # resultId → {path, mime, name}
 
-    if cfg.pull_enabled:
-        await app.state.runner.start()
+    await app.state.runner.start()
     try:
         yield
     finally:
@@ -62,10 +62,6 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def auth_guard(request: Request, call_next):
-        # /api/* requires the Authorization header only. Query-param token is NOT
-        # accepted here (it would leak into access logs); it's reserved for the WS
-        # handshake, which can't set headers from the browser and checks ?token=
-        # inside routes_stream.
         token = os.getenv("DEVSERVER_TOKEN")
         if token and request.url.path.startswith("/api/"):
             if request.headers.get("authorization") != f"Bearer {token}":
@@ -77,7 +73,6 @@ def create_app() -> FastAPI:
     app.include_router(routes_settings.router)
     app.include_router(routes_stream.router)
 
-    # Static SPA last so it acts as the catch-all root mount (API/WS routes win).
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
     return app

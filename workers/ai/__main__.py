@@ -1,7 +1,7 @@
 """AI worker entry point.
 
 Modes:
-  worker     — production pull-loop (default), gated by PULL_ENABLED.
+  worker     — production WS-transport (default), connects to gateway via WS.
   devserver  — local dev FastAPI server + web UI (ai-worker-devserver).
 
 Usage:

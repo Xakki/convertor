@@ -1,86 +1,53 @@
-"""Single source of configuration for the AI worker.
+"""Единственный источник конфигурации AI-воркера.
 
-ALL `os.getenv` reads live here. Other modules import `load_config()` and read
-typed fields off the returned dataclass — no scattered env access elsewhere.
+Все `os.getenv` читаются здесь. Остальные модули импортируют `load_config()` и
+читают типизированные поля. Транспортная конфигурация (WORKER_ID, GATEWAY_WS_URL,
+WORKER_API_TOKEN, WS-тюнинги, WORK_DIR) принадлежит `WsClientConfig.from_env()`
+(workers/common/ws_client.py) и здесь НЕ дублируется.
 
-Import is side-effect-free: nothing is read or validated at module load time.
-Call `load_config()` (optionally `.validate()`) from the entry point. This keeps
-`import workers.ai.config` safe in bare environments (tests, drift-scan subprocess).
-
-External-API provider keys (OPENAI/GEMINI/CLAUDE, AI_STT_PROVIDER, AI_TTS_PROVIDER)
-are intentionally absent — the worker runs local inference only. The text→text LLM
-path is local too: either an external self-hosted Ollama server (HTTP) or an embedded
-llama.cpp model — never a hosted API.
+Импорт не имеет побочных эффектов: ничего не читается и не валидируется на уровне
+модуля. Вызывай `load_config()` (опционально `.validate()`) из точки входа — это
+безопасно в тестах и drift-scan сабпроцессе.
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-
-def _getenv_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        raise ValueError(f"env {name}={raw!r} is not a valid integer")
-
-
-def _getenv_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        raise ValueError(f"env {name}={raw!r} is not a valid float")
-
-
-def _getenv_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
+from workers.common.env import getenv_float, getenv_int
 
 LLM_BACKENDS = ("ollama", "llamacpp")
 
 
 @dataclass(frozen=True)
 class Config:
-    # --- pull-API ---
-    api_base_url: str
-    worker_api_token: str
-    worker_type: str
-    poll_interval: int
-    pull_enabled: bool
+    # Рабочий каталог: временные файлы конвертации. Единственный источник WORK_DIR —
+    # передаётся в WsClientConfig.from_env(work_dir=) явно; env не читается дважды.
     work_dir: Path
 
-    # --- STT (faster-whisper, local only) ---
+    # --- STT (faster-whisper, только локально) ---
     whisper_model: str
     whisper_device: str
     whisper_compute_type: str
 
-    # --- streaming STT ---
+    # --- потоковый STT ---
     stream_window_sec: int
     stream_overlap_sec: int
     vad_aggressiveness: int
     vad_silence_frames: int
     stream_segment_max_sec: int
 
-    # --- TTS (espeak-ng / pyttsx3, local only) ---
+    # --- TTS (espeak-ng / pyttsx3, только локально) ---
     tts_engine: str
 
-    # --- embedding (sentence-transformers, local only) ---
+    # --- embedding (sentence-transformers, только локально) ---
     embedding_model: str
     embedding_device: str
 
-    # --- LLM text→text (local only: ollama HTTP | embedded llama.cpp) ---
+    # --- LLM text→text (только локально: ollama HTTP | встроенный llama.cpp) ---
     llm_backend: str
     ollama_url: str
     ollama_model: str
@@ -91,56 +58,40 @@ class Config:
     llm_temperature: float
     llm_system_prompt: str
 
-    @property
-    def api_base(self) -> str:
-        """API root with trailing slash stripped; all paths built as f'{api_base}/api/v1/...'."""
-        return self.api_base_url.rstrip("/")
-
     def validate(self) -> None:
-        """Raise ValueError on a config that cannot run a real poll loop.
+        """Проверить AI-конфигурацию перед стартом.
 
-        Only enforced when pull is actually enabled — a token-less idle worker
-        (PULL_ENABLED=false) is a valid local-dev state and must not raise.
+        Транспортные параметры (GATEWAY_WS_URL, WORKER_API_TOKEN и пр.) валидирует
+        WsClientConfig.validate() — здесь они не проверяются.
         """
-        if self.pull_enabled and not self.worker_api_token:
+        if self.llm_backend not in LLM_BACKENDS:
             raise ValueError(
-                "PULL_ENABLED=true but WORKER_API_TOKEN is empty — "
-                "the worker cannot authenticate to the pull-API"
+                f"LLM_BACKEND={self.llm_backend!r} invalid — "
+                f"must be one of {LLM_BACKENDS}"
             )
-        if self.pull_enabled:
-            if self.llm_backend not in LLM_BACKENDS:
-                raise ValueError(
-                    f"LLM_BACKEND={self.llm_backend!r} invalid — "
-                    f"must be one of {LLM_BACKENDS}"
-                )
-            if self.llm_backend == "llamacpp" and not (
-                self.llm_model_path or (self.llm_model_repo and self.llm_model_file)
-            ):
-                raise ValueError(
-                    "LLM_BACKEND=llamacpp requires LLM_MODEL_PATH (local GGUF) or "
-                    "LLM_MODEL_REPO+LLM_MODEL_FILE (HuggingFace GGUF repo)"
-                )
+        if self.llm_backend == "llamacpp" and not (
+            self.llm_model_path or (self.llm_model_repo and self.llm_model_file)
+        ):
+            raise ValueError(
+                "LLM_BACKEND=llamacpp requires LLM_MODEL_PATH (local GGUF) or "
+                "LLM_MODEL_REPO+LLM_MODEL_FILE (HuggingFace GGUF repo)"
+            )
 
 
 def load_config() -> Config:
-    """Build a Config from the environment. Pure read — does not validate or raise
-    on a missing token (call .validate() at the point you actually need to claim)."""
+    """Собрать Config из окружения. Чистое чтение — не валидирует и не поднимает исключений
+    при отсутствующих ключах (вызывай .validate() там, где действительно нужно стартовать)."""
     whisper_device = os.getenv("WHISPER_DEVICE", "cpu")
     return Config(
-        api_base_url=os.getenv("API_BASE_URL", "http://localhost:8080"),
-        worker_api_token=os.getenv("WORKER_API_TOKEN", ""),
-        worker_type=os.getenv("WORKER_TYPE", "ai"),
-        poll_interval=_getenv_int("POLL_INTERVAL", 10),
-        pull_enabled=_getenv_bool("PULL_ENABLED", False),
         work_dir=Path(os.getenv("WORK_DIR", tempfile.gettempdir())).resolve(),
         whisper_model=os.getenv("WHISPER_MODEL", "base"),
         whisper_device=whisper_device,
         whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
-        stream_window_sec=_getenv_int("STREAM_WINDOW_SEC", 20),
-        stream_overlap_sec=_getenv_int("STREAM_OVERLAP_SEC", 2),
-        vad_aggressiveness=_getenv_int("VAD_AGGRESSIVENESS", 2),
-        vad_silence_frames=_getenv_int("VAD_SILENCE_FRAMES", 10),
-        stream_segment_max_sec=_getenv_int("STREAM_SEGMENT_MAX_SEC", 30),
+        stream_window_sec=getenv_int("STREAM_WINDOW_SEC", 20),
+        stream_overlap_sec=getenv_int("STREAM_OVERLAP_SEC", 2),
+        vad_aggressiveness=getenv_int("VAD_AGGRESSIVENESS", 2),
+        vad_silence_frames=getenv_int("VAD_SILENCE_FRAMES", 10),
+        stream_segment_max_sec=getenv_int("STREAM_SEGMENT_MAX_SEC", 30),
         tts_engine=os.getenv("TTS_ENGINE", "espeak"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"),
         embedding_device=os.getenv("EMBEDDING_DEVICE", whisper_device),
@@ -150,7 +101,7 @@ def load_config() -> Config:
         llm_model_path=os.getenv("LLM_MODEL_PATH", ""),
         llm_model_repo=os.getenv("LLM_MODEL_REPO", "Qwen/Qwen2.5-0.5B-Instruct-GGUF"),
         llm_model_file=os.getenv("LLM_MODEL_FILE", "qwen2.5-0.5b-instruct-q4_k_m.gguf"),
-        llm_max_tokens=_getenv_int("LLM_MAX_TOKENS", 1024),
-        llm_temperature=_getenv_float("LLM_TEMPERATURE", 0.7),
+        llm_max_tokens=getenv_int("LLM_MAX_TOKENS", 1024),
+        llm_temperature=getenv_float("LLM_TEMPERATURE", 0.7),
         llm_system_prompt=os.getenv("LLM_SYSTEM_PROMPT", ""),
     )

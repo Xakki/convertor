@@ -147,7 +147,9 @@ final class ConversionManagerOcrTest extends TestCase
             'pdf'         => "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n1 0 obj\n<<>>\nendobj\n",
             'gif'         => "GIF89a",
             'zip'         => "PK\x03\x04\x14\x00\x00\x00\x00\x00",
-            default       => "plain ascii text payload for conversion\n",
+            // MPEG frame-sync header → finfo sniffs as audio/mpeg (audio/* passes Audio gate)
+            'mp3'   => "\xFF\xFB\x90\x64\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            default => "plain ascii text payload for conversion\n",
         };
     }
 
@@ -177,7 +179,6 @@ final class ConversionManagerOcrTest extends TestCase
         self::assertFalse($r['message']->isAi);
         self::assertSame('image', $r['message']->category, 'OCR message must carry category=image');
         self::assertTrue($r['conversion']->isOcr());
-        self::assertNull($r['message']->subType, 'subType stays null for OCR');
     }
 
     public function testOcrUploadNoLongerRejected(): void
@@ -420,6 +421,33 @@ final class ConversionManagerOcrTest extends TestCase
         $conversion = $manager->createConversion($this->makeUser(), $this->makeUpload('jpg'), 'txt', false);
 
         self::assertSame('image', $conversion->getCategory()->value);
+    }
+
+    public function testMp3ToTxtRoutesToAiStream(): void
+    {
+        $r = $this->runConversion('mp3', 'txt', ['expectAi' => true]);
+
+        self::assertSame(['conv_ai'], $r['transports']);
+        self::assertTrue($r['message']->isAi);
+        self::assertSame('audio', $r['message']->category);
+    }
+
+    public function testTxtToMp3RoutesToAiStream(): void
+    {
+        $r = $this->runConversion('txt', 'mp3', ['expectAi' => true]);
+
+        self::assertSame(['conv_ai'], $r['transports']);
+        self::assertTrue($r['message']->isAi);
+        self::assertSame('document', $r['message']->category);
+    }
+
+    public function testTxtToJsonRoutesToAiStream(): void
+    {
+        $r = $this->runConversion('txt', 'json', ['expectAi' => true]);
+
+        self::assertSame(['conv_ai'], $r['transports']);
+        self::assertTrue($r['message']->isAi);
+        self::assertSame('document', $r['message']->category);
     }
 
     private function buildManager(QuotaService $quota, S3Client $s3Client): ConversionManager

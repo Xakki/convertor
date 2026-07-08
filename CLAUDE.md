@@ -3,6 +3,9 @@
 ## Project Overview
 SaaS-сервис конвертации файлов всех форматов. PHP 8.5 + Symfony 7 backend, Alpine.js + HTMX + Tailwind frontend, Python воркеры, KeyDB очереди.
 
+## Язык
+Вся документация (`docs/`, `README`, kanban-карточки, spec'и) и комментарии в коде — **на русском**. Технические идентификаторы (имена файлов, символов, env-переменных, команд) остаются как есть.
+
 ## Architecture Reference
 Архитектура backend строго по образцу **https://github.com/Xakki/ExRate**:
 - Registry pattern для конверторов (аналог ProviderRegistry)
@@ -35,11 +38,11 @@ SaaS-сервис конвертации файлов всех форматов.
 
 ## Queue Architecture
 - Каждый тип конвертации — отдельный KeyDB queue channel
-- Имена каналов: `conversion.documents`, `conversion.images`, `conversion.audio`, `conversion.video`, `conversion.ai`
-- **Локальные (on-server) воркеры — ТОЛЬКО KeyDB Streams (consumer groups) + S3 in/out.** Никаких Redis-list очередей и общего тома `/shared-files`.
-- **Remote-воркеры (вне сервера) — через универсальный HTTP pull-API, НЕ напрямую в KeyDB/S3.** KeyDB наружу НЕ публикуется, поэтому off-server воркер (напр. AI на домашнем WSL+GPU) тянет задания по API (short-poll ~10 сек), а файлы (вход и результат) идут ЧЕРЕЗ API (не через S3 напрямую). Auth — статичный bearer-токен в конфиге воркера. API — шлюз над Streams: claim из consumer-group `conv.<type>` (lease), ack по `result`/`fail`. API задуман универсальным для всех типов воркеров. Первый потребитель — AI-воркер ([[validate-ai-worker]]).
+- Имена каналов: `conv.document`, `conv.image`, `conv.audio`, `conv.video`, `conv.data`, `conv.ai`
+- **Единая модель транспорта: ВСЕ воркеры (on-server + remote) — WS-клиенты gateway; никаких Redis-list очередей и общего тома `/shared-files`.** Единственный читатель KeyDB Streams (`XREADGROUP`/`XACK`/`XAUTOCLAIM`) — новый асинхронный Python-сервис **WS-Gateway**; воркеры (remote AI + 4 on-server: document/libreoffice, audio+video/ffmpeg, image, data) НЕ читают `conv.<type>` и НЕ делают self-XACK. KeyDB наружу НЕ публикуется; удалённый воркер (напр. AI на домашнем WSL+GPU) подключается к публичному `wss://`.
+- **Ни один воркер (on-server в т.ч.) не трогает KeyDB или S3 напрямую — только gateway (WS) + Symfony API (bulk-нагрузки).** Вход задачи: `GET /api/v1/.../jobs/{id}/input` (Symfony стримит из S3). Малый результат ≤256 KB: inline по WS → gateway → внутренний relay-эндпоинт → Symfony пишет (S3 + БД). Большой результат: воркер `POST /jobs/{id}/result` (multipart) → Symfony пишет, затем `result{resultKey}` по WS → gateway делает XACK. Воркеры не держат S3-креды. Auth — статичный bearer-токен в конфиге воркера. Детали — [[ws-worker-transport-design]].
 - **Воркеры flag-agnostic: валидируют ТОЛЬКО форматы (входные данные + конвертацию source→target) и выполняют её. Флаги (`ocr`, `subType` и пр.) воркер НЕ читает.** Выбор поведения — из пары (sourceFormat, targetFormat) (напр. растр→txt/md/docx = OCR; audio→text = STT; text→audio = TTS). Какой именно stream получит задачу — решает БЭК/API: для неоднозначных пар (один (from→to) умеют несколько воркеров, напр. `pdf→txt`: document-extract vs image-OCR) в API есть флаг, выбирающий доступный stream (первый экземпляр — `ocr`→`Conversion::isOcr`→`streamFor()`). AI — в крайнем случае.
-- PHP side: только ставит задачу + обновляет статус по callback/polling
+- PHP side: ставит задачу в Stream (Messenger) + персистит результат через internal relay/ConversionResultPersister; живой статус (`conv:status`) пишет gateway, не PHP.
 
 ## Authentication
 - Telegram Login Widget как основной метод

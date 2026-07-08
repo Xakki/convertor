@@ -24,7 +24,6 @@ class ConversionMessage
         public readonly string $targetFormat,
         public readonly string $category,
         public readonly bool $isAi = false,
-        public readonly ?string $subType = null,
         public readonly array $options = [],
     ) {
     }

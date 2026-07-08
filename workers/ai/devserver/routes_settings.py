@@ -2,8 +2,7 @@
 
 GET  /api/settings → metadata list with effective values.
 PUT  /api/settings → validate, persist overlay, re-derive effective config, apply
-                     hot keys (toggle PullRunner on PULL_ENABLED, swap runner cfg),
-                     mark restart keys pending.
+                     hot keys (update runner cfg), mark restart keys pending.
 """
 
 from __future__ import annotations
@@ -79,13 +78,6 @@ async def put_settings(request: Request) -> Any:
 
     runner = request.app.state.runner
     runner.update_cfg(new_cfg)
-
-    # PULL_ENABLED toggle → start/stop the runner at runtime.
-    if "PULL_ENABLED" in validated and new_cfg.pull_enabled != old_cfg.pull_enabled:
-        if new_cfg.pull_enabled:
-            await runner.start()
-        else:
-            await runner.stop()
 
     applied = [k for k in validated if SETTINGS_BY_KEY[k].apply == "hot"]
     pending_restart = [k for k in validated if SETTINGS_BY_KEY[k].apply == "restart"]

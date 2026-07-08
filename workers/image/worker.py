@@ -1,11 +1,10 @@
-"""Image conversion worker — Phase 1, XREADGROUP-based.
+"""Image conversion worker — WS-транспорт (s1-10).
 
-Consumes stream conv.image, consumer group convertor.
+Транспорт: WS-клиент (StreamConsumerBase.run()); job['_localInput'] заполнен WsClient'ом.
 Supported:
   - raster → raster/pdf via Pillow.
   - OCR (raster + pdf → txt/md/docx) inline via tesseract/poppler. The worker
-    decides OCR by OUTPUT format: targetFormat ∈ {txt,md,docx} → OCR mode
-    (subType is null for raster OCR jobs, so it is NOT the trigger).
+    decides OCR by OUTPUT format: targetFormat ∈ {txt,md,docx} → OCR mode.
 
 Missing registry formats that need extra packages:
   svg   → requires cairosvg  (not in base image)
@@ -25,6 +24,7 @@ import pdf2image
 import pytesseract
 from PIL import Image
 
+from workers.common.mime import DOC_TEXT_MIME
 from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
 
 logger = logging.getLogger(__name__)
@@ -37,12 +37,7 @@ _OCR_TARGETS: set[str] = {"txt", "md", "docx"}
 # Sources that the OCR branch accepts (raster via PIL + pdf via poppler).
 _OCR_SOURCES: set[str] = {"jpg", "jpeg", "png", "tiff", "tif", "pdf"}
 
-_DOCX_MIME = (
-    "application/vnd.openxmlformats-officedocument."
-    "wordprocessingml.document"
-)
-
-# MIME types for output formats
+# MIME types for output formats (pdf/txt/md/docx — общие, из workers.common.mime)
 _MIME: dict[str, str] = {
     "jpg":  "image/jpeg",
     "jpeg": "image/jpeg",
@@ -53,10 +48,7 @@ _MIME: dict[str, str] = {
     "tiff": "image/tiff",
     "tif":  "image/tiff",
     "ico":  "image/x-icon",
-    "pdf":  "application/pdf",
-    "txt":  "text/plain",
-    "md":   "text/markdown",
-    "docx": _DOCX_MIME,
+    **DOC_TEXT_MIME,
 }
 
 # Pillow save-format aliases (ext → PIL format name)
@@ -171,9 +163,10 @@ class ImageWorker(StreamConsumerBase):
         """Convert image as described by *job*.
 
         Reads the local input path the base class prepared in job['_localInput']
-        (downloaded from S3), writes the output to a tmp file under WORK_DIR, and
-        returns (local_output_path, output_mime, target_ext) for the base class
-        to upload to the results bucket. Both tmp files are cleaned by the base.
+        (загружен WsClient'ом через GET /jobs/{id}/input), writes the output to a
+        tmp file under WORK_DIR, and returns (local_output_path, output_mime,
+        target_ext) for the base class to relay via WS. Both tmp files are cleaned
+        by the base.
 
         Raises ValueError for unsupported conversions, FileNotFoundError for
         missing input, RuntimeError if Pillow produces no output.
@@ -186,11 +179,12 @@ class ImageWorker(StreamConsumerBase):
         if not src.is_file():
             raise FileNotFoundError(f"input not found: {src}")
 
-        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        out_dir = Path(job.get("_jobDir") or str(WORK_DIR))
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         # --- OCR branch: decided by OUTPUT format (txt/md/docx) -------------
         if target_fmt in _OCR_TARGETS:
-            return self._convert_ocr(conv_id, src, src_ext, target_fmt)
+            return self._convert_ocr(conv_id, src, src_ext, target_fmt, out_dir)
 
         # --- Raster branch (raster → raster / pdf) -------------------------
         if src_ext not in _MATRIX:
@@ -198,7 +192,7 @@ class ImageWorker(StreamConsumerBase):
         if target_fmt not in _MATRIX[src_ext]:
             raise ValueError(f"unsupported conversion: {src_ext} → {target_fmt}")
 
-        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
+        out_path = out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
 
         _do_convert(src, out_path, target_fmt)
 
@@ -218,7 +212,8 @@ class ImageWorker(StreamConsumerBase):
         return str(out_path), mime, target_fmt
 
     def _convert_ocr(
-        self, conv_id: int, src: Path, src_ext: str, target_fmt: str
+        self, conv_id: int, src: Path, src_ext: str, target_fmt: str,
+        out_dir: Path | None = None,
     ) -> tuple[str, str, str]:
         """OCR a raster/pdf source into txt/md/docx text output."""
         if src_ext not in _OCR_SOURCES:
@@ -232,7 +227,8 @@ class ImageWorker(StreamConsumerBase):
                 extra={"conversionId": conv_id, "src": src.name, "pages": len(pages)},
             )
 
-        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
+        _out_dir = out_dir if out_dir is not None else WORK_DIR
+        out_path = _out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
         _OCR_WRITERS[target_fmt](pages, out_path)
 
         if not out_path.exists():

@@ -31,13 +31,12 @@ The Symfony Messenger transport name is `conv_<key>`; the stream name is `conv.<
 
 | Stream       | Direction              | Purpose |
 |--------------|------------------------|---------|
-| `conv.result`| Python → PHP           | Result events (success & failure); consumed by `app:queue:result-consumer` |
-| `conv.dead`  | Python (DLQ)           | Permanently failed entries; not consumed automatically |
+| `conv.dead`  | gateway (DLQ)          | Permanently failed entries; not consumed automatically |
 
 ### Status hash
 
-`conv:status:{conversionId}` — live Redis HASH, TTL 24 h. Written by workers,
-read by the PHP status endpoint. Schema: queue-contract.md §4.
+`conv:status:{conversionId}` — live Redis HASH, TTL 24 h. Written by **gateway**
+(not workers), read by the PHP status endpoint. Schema: queue-contract.md §4.
 MariaDB remains the durable source for `/history` and `/download` once the hash expires.
 
 ---
@@ -99,15 +98,14 @@ If `delivery_count > CONSUMER_MAX_RETRIES` (default **3**), i.e. the entry has b
 attempted **at least 4 times**, the entry is routed to the DLQ:
 
 1. `XADD conv.dead` — dead-letter record.
-2. `HSET conv:status:{id}` — state = `failed`.
-3. `XADD conv.result` — failed result event (notifies PHP; triggers quota refund).
-4. `XACK` original stream — removes entry from PEL.
+2. `HSET conv:status:{id}` — state = `failed` (gateway writes this).
+3. `XACK` original stream — removes entry from PEL.
+4. Gateway sends `fail{permanent:true}` relay → PHP triggers quota refund.
 
-A processing failure (S3 download error, `convert()` exception, S3 upload error)
-sets the error field on the status hash but issues **no XACK** — the entry stays in
-the PEL and retries after the idle timeout.
+Workers return `ResultSignal.failed(permanent=True)` for permanent errors
+(ValueError); gateway handles DLQ routing and XACK.
 
-**Dead-letter entry shapes:**
+**Dead-letter entry shapes (written by gateway):**
 
 Max-retries exceeded:
 ```json
@@ -129,49 +127,31 @@ Parse error (malformed message — sent to DLQ immediately, no retry):
 }
 ```
 
-Both shapes use the single field `data` (raw JSON string), matching the `conv.result`
-wire convention (queue-contract.md §5, "plain payload, not a Messenger envelope").
-
 ---
 
-## 5. Idempotency & ordered commit
+## 5. Result commit sequence (gateway-owned)
 
-### Idempotency guard
+Workers deliver results via WS (`ResultSignal`) to the gateway. The gateway owns
+all KeyDB writes and the PHP relay call.
 
-At the start of `_process_entry()`, before any work:
-
-```python
-if redis.hget(f"conv:status:{conv_id}", "state") == "completed":
-    # Re-emit the result event in case the original XADD was lost after HSET.
-    # PHP deduplicates by conversionId; a duplicate event is harmless.
-    _re_emit_completed_result(...)
-    redis.xack(stream, _GROUP, entry_id)
-    return
+**Success path (inline ≤256 KB):**
+```
+(1) worker → completion{data: base64}  (WS frame)
+(2) gateway → POST /internal/relay     (Symfony ConversionResultPersister: S3 + MariaDB)
+(3) gateway → HSET conv:status:{id}    state=completed
+(4) gateway → XACK                     removes entry from PEL
 ```
 
-This covers the crash-between-HSET-and-XACK gap: on redelivery the worker detects
-`completed`, re-emits the result event (safe because PHP deduplicates on `conversionId`),
-and ACKs.
-
-### Ordered commit sequence (success path)
-
+**Success path (large, >256 KB):**
 ```
-(1) S3 PUT     results/{Y}/{M}-{D}/{convId}.{ext}
-               Deterministic key → safe to overwrite on retry; idempotent.
-(2) HSET       conv:status:{id}  state=completed + output metadata
-(3) XADD       conv.result       (§5 result event — see queue-contract.md)
-(4) XACK       removes entry from PEL
+(1) worker → POST /api/v1/worker/jobs/{id}/result  (multipart, Symfony writes S3 + MariaDB)
+(2) worker → result{resultKey}  (WS frame)
+(3) gateway → HSET conv:status:{id}  state=completed
+(4) gateway → XACK
 ```
 
-**Why this order:**
-
-- **S3 first:** a crash after PUT but before HSET causes a retry that re-PUTs the same
-  deterministic key (clean overwrite, no orphan objects).
-- **XACK last:** a crash between XADD and XACK triggers a redelivery; the idempotency
-  guard at step 0 catches it, re-emits the result event, and ACKs — no double conversion.
-
-Tmp files (local input + output) are cleaned up in a `finally` block on every exit path
-(success or failure); retries re-download from S3 and re-run the conversion.
+Stream `conv.result` and `app:queue:result-consumer` are retired (s1-10).
+See `docs/superpowers/specs/2026-07-02-ws-worker-transport-design.md`.
 
 ---
 

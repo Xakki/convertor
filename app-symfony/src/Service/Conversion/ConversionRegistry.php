@@ -4,21 +4,34 @@ declare(strict_types=1);
 
 namespace App\Service\Conversion;
 
+use App\Entity\WorkerCapability;
 use App\Enum\FileCategory;
+use App\Repository\WorkerCapabilityRepository;
+use Psr\Log\LoggerInterface;
+use Symfony\Contracts\Cache\CacheInterface;
+use Symfony\Contracts\Cache\ItemInterface;
 
 /**
  * Capability-driven conversion routing.
  *
- * The single source of truth is {@see workerCapabilities()}: an explicit list of
- * workers, each identified by its stream suffix (the part after `conv_`), its
- * `isAi` flag, and the `from → to` pairs it can handle. The `matrix` and the
- * pure {@see streamFor()} routing function are both derived FROM that config.
+ * Источник матрицы (приоритет):
+ *   1. БД — таблица worker_capabilities, построенная из register-запросов воркеров.
+ *   2. Hardcoded fallback {@see workerCapabilities()} — когда БД пуста или недоступна
+ *      (Phase 1: пока воркеры не успели зарегистрироваться / при DB-ошибке).
  *
- * AI workers are only ever chosen as a last resort: a pair is assigned to an AI
- * worker only when no non-AI worker already claims it.
+ * Матрица кешируется в Symfony cache.app (filesystem) и сбрасывается при каждом
+ * вызове {@see invalidateMatrix()} (вызывается из register-эндпоинта).
+ *
+ * AI-воркеры — только запасной вариант: пара назначается AI только если ни один
+ * non-AI воркер её не занял. AI-пары объявляются плоско (mp3→txt, txt→mp3 и т.д.)
+ * через блок 'ai' в {@see workerCapabilities()}; FileCategory берётся из matrix_categories.
+ *
+ * Сигнатуры {@see getSupportedFormats()}, {@see isSupported()}, {@see streamFor()} не меняются.
  */
 class ConversionRegistry
 {
+    private const CACHE_KEY = 'conv.worker.matrix';
+
     /**
      * Explicit OCR capability set: {jpg,png,tiff,pdf} × {txt,md,docx}. Owned by
      * the image worker, isAi=false. Used BOTH to seed the direct raster matrix
@@ -31,15 +44,22 @@ class ConversionRegistry
     private const OCR_RASTER  = ['jpg', 'png', 'tiff'];
 
     /**
-     * Matrix: fromFormat → [toFormat => [category, isAi]]
+     * Lazy per-request cache (строится однократно за запрос).
      *
-     * @var array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     * @var array<string, array<string, array{category: FileCategory, isAi: bool}>>|null
      */
-    private array $matrix;
+    private ?array $matrix = null;
 
-    public function __construct()
-    {
-        $this->matrix = $this->buildMatrix();
+    /**
+     * Параметры — опциональны: unit-тесты создают `new ConversionRegistry()` без аргументов
+     * и автоматически получают hardcoded fallback. В production-контейнере все три
+     * инжектируются через autowiring.
+     */
+    public function __construct(
+        private readonly ?WorkerCapabilityRepository $repository = null,
+        private readonly ?CacheInterface $cache = null,
+        private readonly ?LoggerInterface $logger = null,
+    ) {
     }
 
     /**
@@ -48,7 +68,7 @@ class ConversionRegistry
     public function getSupportedFormats(): array
     {
         $result = [];
-        foreach ($this->matrix as $from => $targets) {
+        foreach ($this->getMatrix() as $from => $targets) {
             foreach ($targets as $to => $meta) {
                 $result[] = [
                     'from'     => $from,
@@ -64,18 +84,18 @@ class ConversionRegistry
 
     public function isSupported(string $from, string $to): bool
     {
-        return isset($this->matrix[$from][$to]);
+        return isset($this->getMatrix()[$from][$to]);
     }
 
     public function getCategory(string $from, string $to): FileCategory
     {
-        return $this->matrix[$from][$to]['category']
+        return $this->getMatrix()[$from][$to]['category']
             ?? throw new \InvalidArgumentException("Unsupported conversion: {$from} → {$to}");
     }
 
     public function isAi(string $from, string $to): bool
     {
-        return $this->matrix[$from][$to]['isAi']
+        return $this->getMatrix()[$from][$to]['isAi']
             ?? throw new \InvalidArgumentException("Unsupported conversion: {$from} → {$to}");
     }
 
@@ -118,7 +138,197 @@ class ConversionRegistry
     }
 
     /**
-     * Per-worker capability config — the single source of truth.
+     * Сбрасывает кеш матрицы (per-request + cross-request).
+     * Вызывается register-эндпоинтом после upsert воркера.
+     */
+    public function invalidateMatrix(): void
+    {
+        $this->matrix = null;
+        $this->cache?->delete(self::CACHE_KEY);
+    }
+
+    // -------------------------------------------------------------------------
+    // Internals
+    // -------------------------------------------------------------------------
+
+    /**
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     */
+    private function getMatrix(): array
+    {
+        return $this->matrix ??= $this->buildMatrix();
+    }
+
+    /**
+     * Строит матрицу: из кеша (если есть) или прямым вызовом buildRoutingPairs().
+     *
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     */
+    private function buildMatrix(): array
+    {
+        if ($this->cache === null) {
+            return $this->buildRoutingPairs();
+        }
+
+        /** @var array<string, array<string, array{category: FileCategory, isAi: bool}>> */
+        return $this->cache->get(self::CACHE_KEY, function (ItemInterface $item): array {
+            $item->expiresAfter(3600); // 1ч — страховка; основная инвалидация через delete()
+
+            return $this->buildRoutingPairs();
+        });
+    }
+
+    /**
+     * Строит routing-пары: из БД если непусто, иначе — hardcoded fallback.
+     *
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     */
+    private function buildRoutingPairs(): array
+    {
+        if ($this->repository !== null) {
+            try {
+                $capabilities = $this->repository->findAllCapabilities();
+                if ($capabilities !== []) {
+                    return $this->buildMatrixFromCapabilities($capabilities);
+                }
+            } catch (\Throwable $e) {
+                $this->logger?->warning('ConversionRegistry: БД недоступна, используется hardcoded fallback', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $this->buildMatrixFromHardcode();
+    }
+
+    /**
+     * Строит матрицу из зарегистрированных в БД возможностей воркеров.
+     * Политика коллизий: non-AI побеждает AI; при одинаковом isAi — last-write.
+     *
+     * @param WorkerCapability[] $capabilities
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     */
+    private function buildMatrixFromCapabilities(array $capabilities): array
+    {
+        $matrix = [];
+
+        // Сортировка: non-AI обрабатываются раньше, AI — только для незанятых пар
+        usort($capabilities, static fn (WorkerCapability $a, WorkerCapability $b): int
+            => (int) ($a->getCapabilities()['isAi'] ?? false)
+            <=> (int) ($b->getCapabilities()['isAi'] ?? false));
+
+        foreach ($capabilities as $cap) {
+            $blob   = $cap->getCapabilities();
+            $stream = $cap->getWorkerType();
+            $isAi   = (bool) ($blob['isAi'] ?? false);
+
+            /** @var array<string, list<string>> $rawMatrix */
+            $rawMatrix = $blob['matrix'] ?? [];
+
+            if ($isAi) {
+                /** @var array<string, string> $matrixCategories */
+                $matrixCategories = $blob['matrix_categories'] ?? [];
+                foreach ($rawMatrix as $from => $targets) {
+                    $catStr   = $matrixCategories[$from] ?? '';
+                    $category = match ($catStr) {
+                        'audio'    => FileCategory::Audio,
+                        'document' => FileCategory::Document,
+                        default    => null,
+                    };
+                    if ($category === null) {
+                        $this->logger?->warning('ConversionRegistry: AI worker: нет matrix_categories для формата', [
+                            'from' => $from,
+                        ]);
+                        continue;
+                    }
+                    foreach ($targets as $to) {
+                        if ($from === $to) {
+                            continue;
+                        }
+                        // AI — последний резерв: non-AI пара не вытесняется
+                        if (isset($matrix[$from][$to]) && ! $matrix[$from][$to]['isAi']) {
+                            continue;
+                        }
+                        $matrix[$from][$to] = ['category' => $category, 'isAi' => true];
+                    }
+                }
+            } else {
+                try {
+                    $category = $this->categoryForStream($stream);
+                } catch (\ValueError) {
+                    $this->logger?->warning('ConversionRegistry: неизвестный workerType, пропускаем', [
+                        'workerType' => $stream,
+                    ]);
+                    continue;
+                }
+                foreach ($rawMatrix as $from => $targets) {
+                    foreach ($targets as $to) {
+                        if ($from === $to) {
+                            continue;
+                        }
+                        $matrix[$from][$to] = ['category' => $category, 'isAi' => false];
+                    }
+                }
+            }
+        }
+
+        return $matrix;
+    }
+
+    /**
+     * Строит матрицу из hardcoded workerCapabilities() (fallback).
+     * AI-пары несут FileCategory в 3-м элементе каждой группы;
+     * non-AI используют categoryForStream().
+     *
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     */
+    private function buildMatrixFromHardcode(): array
+    {
+        $matrix = [];
+
+        foreach ($this->workerCapabilities() as $stream => $worker) {
+            $isAi = $worker['isAi'];
+
+            if ($isAi) {
+                foreach ($worker['pairs'] as $pair) {
+                    $fromList = $pair[0];
+                    $toList   = $pair[1];
+                    $category = $pair[2] ?? throw new \LogicException("AI pair group must carry FileCategory at index 2");
+
+                    foreach ($fromList as $from) {
+                        foreach ($toList as $to) {
+                            if ($from === $to) {
+                                continue;
+                            }
+                            // AI — последний резерв: non-AI пара не вытесняется
+                            if (isset($matrix[$from][$to]) && ! $matrix[$from][$to]['isAi']) {
+                                continue;
+                            }
+                            $matrix[$from][$to] = ['category' => $category, 'isAi' => true];
+                        }
+                    }
+                }
+            } else {
+                $category = $this->categoryForStream($stream);
+
+                foreach ($worker['pairs'] as [$fromList, $toList]) {
+                    foreach ($fromList as $from) {
+                        foreach ($toList as $to) {
+                            if ($from === $to) {
+                                continue;
+                            }
+                            $matrix[$from][$to] = ['category' => $category, 'isAi' => false];
+                        }
+                    }
+                }
+            }
+        }
+
+        return $matrix;
+    }
+
+    /**
+     * Per-worker capability config — the single source of truth (fallback, Phase 2 удалит).
      *
      * Each entry: stream suffix => {isAi, pairs}. `pairs` is a list of
      * [fromList, toList] blocks; a block expands to every from×to combination
@@ -128,7 +338,10 @@ class ConversionRegistry
      * html→pdf/docx). AI workers are listed last so they are only chosen for
      * pairs no non-AI worker already claims.
      *
-     * @return array<string, array{isAi: bool, pairs: list<array{0: list<string>, 1: list<string>}>}>
+     * AI-блок (последний) несёт FileCategory в 3-м элементе каждой pair-группы
+     * (categoryForStream('ai') бросает ValueError — для AI не используется).
+     *
+     * @return array<string, array{isAi: bool, pairs: list<array{0: list<string>, 1: list<string>, 2?: FileCategory}>}>
      */
     private function workerCapabilities(): array
     {
@@ -205,6 +418,21 @@ class ConversionRegistry
                         ['mp4', 'avi', 'mkv', 'mov', 'webm']],
                 ],
             ],
+
+            // AI worker (Whisper STT / TTS / embedding). Объявлен последним: AI —
+            // последний резерв, non-AI пары не вытесняются. Каждая группа несёт
+            // FileCategory в 3-м элементе (categoryForStream('ai') невалиден).
+            'ai' => [
+                'isAi'  => true,
+                'pairs' => [
+                    // STT: audio → text (включая flac)
+                    [['mp3', 'wav', 'ogg', 'm4a', 'opus', 'flac'], ['txt', 'srt', 'vtt'], FileCategory::Audio],
+                    // TTS: text → audio
+                    [['txt', 'md'], ['mp3', 'wav', 'ogg'], FileCategory::Document],
+                    // Embedding: txt → json
+                    [['txt'], ['json'], FileCategory::Document],
+                ],
+            ],
         ];
     }
 
@@ -216,51 +444,5 @@ class ConversionRegistry
     private function categoryForStream(string $stream): FileCategory
     {
         return FileCategory::from($stream);
-    }
-
-    /**
-     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
-     */
-    private function buildMatrix(): array
-    {
-        $matrix = [];
-
-        foreach ($this->workerCapabilities() as $stream => $worker) {
-            $category = $this->categoryForStream($stream);
-            $isAi     = $worker['isAi'];
-
-            foreach ($worker['pairs'] as [$fromList, $toList]) {
-                foreach ($fromList as $from) {
-                    foreach ($toList as $to) {
-                        if ($from === $to) {
-                            continue;
-                        }
-                        // AI worker is last resort: never override a pair already
-                        // claimed by a non-AI worker.
-                        if ($isAi && isset($matrix[$from][$to]) && ! $matrix[$from][$to]['isAi']) {
-                            continue;
-                        }
-                        $matrix[$from][$to] = ['category' => $category, 'isAi' => $isAi];
-                    }
-                }
-            }
-        }
-
-        // STT / TTS — virtual AI source keys (mp3_stt, txt_tts, …). OUT OF SCOPE
-        // for the capability refactor: kept exactly as-is, isAi=true, category
-        // audio/document, routed to the `ai` stream.
-        $sttSources = ['mp3', 'wav', 'ogg', 'm4a', 'opus'];
-        foreach ($sttSources as $from) {
-            foreach (['txt', 'srt', 'vtt'] as $to) {
-                $matrix[$from . '_stt'][$to] = ['category' => FileCategory::Audio, 'isAi' => true];
-            }
-        }
-        foreach (['txt', 'md'] as $from) {
-            foreach (['mp3', 'wav', 'ogg'] as $to) {
-                $matrix[$from . '_tts'][$to] = ['category' => FileCategory::Document, 'isAi' => true];
-            }
-        }
-
-        return $matrix;
     }
 }

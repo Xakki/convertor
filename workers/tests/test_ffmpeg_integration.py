@@ -9,7 +9,7 @@ ffmpeg is not on PATH so a plain `pytest workers/tests` run stays green.
 import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -25,11 +25,7 @@ requires_ffmpeg = pytest.mark.skipif(
 
 
 def _build_worker() -> FfmpegWorker:
-    import workers.common.stream_consumer as sc_mod
-
-    with patch.object(sc_mod, "REDIS_HOST", "localhost"), \
-         patch("workers.common.stream_consumer.redis.Redis", return_value=MagicMock()):
-        return FfmpegWorker()
+    return FfmpegWorker()
 
 
 def _job(conv_id: int, src: Path, src_fmt: str, tgt_fmt: str) -> dict:
@@ -43,7 +39,6 @@ def _job(conv_id: int, src: Path, src_fmt: str, tgt_fmt: str) -> dict:
         "targetFormat": tgt_fmt,
         "category": "video",
         "isAi": False,
-        "subType": None,
         "options": [],
     }
 

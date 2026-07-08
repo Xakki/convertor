@@ -7,7 +7,7 @@ and the conv.document streams subscription — without real LibreOffice.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -29,7 +29,6 @@ def _make_job(conv_id: int, input_path: Path, src_fmt: str, tgt_fmt: str) -> dic
         "targetFormat": tgt_fmt,
         "category": "document",
         "isAi": False,
-        "subType": None,
         "options": [],
     }
 
@@ -38,11 +37,7 @@ def _worker(tmp_path: Path) -> LibreOfficeWorker:
     import workers.common.stream_consumer as sc_mod
     import workers.libreoffice.worker as lo_mod
 
-    mock_redis = MagicMock()
-    with patch.object(sc_mod, "REDIS_HOST", "localhost"), \
-         patch("workers.common.stream_consumer.redis.Redis", return_value=mock_redis):
-        worker = LibreOfficeWorker()
-
+    worker = LibreOfficeWorker()
     patch.object(lo_mod, "WORK_DIR", tmp_path).start()
     patch.object(sc_mod, "WORK_DIR", tmp_path).start()
     return worker

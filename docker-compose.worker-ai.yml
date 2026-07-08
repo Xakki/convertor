@@ -25,7 +25,6 @@
 #   docker run -d --name worker-ai --restart unless-stopped --gpus all \
 #     -e API_BASE_URL=https://convertor.xakki.pro \
 #     -e WORKER_API_TOKEN=YOUR_TOKEN \
-#     -e PULL_ENABLED=true \
 #     -e WHISPER_DEVICE=cuda -e WHISPER_COMPUTE_TYPE=float16 \
 #     -e LLM_BACKEND=ollama -e OLLAMA_URL=http://host.docker.internal:11434 \
 #     -v ~/.cache/huggingface:/home/app/.cache/huggingface \
@@ -35,7 +34,6 @@
 #   docker run -d --name worker-ai --restart unless-stopped \
 #     -e API_BASE_URL=https://convertor.xakki.pro \
 #     -e WORKER_API_TOKEN=YOUR_TOKEN \
-#     -e PULL_ENABLED=true \
 #     -e WHISPER_DEVICE=cpu -e WHISPER_COMPUTE_TYPE=int8 \
 #     -e LLM_BACKEND=ollama -e OLLAMA_URL=http://host.docker.internal:11434 \
 #     -v ~/.cache/huggingface:/home/app/.cache/huggingface \
@@ -81,8 +79,6 @@ services:
             API_BASE_URL: ${API_BASE_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
             WORKER_TYPE: ${WORKER_TYPE:-ai}
-            PULL_ENABLED: ${PULL_ENABLED:-false}
-            POLL_INTERVAL: ${POLL_INTERVAL:-10}
             # STT
             WHISPER_MODEL: ${WHISPER_MODEL:-base}
             WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
@@ -120,8 +116,8 @@ services:
             # here (comma-separated, no path), else the /ws/stream handshake is rejected (1008).
             #   e.g. DEVSERVER_ALLOWED_ORIGINS=https://convertor.xakki.pro
             DEVSERVER_ALLOWED_ORIGINS: ${DEVSERVER_ALLOWED_ORIGINS:-}
-        # Run the dev-server (FastAPI UI + optional in-process pull loop via PULL_ENABLED)
-        # instead of the bare pull worker. nginx reaches it internally as worker-ai:8877, so
+        # Run the dev-server (FastAPI UI + in-process WS-client worker loop) instead of the
+        # bare worker. nginx reaches it internally as worker-ai:8877, so
         # set DEVSERVER_HOST=0.0.0.0 (in .env.local) — no host ports: publish needed.
         command: ["python3", "-m", "workers.ai", "--devserver"]
         #   ports: ["${DEVSERVER_PORT:-8877}:${DEVSERVER_PORT:-8877}"]   # only for direct host curl

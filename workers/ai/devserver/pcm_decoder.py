@@ -79,6 +79,9 @@ class PcmStreamDecoder:
         self._lock = threading.Lock()
         self._done = threading.Event()
         self._decode_error: Exception | None = None  # устанавливается из фонового потока
+        # Event даёт happens-before между записью _decode_error в decode-потоке и
+        # чтением в route-корутине (per-tick) — не полагаемся на GIL неявно.
+        self._error_event = threading.Event()
         self._thread = threading.Thread(target=self._decode_loop, daemon=True)
         self._thread.start()
 
@@ -98,6 +101,16 @@ class PcmStreamDecoder:
         self._pipe.close()
         self._done.wait(timeout=5.0)
         return self.drain()
+
+    def decode_error(self) -> Exception | None:
+        """Потокобезопасно вернуть ошибку decode-потока (или None).
+
+        Гейт по _error_event: если событие выставлено, запись _decode_error в
+        decode-потоке гарантированно видна читателю (happens-before), без опоры на GIL.
+        """
+        if self._error_event.is_set():
+            return self._decode_error
+        return None
 
     def _decode_loop(self) -> None:
         try:
@@ -120,6 +133,7 @@ class PcmStreamDecoder:
                         self._pcm.extend(rf.to_ndarray().flatten().tobytes())
         except Exception as exc:
             self._decode_error = exc
+            self._error_event.set()  # порядок: сперва запись поля, затем set() события
             logger.warning("pcm decode loop завершился с ошибкой: %s", exc)
         finally:
             self._done.set()

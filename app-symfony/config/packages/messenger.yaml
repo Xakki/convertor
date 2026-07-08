@@ -4,64 +4,67 @@ framework:
 
         # One transport per routing-key → stream `conv.<key>`, group `convertor`.
         # JSON serializer (`messenger.transport.symfony_serializer`) so the Python
-        # workers (the ONLY consumers) can parse the envelope.
+        # workers (the ONLY consumers) can parse the job payload.
         #
-        # `options.serializer: 0` is MANDATORY on every conv_* transport. It is the
-        # phpredis CONNECTION serializer (\Redis::SERIALIZER_NONE), NOT the Messenger
-        # message serializer above. symfony/redis-messenger's Connection DEFAULT_OPTIONS
-        # sets it to 1 (\Redis::SERIALIZER_PHP), which PHP-serialize-wraps the value
-        # before XADD — the stream field `message` would be stored as `s:NNN:"{json}";`
-        # instead of raw JSON, and the worker's `json.loads(fields["message"])` would
-        # throw on every message. `0` stores the raw symfony_serializer JSON string.
+        # Custom transport (Option D — clean single-JSON wire contract). The
+        # `conv+redis://` DSN scheme binds these 6 transports to
+        # `App\Messenger\Transport\CleanRedisTransportFactory` instead of the stock
+        # `redis-messenger` factory (which matches bare `redis://`, so `failed`
+        # below still uses the stock transport). CleanRedisTransport::send() does
+        # `XADD conv.<type> * message '<clean job json>'` — it writes
+        # Serializer::encode()['body'] DIRECTLY into the `message` field, SKIPPING
+        # the stock `{body,headers}` envelope wrap. Result: the stream carries ONE
+        # clean single-JSON payload (§3) and readers decode ONCE. See
+        # docs/queue-contract.md §2 and docs/superpowers/specs/…-ws-worker-transport-design.md §3/§4.
         #
-        # PHP MUST NOT run `messenger:consume conv_*` — that would join the Python
-        # consumer group and steal jobs. See docs/queue-contract.md §1/§2.
+        # phpredis SERIALIZER_NONE caveat is MOVED, not removed: CleanRedisTransport
+        # explicitly sets `\Redis::SERIALIZER_NONE` on the connection before XADD,
+        # so `message` is raw JSON, not PHP-serialize-wrapped (`s:NNN:"{json}";`).
+        # The old `options.serializer: 0` is gone because we no longer build the
+        # stock Connection.
+        #
+        # PHP MUST NOT run `messenger:consume conv_*` — the transport is produce-only
+        # (get/ack/reject throw). See docs/queue-contract.md §1/§2.
         transports:
             conv_document:
-                dsn: '%env(REDIS_DSN)%'
+                dsn: 'conv+%env(REDIS_DSN)%'
                 serializer: messenger.transport.symfony_serializer
                 options:
-                    serializer: 0
                     stream: conv.document
                     group: convertor
 
             conv_image:
-                dsn: '%env(REDIS_DSN)%'
+                dsn: 'conv+%env(REDIS_DSN)%'
                 serializer: messenger.transport.symfony_serializer
                 options:
-                    serializer: 0
                     stream: conv.image
                     group: convertor
 
             conv_audio:
-                dsn: '%env(REDIS_DSN)%'
+                dsn: 'conv+%env(REDIS_DSN)%'
                 serializer: messenger.transport.symfony_serializer
                 options:
-                    serializer: 0
                     stream: conv.audio
                     group: convertor
 
             conv_video:
-                dsn: '%env(REDIS_DSN)%'
+                dsn: 'conv+%env(REDIS_DSN)%'
                 serializer: messenger.transport.symfony_serializer
                 options:
-                    serializer: 0
                     stream: conv.video
                     group: convertor
 
             conv_data:
-                dsn: '%env(REDIS_DSN)%'
+                dsn: 'conv+%env(REDIS_DSN)%'
                 serializer: messenger.transport.symfony_serializer
                 options:
-                    serializer: 0
                     stream: conv.data
                     group: convertor
 
             conv_ai:
-                dsn: '%env(REDIS_DSN)%'
+                dsn: 'conv+%env(REDIS_DSN)%'
                 serializer: messenger.transport.symfony_serializer
                 options:
-                    serializer: 0
                     stream: conv.ai
                     group: convertor
 
@@ -72,6 +75,5 @@ framework:
                     stream: conversions_failed
 
         # No routing map: ConversionManager::dispatch() targets the transport
-        # explicitly via TransportNamesStamp(['conv_'.$key]). conv.result is NOT a
-        # Messenger transport — it is a raw stream consumed by
-        # `app:queue:result-consumer` (workers emit it as plain JSON, not an envelope).
+        # explicitly via TransportNamesStamp(['conv_'.$key]).
+        # PHP MUST NOT run messenger:consume conv_* — gateway owns XREADGROUP/XACK.

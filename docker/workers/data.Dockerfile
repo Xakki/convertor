@@ -31,6 +31,13 @@ COPY --chown=app:app workers/data/ /app/workers/data/
 
 ENV WORKER_MODULE=workers.data.worker
 
+# Запекаем version в образ (§4/§8): ARG объявлены В stage worker (иначе не видны).
+# APP_VER → ENV (ws_client читает os.getenv); WORKER_BUILD → /app/.i (ws_client читает файл).
+ARG APP_VER=0
+ARG WORKER_BUILD=0
+ENV APP_VER=${APP_VER}
+RUN printf '%s' "${WORKER_BUILD}" > /app/.i
+
 USER app
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \

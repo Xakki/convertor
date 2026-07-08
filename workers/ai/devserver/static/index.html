@@ -169,46 +169,26 @@
     </article>
   </section>
 
-  <!-- ============ PULL STATS ============ -->
+  <!-- ============ WS STATS ============ -->
   <section x-show="tab==='stats'">
-    <template x-if="stats && (stats.pullEnabled===false || stats.state==='stopped')">
-      <article>&#9208; Pull processing is <strong>disabled</strong> (PULL_ENABLED=false). Enable it in Settings to see live data.</article>
-    </template>
-
-    <template x-if="stats && stats.pullEnabled!==false && stats.state!=='stopped'">
+    <template x-if="stats">
       <div>
         <div class="grid">
-          <article><small class="muted">State</small><br /><strong class="accent" x-text="stats.state"></strong></article>
-          <article><small class="muted">Processed</small><br /><strong x-text="stats.processed ?? 0"></strong></article>
-          <article><small class="muted">Success</small><br /><strong x-text="stats.success ?? 0"></strong></article>
-          <article><small class="muted">Failed</small><br /><strong x-text="stats.failed ?? 0"></strong></article>
+          <article>
+            <small class="muted">Gateway</small><br />
+            <strong :class="stats.connected ? 'accent' : 'muted'" x-text="stats.connected ? 'connected' : 'disconnected'"></strong>
+          </article>
+          <article>
+            <small class="muted">In-flight</small><br />
+            <strong x-text="stats.inflight ?? 0"></strong>
+          </article>
+          <article>
+            <small class="muted">Last pong</small><br />
+            <span class="muted" x-text="stats.lastPong || '–'"></span>
+          </article>
         </div>
-
-        <div class="grid" x-show="stats.latencyMs">
-          <article><small class="muted">Latency avg</small><br /><span x-text="(stats.latencyMs?.avg ?? '–')+' ms'"></span></article>
-          <article><small class="muted">p95</small><br /><span x-text="(stats.latencyMs?.p95 ?? '–')+' ms'"></span></article>
-          <article><small class="muted">last</small><br /><span x-text="(stats.latencyMs?.last ?? '–')+' ms'"></span></article>
-        </div>
-
-        <article>
-          <small class="muted">Current job</small>
-          <template x-if="stats.currentJob">
-            <div x-text="stats.currentJob.conversionId+'  '+stats.currentJob.sourceFormat+'→'+stats.currentJob.targetFormat+'  @'+stats.currentJob.startedAt"></div>
-          </template>
-          <template x-if="!stats.currentJob"><div class="muted">idle</div></template>
-        </article>
-
-        <article>
-          <small class="muted">Started at: <span x-text="stats.startedAt || '–'"></span></small>
-          <p style="margin:.5rem 0 0"><small class="muted">Last errors</small></p>
-          <template x-if="(stats.lastErrors||[]).length===0"><div class="muted">none</div></template>
-          <template x-for="(e,i) in stats.lastErrors||[]" :key="i">
-            <div style="color:var(--pico-del-color)"><small class="muted" x-text="e.at"></small> · <span x-text="e.conversionId"></span>: <span x-text="e.error"></span></div>
-          </template>
-        </article>
       </div>
     </template>
-
     <p class="muted" x-show="!stats">loading…</p>
   </section>
 
@@ -225,17 +205,6 @@
     <article x-show="s.error" style="color:var(--pico-del-color)">
       <strong x-show="s.errKey" x-text="s.errKey+': '"></strong><span x-text="s.error"></span>
     </article>
-
-    <!-- PULL_ENABLED prominent -->
-    <template x-if="pullField">
-      <article>
-        <label>
-          <input type="checkbox" role="switch" x-model="pullField.value" />
-          <strong>Pull processing</strong>
-        </label>
-        <small class="muted">Starts/stops the in-process pull loop at runtime (hot)</small>
-      </article>
-    </template>
 
     <template x-for="g in groups" :key="g">
       <article class="settings-group">

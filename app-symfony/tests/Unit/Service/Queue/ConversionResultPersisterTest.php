@@ -74,6 +74,27 @@ final class ConversionResultPersisterTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
+    public function testIdempotencySkipsFailedConversionNoDoubleRefund(): void
+    {
+        // Регрессия (A4, money-path): дубль-доставка задачи, уже в терминальном
+        // Failed, НЕ должна повторно вернуть квоту. Guard (ConversionResultPersister.php)
+        // покрывает оба терминала — Completed и Failed; это защита от регресса.
+        $conversion = $this->createStub(Conversion::class);
+        $conversion->method('getStatus')->willReturn(ConversionStatus::Failed);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('find')->willReturn($conversion);
+        $em->expects($this->never())->method('flush');
+
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->never())->method('refund');
+
+        $persister = $this->makePersister($this->makeRegistry($em), $quota);
+        $persister->persist(['conversionId' => 1, 'state' => 'failed', 'error' => 'boom']);
+
+        $this->addToAssertionCount(1);
+    }
+
     public function testEmIsObtainedFromRegistryOnEachCall(): void
     {
         $em = $this->createStub(EntityManagerInterface::class);

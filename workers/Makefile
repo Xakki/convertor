@@ -3,38 +3,101 @@
 # On-server worker image name prefix (COMPOSE_PROJECT_NAME from the root .env).
 IMG = $(COMPOSE_PROJECT_NAME)
 
+# Worker build-версия (§4/§8): полная version = APP_VER (.env) + монотонный build-счётчик
+# из gitignored `.i` в корне репо → напр. "0.1.6". Запекается в образ (ARG→ENV APP_VER +
+# /app/.i); воркер РЕПОРТИТ её в `ready` (транспорт-only, gateway не потребляет).
+# Инкремент — одна строка: bump-i (prereq у build-таргетов воркеров, выполняется раз за make).
+.PHONY: bump-i
+bump-i: ## Инкремент build-счётчика .i (создаёт при отсутствии)
+	@n=$$(cat $(CURDIR)/.i 2>/dev/null || echo 0); n=$$((n+1)); printf '%s' "$$n" > $(CURDIR)/.i; echo "build counter .i → $$n"
+
 # Build one on-server worker image. $(1)=image stem (the /<stem>:latest tag),
 # $(2)=dockerfile stem (docker/workers/<stem>.Dockerfile). Most workers share the
 # stem; metrics-exporter does NOT (tag has no `worker-` prefix, dockerfile is
-# metrics_exporter.Dockerfile) — hence two params.
+# metrics_exporter.Dockerfile) — hence two params. APP_VER + WORKER_BUILD запекают
+# version в образ (worker-Dockerfile'ы: ARG→ENV APP_VER + echo WORKER_BUILD > /app/.i).
 define build_img
-docker build -t $(IMG)/$(1):latest -f docker/workers/$(2).Dockerfile .
+docker build -t $(IMG)/$(1):latest \
+    --build-arg APP_VER=$(APP_VER) \
+    --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
+    -f docker/workers/$(2).Dockerfile .
+endef
+
+# Build a pre-baked :test image ON TOP of an existing :latest worker image.
+# Test deps are baked in — no pip install at runtime.  $(1)=image stem.
+define build_test_img
+docker build --build-arg BASE_IMAGE=$(IMG)/$(1):latest \
+    -t $(IMG)/$(1):test -f docker/workers/test.Dockerfile .
 endef
 
 ##@ Build individual worker images
 
 .PHONY: build-libreoffice
-build-libreoffice: ## Build worker-libreoffice image
+build-libreoffice: bump-i ## Build worker-libreoffice image
 	$(call build_img,worker-libreoffice,libreoffice)
 
 .PHONY: build-ffmpeg
-build-ffmpeg: ## Build worker-ffmpeg image
+build-ffmpeg: bump-i ## Build worker-ffmpeg image
 	$(call build_img,worker-ffmpeg,ffmpeg)
 
 .PHONY: build-image
-build-image: ## Build worker-image image
+build-image: bump-i ## Build worker-image image
 	$(call build_img,worker-image,image)
 
 .PHONY: build-data
-build-data: ## Build worker-data image
+build-data: bump-i ## Build worker-data image
 	$(call build_img,worker-data,data)
 
 .PHONY: build-metrics-exporter
 build-metrics-exporter: ## Build metrics-exporter image
 	$(call build_img,metrics-exporter,metrics_exporter)
 
+.PHONY: build-gateway
+build-gateway: ## Build ws-gateway image (Harbor-suitable)
+	$(call build_img,ws-gateway,gateway)
+
+.PHONY: push-gateway
+push-gateway: build-gateway ## Build + push ws-gateway в Harbor (проект convertor); нужен `make login`
+	docker tag $(IMG)/ws-gateway:latest $(HARBOR_NS)/ws-gateway:latest
+	docker push $(HARBOR_NS)/ws-gateway:latest
+
+.PHONY: gateway-up
+gateway-up: ## Start только ws-gateway (глобальный `make up` тоже его поднимает)
+	$(DC) up -d ws-gateway
+
+.PHONY: gateway-down
+gateway-down: ## Stop & remove только ws-gateway
+	$(DC) rm -sf ws-gateway
+
+.PHONY: gateway-logs
+gateway-logs: ## Tail логи ws-gateway
+	$(DC) logs -f ws-gateway
+
 .PHONY: build-workers
-build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter ## Build all on-server worker images (AI worker is remote — see build-ai-base / build-ai-cuda / build-ai-cpu)
+build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway ## Build all on-server worker images (AI worker is remote — see build-ai-base / build-ai-cuda / build-ai-cpu)
+
+.PHONY: build-data-test
+build-data-test: build-data ## Build worker-data:test (test deps pre-baked, не попадает в :latest)
+	$(call build_test_img,worker-data)
+
+.PHONY: build-ffmpeg-test
+build-ffmpeg-test: build-ffmpeg ## Build worker-ffmpeg:test (test deps pre-baked)
+	$(call build_test_img,worker-ffmpeg)
+
+.PHONY: build-image-test
+build-image-test: build-image ## Build worker-image:test (test deps pre-baked)
+	$(call build_test_img,worker-image)
+
+.PHONY: build-libreoffice-test
+build-libreoffice-test: build-libreoffice ## Build worker-libreoffice:test (test deps pre-baked)
+	$(call build_test_img,worker-libreoffice)
+
+.PHONY: build-metrics-test
+build-metrics-test: build-metrics-exporter ## Build metrics-exporter:test (test deps pre-baked)
+	$(call build_test_img,metrics-exporter)
+
+.PHONY: build-workers-test
+build-workers-test: build-data-test build-ffmpeg-test build-image-test build-libreoffice-test build-metrics-test ## Build all worker :test images (test deps pre-baked)
 
 ##@ Build worker-ai (remote / Harbor + local GPU)
 
@@ -129,64 +192,80 @@ queue-status: ## Show queue lengths in KeyDB (db 2)
 
 ##@ Worker tests
 
-# Per-worker unit runs: each worker's tests execute inside that worker's own
-# image (interpreter + pinned deps + system binaries). Source is bind-mounted
-# read-only and PYTHONPATH=/src, so code comes from the working tree; the image
-# only supplies deps. pytest(+asyncio) is installed at runtime (mirrors
-# test-image-ocr). `-m "not e2e"` keeps the same selection as the old host run;
-# integration tests now run for real (the binary IS present in the worker image).
-# $(1)=image  $(2)=test files  $(3)=extra pip pkgs
-define RUN_PYTEST_IN
-docker run --rm --entrypoint sh \
+# Per-worker unit runs: each worker's tests execute inside the pre-baked :test
+# image (test deps baked in — no pip install at runtime).
+# Source is bind-mounted read-only; PYTHONPATH=/src brings in the working tree.
+# $(1)=image  $(2)=test files
+define RUN_PYTEST_TEST
+docker run --rm \
 	-v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp -u root $(1) \
-	-c "pip install --no-cache-dir --quiet pytest pytest-asyncio $(3) && python3 -m pytest $(2) -m 'not e2e' -p no:cacheprovider -ra -v"
+	python3 -m pytest $(2) -m 'not e2e' -p no:cacheprovider -ra -v
 endef
 
 .PHONY: test-python
 test-python: test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai ## Run the unit suite per-worker INSIDE each worker image (excludes e2e + routing-drift; see test-e2e / test-drift)
 
 .PHONY: test-python-data
-test-python-data: build-data ## Unit tests for worker-data (+ shared common: stream_consumer, safe_path)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-data:latest,workers/tests/test_data_worker.py workers/tests/test_stream_consumer.py workers/tests/test_safe_path.py,)
+test-python-data: build-data-test ## Unit tests for worker-data (+ shared common: stream_consumer, envelope, safe_path) + WS transport
+	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-data:test,workers/tests/test_data_worker.py workers/tests/test_stream_consumer.py workers/tests/test_envelope_golden.py workers/tests/test_safe_path.py workers/tests/test_data_ws_transport.py)
 
 .PHONY: test-python-ffmpeg
-test-python-ffmpeg: build-ffmpeg ## Unit + integration tests for worker-ffmpeg (real ffmpeg binary)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ffmpeg_worker.py workers/tests/test_ffmpeg_integration.py,)
+test-python-ffmpeg: build-ffmpeg-test ## Unit + integration tests for worker-ffmpeg (real ffmpeg binary) + WS transport (dual-connection assert)
+	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:test,workers/tests/test_ffmpeg_worker.py workers/tests/test_ffmpeg_integration.py workers/tests/test_ffmpeg_ws_transport.py)
 
 .PHONY: test-python-image
-test-python-image: build-image ## Unit + OCR-integration tests for worker-image (+ cross-worker unsupported-format matrix)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-image:latest,workers/tests/test_image_worker_ocr.py workers/tests/test_image_worker_stream.py workers/tests/test_image_worker_ocr_integration.py workers/tests/test_unsupported_formats.py,)
+test-python-image: build-image-test ## Unit + OCR-integration tests for worker-image (+ cross-worker unsupported-format matrix) + WS transport
+	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-image:test,workers/tests/test_image_worker_ocr.py workers/tests/test_image_worker_stream.py workers/tests/test_image_worker_ocr_integration.py workers/tests/test_unsupported_formats.py workers/tests/test_image_ws_transport.py)
 
 .PHONY: test-python-libreoffice
-test-python-libreoffice: build-libreoffice ## Unit + integration tests for worker-libreoffice (real soffice/pandoc/pdftotext)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-libreoffice:latest,workers/tests/test_libreoffice_worker.py workers/tests/test_libreoffice_integration.py,)
+test-python-libreoffice: build-libreoffice-test ## Unit + integration tests for worker-libreoffice (real soffice/pandoc/pdftotext) + WS transport
+	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-libreoffice:test,workers/tests/test_libreoffice_worker.py workers/tests/test_libreoffice_integration.py workers/tests/test_libreoffice_ws_transport.py)
 
 .PHONY: test-python-metrics
-test-python-metrics: build-metrics-exporter ## Unit tests for metrics-exporter (needs prometheus_client — only in its image)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/metrics-exporter:latest,workers/tests/test_metrics_exporter.py,)
+test-python-metrics: build-metrics-test ## Unit tests for metrics-exporter (needs prometheus_client — only in its image)
+	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/metrics-exporter:test,workers/tests/test_metrics_exporter.py)
 
 # AI worker is remote/Harbor-built; its image isn't built on-server. Its unit
 # tests need httpx + the dev-server stack (worker.py / devserver import the heavy
-# STT/TTS libs lazily), so we run them in the lean worker-ffmpeg image with those
-# deps pip-installed at runtime. FastAPI's TestClient covers the WS route
-# in-process; python-multipart is required for the /api/run multipart upload test.
+# STT/TTS libs lazily). Runs in the pre-baked worker-ffmpeg:test image — test deps
+# (fastapi, uvicorn, python-multipart, webrtcvad-wheels, av, numpy, websockets)
+# are baked in via workers/requirements-test.txt.
 .PHONY: test-python-ai
-test-python-ai: build-ffmpeg ## AI-worker + dev-server unit tests (runs in worker-ffmpeg image, no Harbor pull)
-	$(call RUN_PYTEST_IN,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:latest,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py,httpx fastapi uvicorn[standard] python-multipart webrtcvad-wheels av==17.1.0 numpy)
+test-python-ai: build-ffmpeg-test ## AI-worker + dev-server unit tests (runs in worker-ffmpeg:test image, no Harbor pull)
+	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:test,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py)
 
+# test-drift запускается напрямую на хосте (не в контейнере): проверяет только
+# Python-словарь CAPABILITIES vs PHP-ключи реестра — нужен лишь src/ и stdlib.
 .PHONY: test-drift
 test-drift: ## Routing-contract: PHP registry routing keys vs Python worker CAPABILITIES (may fail on known gaps — see .claude/kanban/grooming/)
 	PYTHONPATH=. pytest workers/tests/test_routing_drift.py -v
 
-.PHONY: test-e2e
-test-e2e: ## Real S3 in/out e2e for ffmpeg + data workers (run `make up` first)
-	$(COMPOSE_TEST) up -d --force-recreate --no-deps worker-ffmpeg worker-data
-	$(COMPOSE_TEST) run --rm --no-deps --user $(PUID):$(PGID) \
+.PHONY: test-gateway
+test-gateway: build-data-test ## WS-Gateway KeyDB-слой на РЕАЛЬНОМ keydb (async, pytest-asyncio)
+	$(COMPOSE_TEST) up -d --wait keydb
+	docker run --rm -u root \
+	    --network $(COMPOSE_PROJECT_NAME)-network \
+	    -e REDIS_HOST=$(KEYDB_CONT) \
 	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
-	    --entrypoint sh worker-ffmpeg \
-	    -c "pip install --no-cache-dir --quiet --user pytest && \
-	        python3 -m pytest workers/tests/test_workers_e2e.py -m e2e -p no:cacheprovider -ra -v"; \
+	    $(COMPOSE_PROJECT_NAME)/worker-data:test \
+	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
+
+.PHONY: test-e2e
+test-e2e: build-workers build-ffmpeg-test ## Real S3 in/out e2e for ffmpeg + data workers (run `make up` first)
+	$(E2E_CLEAN_ENV) $(COMPOSE_TEST) up -d --force-recreate --no-deps --wait php nginx ws-gateway worker-ffmpeg-audio worker-ffmpeg-video worker-data
+	$(COMPOSE_TEST) exec -T php bin/console doctrine:migrations:migrate --no-interaction
+	docker run --rm -u root \
+	    --network $(COMPOSE_PROJECT_NAME)-network \
+	    -e REDIS_HOST=$(KEYDB_CONT) \
+	    -e REDIS_DB=3 \
+	    -e REDIS_PASSWORD -e S3_ENDPOINT -e S3_KEY -e S3_SECRET \
+	    -e S3_BUCKET_PREFIX -e S3_REGION -e S3_USE_PATH_STYLE \
+	    -e S3_PREFIX=test_ \
+	    -e DB_HOST=$(DB_HOST) -e DB_NAME=convertor-test -e DB_USER=convertor-test -e DB_PASS=$(DB_TEST_PASS) \
+	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
+	    $(COMPOSE_PROJECT_NAME)/worker-ffmpeg:test \
+	    python3 -m pytest workers/tests/test_workers_e2e.py -m e2e -p no:cacheprovider -ra -v; \
 	    rc=$$?; \
 	    echo "[test-e2e] restoring workers to base config…"; \
-	    $(DC) up -d --force-recreate --no-deps worker-ffmpeg worker-data >/dev/null; \
+	    $(DC) up -d --force-recreate --no-deps php nginx ws-gateway worker-ffmpeg-audio worker-ffmpeg-video worker-data >/dev/null; \
 	    exit $$rc

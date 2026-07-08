@@ -5,6 +5,9 @@ parameters:
     # Worker pull-API static bearer token (must be set in .env.local for prod)
     env(WORKER_API_TOKEN): ''
 
+    # WS-Gateway internal-relay bearer token (must be set in .env.local for prod)
+    env(GATEWAY_INTERNAL_TOKEN): ''
+
     # Object-key prefix for S3 results (e.g. "dev/" in dev, empty in prod).
     # Distinct from S3_BUCKET_PREFIX which is the bucket name prefix.
     env(S3_PREFIX): ''

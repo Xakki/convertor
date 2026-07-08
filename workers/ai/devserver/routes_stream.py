@@ -170,6 +170,12 @@ async def stream(ws: WebSocket) -> None:
                         decoder = _new_pcm_decoder(sample_rate)
                     decoder.feed(data)
                     pcm = decoder.drain()
+                    # Fail-fast: фоновый decode-поток мог упасть уже сейчас —
+                    # сообщаем на этом же тике, не копя пустые partial до stop.
+                    dec_err = decoder.decode_error()
+                    if dec_err is not None:
+                        await ws.send_json({"type": "error", "message": _safe_err(dec_err)})
+                        break
 
                 # VAD-разбивка; каждый готовый сегмент → transcribe
                 for seg in chunker.push(pcm):
@@ -186,7 +192,7 @@ async def stream(ws: WebSocket) -> None:
                     # Дренировать декодер → хвост PCM в VAD
                     if decoder is not None:
                         tail_pcm = await asyncio.to_thread(decoder.close)
-                        dec_err = decoder._decode_error
+                        dec_err = decoder.decode_error()
                         decoder = None
                         if dec_err is not None:
                             await ws.send_json({"type": "error", "message": _safe_err(dec_err)})

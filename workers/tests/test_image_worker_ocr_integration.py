@@ -10,7 +10,7 @@ inside the built worker-image container).
 
 import shutil
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
@@ -33,11 +33,7 @@ RESUME_PDF = Path(__file__).parent / "example_files" / "resume.pdf"
 
 
 def _build_worker() -> ImageWorker:
-    import workers.common.stream_consumer as sc_mod
-
-    with patch.object(sc_mod, "REDIS_HOST", "localhost"), \
-         patch("workers.common.stream_consumer.redis.Redis", return_value=MagicMock()):
-        return ImageWorker()
+    return ImageWorker()
 
 
 def _job(conv_id: int, src: Path, src_fmt: str, tgt_fmt: str) -> dict:
@@ -51,7 +47,6 @@ def _job(conv_id: int, src: Path, src_fmt: str, tgt_fmt: str) -> dict:
         "targetFormat": tgt_fmt,
         "category": "image",
         "isAi": False,
-        "subType": None,
         "options": [],
     }
 

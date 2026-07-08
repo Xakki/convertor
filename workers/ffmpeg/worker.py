@@ -1,9 +1,8 @@
-"""FFmpeg audio/video conversion worker — Phase 1, XREADGROUP-based.
+"""FFmpeg audio/video conversion worker — WS-транспорт (s1-10).
 
-Consumes streams conv.audio + conv.video (consumer group convertor). Reads the
-local input the base class downloaded from S3 (job['_localInput']), runs ffmpeg
-into a tmp output under WORK_DIR, and returns (out_path, mime, target_ext) for
-the base class to upload to the results bucket.
+Транспорт: WS-клиент (StreamConsumerBase.run()).
+Задача доставляется через process_job; job['_localInput'] уже заполнен WsClient'ом.
+convert() запускает ffmpeg в WORK_DIR и возвращает (out_path, mime, target_ext).
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
+from workers.common.subprocess_runner import run_capture
 
 logger = logging.getLogger(__name__)
 
@@ -103,23 +103,22 @@ async def run_ffmpeg(
 
     argv.append(str(out_path))
 
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError(f"ffmpeg timed out after {timeout}s")
-
-    if proc.returncode != 0:
-        err = err_b.decode("utf-8", "replace").strip()
-        raise RuntimeError(f"ffmpeg failed: {err}")
+    out_b, _err_b = await run_capture(argv, timeout, full_error=False)
 
     logger.debug("ffmpeg stdout: %s", out_b.decode("utf-8", "replace"))
+
+
+_AUDIO_INPUTS: set[str] = _AUDIO_FORMATS | {"wma"}
+_VIDEO_INPUTS: set[str] = {"3gp", "mp4", "avi", "mkv", "mov", "webm", "flv", "wmv"}
+
+AUDIO_CAPABILITIES: dict[str, Any] = {
+    "routing_keys": ["audio"],
+    "matrix": {k: v for k, v in SUPPORTED.items() if k in _AUDIO_INPUTS},
+}
+VIDEO_CAPABILITIES: dict[str, Any] = {
+    "routing_keys": ["video"],
+    "matrix": {k: v for k, v in SUPPORTED.items() if k in _VIDEO_INPUTS},
+}
 
 
 class FfmpegWorker(StreamConsumerBase):
@@ -144,8 +143,9 @@ class FfmpegWorker(StreamConsumerBase):
         if target_fmt not in SUPPORTED[src_fmt]:
             raise ValueError(f"unsupported conversion: {src_fmt} -> {target_fmt}")
 
-        WORK_DIR.mkdir(parents=True, exist_ok=True)
-        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
+        out_dir = Path(job.get("_jobDir") or str(WORK_DIR))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
         timeout = _VIDEO_TIMEOUT if target_fmt in _VIDEO_FORMATS else _AUDIO_TIMEOUT
 
         asyncio.run(run_ffmpeg(src, out_path, timeout))
@@ -161,4 +161,5 @@ class FfmpegWorker(StreamConsumerBase):
 
 
 if __name__ == "__main__":
-    FfmpegWorker().run()
+    from workers.ffmpeg.__main__ import main
+    main()

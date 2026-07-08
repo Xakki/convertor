@@ -1,14 +1,12 @@
-"""Document / markup conversion worker — Phase 1, XREADGROUP-based.
+"""Document / markup conversion worker — WS-транспорт (s1-10).
 
-Consumes stream conv.document (consumer group convertor). PHP folds the `markup`
-category into `document` at routing time, so this single worker handles both
-office documents and markup (md/html) sources. Reads the local input the base
-class downloaded from S3 (job['_localInput']), runs LibreOffice (headless
-soffice) + pandoc + poppler (pdftotext), writes the output under WORK_DIR, and
-returns (out_path, mime, target_ext) for the base class to upload to -results.
+Транспорт: WS-клиент (StreamConsumerBase.run()); job['_localInput'] заполнен WsClient'ом.
+PHP фолдит категорию `markup` в `document` при роутинге — воркер обрабатывает оба.
+convert() запускает LibreOffice (headless soffice) + pandoc + poppler (pdftotext),
+пишет вывод в WORK_DIR, возвращает (out_path, mime, target_ext).
 
 Engine selection is by the (sourceFormat, targetFormat) pair — the worker is
-flag-agnostic (it never reads ocr/subType):
+flag-agnostic (it never reads the ocr flag):
   - target md            → pandoc (pdf source: pdftotext text wrapped as md)
   - pdf source           → poppler pdftotext (txt/md) or pdftotext→soffice (docx)
   - md                   → pandoc to a soffice-importable form, then soffice
@@ -37,25 +35,20 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from workers.common.mime import DOC_TEXT_MIME
 from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
+from workers.common.subprocess_runner import run_capture
 
 logger = logging.getLogger(__name__)
 
 SOFFICE_TIMEOUT = int(os.getenv("SOFFICE_TIMEOUT", "180"))
 
-_DOCX_MIME = (
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-)
-
-# MIME types for output formats
+# MIME types for output formats (docx/pdf/txt/md — общие, из workers.common.mime)
 _MIME: dict[str, str] = {
-    "docx": _DOCX_MIME,
+    **DOC_TEXT_MIME,
     "odt":  "application/vnd.oasis.opendocument.text",
     "rtf":  "application/rtf",
-    "pdf":  "application/pdf",
-    "txt":  "text/plain",
     "html": "text/html",
-    "md":   "text/markdown",
     "epub": "application/epub+zip",
     "rst":  "text/x-rst",
 }
@@ -113,21 +106,7 @@ _MATRIX: dict[str, set[str]] = {
 # --------------------------------------------------------------------------
 
 async def _run(argv: list[str], timeout: int = SOFFICE_TIMEOUT) -> None:
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError(f"{argv[0]} timed out after {timeout}s")
-    if proc.returncode != 0:
-        err = err_b.decode("utf-8", "replace").strip()
-        out = out_b.decode("utf-8", "replace").strip()
-        raise RuntimeError(f"{argv[0]} failed: {err or out or proc.returncode}")
+    await run_capture(argv, timeout)
 
 
 async def run_soffice(src: Path, out_dir: Path, convert_to: str) -> None:
@@ -231,15 +210,16 @@ class LibreOfficeWorker(StreamConsumerBase):
         if target_fmt not in _MATRIX[src_fmt]:
             raise ValueError(f"unsupported conversion: {src_fmt} → {target_fmt}")
 
-        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        out_dir = Path(job.get("_jobDir") or str(WORK_DIR))
+        out_dir.mkdir(parents=True, exist_ok=True)
         # soffice/pandoc name outputs by the input stem, so convert inside a
-        # unique per-job dir to avoid collisions (and to isolate pandoc's media/
-        # dir from concurrent jobs), then expose the produced file flat in
-        # WORK_DIR for the base class to upload + clean. job_dir is torn down here
-        # since the base only unlinks the two flat tmp files it knows about.
-        job_dir = WORK_DIR / f"lo-{conv_id}-{uuid.uuid4().hex}"
+        # unique soffice-subdir to avoid collisions (and to isolate pandoc's
+        # media/ dir from concurrent jobs). The inner job_dir is torn down here
+        # eagerly (early rmtree below); the outer WsClient rmtree on the full
+        # out_dir (= _jobDir) covers out_path and anything else on exit.
+        job_dir = out_dir / f"lo-{conv_id}-{uuid.uuid4().hex}"
         job_dir.mkdir(parents=True, exist_ok=True)
-        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
+        out_path = out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
         try:
             # Pass the base-downloaded _localInput (already a unique in-<uuid>.<ext>
             # tmp under WORK_DIR) straight in — no full-file staging copy (OOM risk

@@ -165,8 +165,7 @@ services:
             timeout: 3s
             retries: 3
             start_period: 4s
-        # On both: queue producer (php/cron) reach it via default; the 5 workers
-        # live on the internal backend net and reach it there.
+        # default: queue producers (php/cron); backend: metrics-exporter scrape.
         networks:
             - default
             - backend
@@ -219,40 +218,29 @@ services:
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
-            REDIS_HOST: ${REDIS_HOST:-keydb}
-            REDIS_PASSWORD: ${REDIS_PASSWORD}
-            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
-            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
-            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             WORKER_MODULE: workers.libreoffice.worker
-            REDIS_PORT: ${REDIS_PORT:-6379}
-            # Worker pulls input from S3 + uploads results to S3.
-            S3_ENDPOINT: ${S3_ENDPOINT}
-            S3_KEY: ${S3_KEY}
-            S3_SECRET: ${S3_SECRET}
-            S3_REGION: ${S3_REGION}
-            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
-            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
-        depends_on:
-            keydb:
-                condition: service_healthy
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-libreoffice
+            WORKER_TYPE: document
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
         healthcheck:
             test: ["CMD", "soffice", "--version"]
             interval: 30s
             timeout: 10s
             retries: 3
             start_period: 20s
-        # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend = reach keydb.
+        # default: reaches gateway (public wss://) + Symfony API (http://nginx).
         networks:
             - default
-            - backend
 
-    worker-ffmpeg:
+    worker-ffmpeg-audio:
         build:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
         image: ${COMPOSE_PROJECT_NAME}/worker-ffmpeg:latest
-        container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg"
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg-audio"
         restart: unless-stopped
         init: true
         stop_grace_period: 30s
@@ -260,33 +248,52 @@ services:
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
-            REDIS_HOST: ${REDIS_HOST:-keydb}
-            REDIS_PASSWORD: ${REDIS_PASSWORD}
-            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
-            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
-            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             WORKER_MODULE: workers.ffmpeg.worker
-            REDIS_PORT: ${REDIS_PORT:-6379}
-            # Worker pulls input from S3 + uploads results to S3.
-            S3_ENDPOINT: ${S3_ENDPOINT}
-            S3_KEY: ${S3_KEY}
-            S3_SECRET: ${S3_SECRET}
-            S3_REGION: ${S3_REGION}
-            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
-            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
-        depends_on:
-            keydb:
-                condition: service_healthy
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-ffmpeg-audio
+            WORKER_TYPE: audio
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
         healthcheck:
             test: ["CMD", "ffmpeg", "-version"]
             interval: 30s
             timeout: 5s
             retries: 3
             start_period: 10s
-        # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend = reach keydb.
+        # default: reaches gateway (public wss://) + Symfony API (http://nginx).
         networks:
             - default
-            - backend
+
+    worker-ffmpeg-video:
+        build:
+            context: .
+            dockerfile: docker/workers/ffmpeg.Dockerfile
+        image: ${COMPOSE_PROJECT_NAME}/worker-ffmpeg:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg-video"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            WORKER_MODULE: workers.ffmpeg.worker
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-ffmpeg-video
+            WORKER_TYPE: video
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
+        healthcheck:
+            test: ["CMD", "ffmpeg", "-version"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        # default: reaches gateway (public wss://) + Symfony API (http://nginx).
+        networks:
+            - default
 
     worker-image:
         build:
@@ -301,34 +308,22 @@ services:
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
-            REDIS_HOST: ${REDIS_HOST:-keydb}
-            REDIS_PASSWORD: ${REDIS_PASSWORD}
-            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
-            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
-            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             WORKER_MODULE: workers.image.worker
-            REDIS_PORT: ${REDIS_PORT:-6379}
-            # Image worker uploads results to S3 + emits the result event.
-            S3_ENDPOINT: ${S3_ENDPOINT}
-            S3_KEY: ${S3_KEY}
-            S3_SECRET: ${S3_SECRET}
-            S3_REGION: ${S3_REGION}
-            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
-            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
-        depends_on:
-            keydb:
-                condition: service_healthy
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-image
+            WORKER_TYPE: image
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
         healthcheck:
             test: ["CMD", "convert", "-version"]
             interval: 30s
             timeout: 5s
             retries: 3
             start_period: 10s
-        # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend =
-        # reach keydb. All workers are on `default` now (Phase 4 migration done).
+        # default: reaches gateway (public wss://) + Symfony API (http://nginx).
         networks:
             - default
-            - backend
 
     # worker-ai is a REMOTE worker (home WSL + GPU), run separately via
     # docker-compose.worker-ai.yml (add it to COMPOSE_FILE in .env.local). It is
@@ -347,33 +342,68 @@ services:
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
-            REDIS_HOST: ${REDIS_HOST:-keydb}
-            REDIS_PASSWORD: ${REDIS_PASSWORD}
-            # Workers read REDIS_DB; keep it on db 2 to match the PHP messenger
-            # transport (REDIS_DSN ?dbindex=2). See docs/queue-contract.md.
-            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             WORKER_MODULE: workers.data.worker
-            REDIS_PORT: ${REDIS_PORT:-6379}
-            # Worker pulls input from S3 + uploads results to S3.
-            S3_ENDPOINT: ${S3_ENDPOINT}
-            S3_KEY: ${S3_KEY}
-            S3_SECRET: ${S3_SECRET}
-            S3_REGION: ${S3_REGION}
-            S3_BUCKET_PREFIX: ${S3_BUCKET_PREFIX}
-            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
-        depends_on:
-            keydb:
-                condition: service_healthy
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-data
+            WORKER_TYPE: data
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
         healthcheck:
             test: ["CMD", "python3", "-c", "import pandas, yaml, lxml; print('ok')"]
             interval: 30s
             timeout: 10s
             retries: 3
             start_period: 10s
-        # default = egress to the shared S3 endpoint (apis3.xakki.ru); backend = reach keydb.
+        # default: reaches gateway (public wss://) + Symfony API (http://nginx).
         networks:
             - default
+
+    ws-gateway:
+        build:
+            context: .
+            dockerfile: docker/workers/gateway.Dockerfile
+        image: ${COMPOSE_PROJECT_NAME}/ws-gateway:latest
+        container_name: "${COMPOSE_PROJECT_NAME}-ws-gateway"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            REDIS_HOST: ${REDIS_HOST:-keydb}
+            REDIS_PORT: ${REDIS_PORT:-6379}
+            REDIS_DB: ${REDIS_DB:-2}
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+            WS_BLOCK_MS: ${WS_BLOCK_MS}
+            WS_HOST: ${WS_HOST}
+            WS_PORT: ${WS_PORT}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            WS_RESULT_INLINE_MAX: ${WS_RESULT_INLINE_MAX}
+            GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN}
+            SYMFONY_INTERNAL_URL: ${SYMFONY_INTERNAL_URL}
+            WS_PING_INTERVAL_S: ${WS_PING_INTERVAL_S}
+            WS_LIVENESS_MISSED_PINGS: ${WS_LIVENESS_MISSED_PINGS}
+            WS_RECONNECT_BACKOFF_BASE_S: ${WS_RECONNECT_BACKOFF_BASE_S}
+            WS_RECONNECT_BACKOFF_MAX_S: ${WS_RECONNECT_BACKOFF_MAX_S}
+            WS_RECONNECT_BACKOFF_FACTOR: ${WS_RECONNECT_BACKOFF_FACTOR}
+            RECLAIM_INTERVAL_S: ${RECLAIM_INTERVAL_S:-60}
+            RECLAIM_BATCH: ${RECLAIM_BATCH:-10}
+            RECLAIM_IDLE_MS_DOCUMENT: ${RECLAIM_IDLE_MS_DOCUMENT:-300000}
+            RECLAIM_IDLE_MS_IMAGE: ${RECLAIM_IDLE_MS_IMAGE:-120000}
+            RECLAIM_IDLE_MS_AUDIO: ${RECLAIM_IDLE_MS_AUDIO:-300000}
+            RECLAIM_IDLE_MS_VIDEO: ${RECLAIM_IDLE_MS_VIDEO:-600000}
+            RECLAIM_IDLE_MS_DATA: ${RECLAIM_IDLE_MS_DATA:-180000}
+            RECLAIM_IDLE_MS_AI: ${RECLAIM_IDLE_MS_AI:-300000}
+        depends_on:
+            keydb:
+                condition: service_healthy
+        # backend: единственный читатель keydb (XREADGROUP/XACK/XAUTOCLAIM);
+        # default: публичный фронт (nginx /ws/worker/) + egress к Symfony (internal relay).
+        networks:
             - backend
+            - default
 
     metrics-exporter:
         build:

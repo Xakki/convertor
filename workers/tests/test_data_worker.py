@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -37,21 +37,16 @@ def _make_job(conv_id: int, input_path: Path, src_fmt: str, tgt_fmt: str) -> dic
         "targetFormat": tgt_fmt,
         "category": "data",
         "isAi": False,
-        "subType": None,
         "options": [],
     }
 
 
 def _worker(tmp_path: Path) -> DataWorker:
-    """Return a DataWorker with redis + WORK_DIR mocked."""
+    """Return a DataWorker with WORK_DIR mocked."""
     import workers.common.stream_consumer as sc_mod
     import workers.data.worker as dw_mod
 
-    mock_redis = MagicMock()
-    with patch.object(sc_mod, "REDIS_HOST", "localhost"), \
-         patch("workers.common.stream_consumer.redis.Redis", return_value=mock_redis):
-        worker = DataWorker()
-
+    worker = DataWorker()
     patch.object(dw_mod, "WORK_DIR", tmp_path).start()
     patch.object(sc_mod, "WORK_DIR", tmp_path).start()
     return worker

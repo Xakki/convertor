@@ -1,0 +1,6 @@
+# WS-Gateway pinned requirements
+# Async-клиент (redis.asyncio) идёт в комплекте redis-py.
+redis==8.0.0
+websockets==13.1
+# httpx — internal-relay gateway→Symfony (inline result / fail), s1-04.
+httpx==0.27.2

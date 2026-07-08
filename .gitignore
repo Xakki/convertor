@@ -19,3 +19,4 @@ app-symfony/config/jwt/
 docker/mysqld_exporter.cnf
 __pycache__/
 *.pyc
+.i

@@ -28,7 +28,6 @@ def _job(input_path: Path, src_fmt: str, tgt_fmt: str) -> dict:
         "targetFormat": tgt_fmt,
         "category": "image",
         "isAi": False,
-        "subType": None,
         "options": [],
     }
 

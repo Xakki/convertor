@@ -1,0 +1,405 @@
+"""Тесты result/fail-роутинга + internal-relay + XACK-after-persist (s1-04, §5).
+
+Фейковый KeyDb (детерминизм) + реальный WS-сервер на эфемерном порту + фейковый
+воркер (`websockets`-клиент). Relay в Symfony замокан через `httpx.MockTransport`
+(RelayClient сериализует по-настоящему — ловим точную форму тела и заголовки).
+
+Проверяем инвариант §5: `XACK` делает ТОЛЬКО gateway и ТОЛЬКО после подтверждённого
+persist (inline/fail — 2xx от relay; large — на доверии). Кредит освобождается
+после ack → следующий `XREADGROUP`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+from contextlib import asynccontextmanager
+
+import httpx
+import pytest
+from websockets.asyncio.client import connect
+from websockets.asyncio.server import serve
+
+from workers.gateway.config import Config
+from workers.gateway.relay import RelayClient
+from workers.gateway.ws_server import WsGateway
+
+TOKEN = "test-token"
+INTERNAL_TOKEN = "internal-tok"
+BLOCK_MS = 50
+BASE_URL = "http://symfony-test"
+
+
+class FakeKeyDb:
+    """Дак-тайп замена KeyDbGateway: скриптованные записи + журнал вызовов/ack."""
+
+    def __init__(self, *, new_entries=None, pending_entries=None, times_delivered=1):
+        self._new = list(new_entries or [])
+        self._pending = list(pending_entries or [])
+        self._times_delivered = times_delivered
+        self.read_new_calls: list[tuple] = []
+        self.meta_writes: list[tuple] = []
+        self.acks: list[tuple] = []
+        self.dlq_writes: list[dict] = []
+        self.status_clears: list[int] = []
+
+    async def read_pending(self, stream, consumer, count=100):
+        out, self._pending = self._pending, []
+        return out
+
+    async def reclaim_stale(self, stream, consumer):
+        return None
+
+    async def read_new(self, stream, consumer, block_ms):
+        self.read_new_calls.append((stream, consumer, block_ms))
+        if self._new:
+            return self._new.pop(0)
+        await asyncio.sleep(0.02)
+        return None
+
+    async def write_job_meta(self, job_id, job, stream):
+        self.meta_writes.append((job_id, job, stream))
+
+    async def set_status_processing(self, job_id, job, worker="gw-reclaim"):
+        pass
+
+    async def update_status_progress(self, conv_id, percent, stage=None):
+        pass
+
+    async def clear_status(self, conv_id):
+        self.status_clears.append(conv_id)
+
+    async def get_job_meta(self, job_id):
+        return {"conversionId": 1, "inputBucket": "", "inputKey": "", "stream": "", "targetFormat": ""}
+
+    async def get_times_delivered(self, stream, job_id):
+        return self._times_delivered
+
+    async def add_to_dlq(self, stream, job_id, conv_id, reason):
+        self.dlq_writes.append({"stream": stream, "jobId": job_id, "convId": conv_id, "reason": reason})
+
+    async def ack(self, stream, job_id):
+        # Зеркалит реальный ack: XACK + DEL. Идемпотентность проверяем на уровне
+        # gateway (дубликат не доходит сюда второй раз).
+        self.acks.append((stream, job_id))
+
+
+class RelayRecorder:
+    """MockTransport-обработчик: пишет запросы, отдаёт настраиваемый статус."""
+
+    def __init__(self, status=200):
+        self.status = status
+        self.requests: list[dict] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append({
+            "path": request.url.path,
+            "auth": request.headers.get("Authorization"),
+            "body": json.loads(request.content.decode("utf-8")),
+        })
+        return httpx.Response(self.status)
+
+
+def _cfg(inline_max=262144):
+    return Config(
+        redis_host="unused", redis_port=6379, redis_db=2, redis_password=None,
+        ws_block_ms=BLOCK_MS, ws_host="localhost", ws_port=0, worker_api_token=TOKEN,
+        ws_result_inline_max=inline_max, gateway_internal_token=INTERNAL_TOKEN,
+        symfony_internal_url=BASE_URL,
+    )
+
+
+def _relay(recorder: RelayRecorder) -> RelayClient:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(recorder.handler))
+    return RelayClient(BASE_URL, INTERNAL_TOKEN, client=client)
+
+
+@asynccontextmanager
+async def _server(fake, recorder, inline_max=262144):
+    gw = WsGateway(_cfg(inline_max), fake, relay=_relay(recorder))
+    async with serve(gw.handle, "localhost", 0) as server:
+        yield server.sockets[0].getsockname()[1]
+
+
+def _auth():
+    return {"Authorization": f"Bearer {TOKEN}"}
+
+
+def _ready(worker_id="w-1", worker_type="image", slots=1):
+    return json.dumps({
+        "type": "ready", "workerId": worker_id, "workerType": worker_type, "slots": slots,
+    })
+
+
+async def _recv_job(c):
+    while True:
+        frame = json.loads(await asyncio.wait_for(c.recv(), timeout=1.0))
+        if frame.get("type") != "ready-ack":
+            return frame
+
+
+def _b64(nbytes: int) -> str:
+    return base64.b64encode(b"x" * nbytes).decode("ascii")
+
+
+# --------------------------------------------------------------------------
+# inline result → relay → ack (only on 2xx) → credit released → next XREADGROUP
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_inline_result_relayed_then_acked_and_credit_released():
+    payload = _b64(10)
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            first = await _recv_job(c)
+            assert first["jobId"] == "1-0"
+            # результат по job1 → relay result → ack → кредит освобождён
+            await c.send(json.dumps({
+                "type": "result", "jobId": "1-0", "inline": payload,
+                "mime": "text/plain", "processingMs": 42,
+            }))
+            # следующий XREADGROUP выдаёт job2 (доказывает release кредита)
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    # relay вызван на /result с точной формой тела + bearer internal-токена
+    assert len(rec.requests) == 1
+    r = rec.requests[0]
+    assert r["path"] == "/api/v1/internal/worker/result"
+    assert r["auth"] == f"Bearer {INTERNAL_TOKEN}"
+    assert r["body"] == {
+        "jobId": "1-0", "data": payload, "mime": "text/plain", "processingMs": 42,
+    }
+    # ack ровно один — по job1 (XACK+DEL), stream = conv.image
+    assert fake.acks == [("conv.image", "1-0")]
+
+
+@pytest.mark.asyncio
+async def test_inline_result_non_2xx_no_ack_but_credit_released():
+    # nit#1 (no-wedge): non-2xx → НЕ ack (pending), НО кредит освобождён →
+    # диспетчер идёт к следующему `>` (job2 выдаётся на том же соединении).
+    payload = _b64(10)
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    rec = RelayRecorder(status=500)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            first = await _recv_job(c)
+            assert first["jobId"] == "1-0"
+            await c.send(json.dumps({"type": "result", "jobId": "1-0", "inline": payload}))
+            # кредит освобождён (без ack) → следующий job приходит, соединение не клинит
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    assert len(rec.requests) == 1  # relay попытались вызвать
+    assert fake.acks == []          # но НЕ ack'нули — запись 1-0 остаётся pending
+
+
+# --------------------------------------------------------------------------
+# large (resultKey) → ack на доверии, без relay
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_large_result_trust_acked_without_relay():
+    job1 = {"conversionId": 1, "targetFormat": "mp4"}
+    job2 = {"conversionId": 2, "targetFormat": "mp4"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="vid-1", worker_type="video", slots=1))
+            first = await _recv_job(c)
+            assert first["jobId"] == "1-0"
+            await c.send(json.dumps({
+                "type": "result", "jobId": "1-0", "resultKey": "results/2026/07-03/1.mp4",
+            }))
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    assert rec.requests == []                    # relay НЕ вызывался
+    assert fake.acks == [("conv.video", "1-0")]  # ack на доверии
+
+
+# --------------------------------------------------------------------------
+# fail (s1-06): retryable → no relay, no ack; permanent/max-retries → DLQ
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fail_retryable_no_relay_no_ack_credit_released():
+    """Retryable fail (times_delivered<=MAX_RETRIES, не permanent): relay НЕ вызывается,
+    запись остаётся unacked (idle-reclaim подберёт), кредит освобождается (не клинит).
+    Поведение изменено s1-06 (было: relay+ack)."""
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    # times_delivered=1 ≤ MAX_RETRIES=3 → retryable
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)], times_delivered=1)
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="d-1", worker_type="data", slots=1))
+            first = await _recv_job(c)
+            assert first["jobId"] == "1-0"
+            await c.send(json.dumps({"type": "fail", "jobId": "1-0", "error": "transient"}))
+            # Кредит освобождён → job2 диспетчеризуется (соединение не клинит)
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    # Relay НЕ вызывался (retryable — PHP узнает через conv.dead или успешный retry)
+    assert rec.requests == []
+    # Запись оставлена unacked — нет ни ack, ни dlq
+    assert fake.acks == []
+    assert fake.dlq_writes == []
+
+
+@pytest.mark.asyncio
+async def test_fail_permanent_goes_to_dlq():
+    """permanent:true → немедленный DLQ (conv.dead + ack), без relay."""
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1)], times_delivered=1)
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="d-1", worker_type="data", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({
+                "type": "fail", "jobId": "1-0", "error": "unsupported format",
+                "permanent": True,
+            }))
+            await asyncio.sleep(0.1)
+
+    assert rec.requests == []  # relay НЕ вызывался
+    assert fake.acks == []     # ack идёт через add_to_dlq
+    assert len(fake.dlq_writes) == 1
+    dlq = fake.dlq_writes[0]
+    assert dlq["jobId"] == "1-0"
+    assert "unsupported format" in dlq["reason"]
+
+
+@pytest.mark.asyncio
+async def test_fail_max_retries_exceeded_goes_to_dlq():
+    """times_delivered > MAX_RETRIES → DLQ (conv.dead), без relay, кредит освобождён."""
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    # times_delivered=4 > MAX_RETRIES=3 → DLQ
+    fake = FakeKeyDb(new_entries=[("1-0", job1)], times_delivered=4)
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="d-1", worker_type="data", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({"type": "fail", "jobId": "1-0", "error": "timeout"}))
+            await asyncio.sleep(0.1)
+
+    assert rec.requests == []
+    assert fake.acks == []
+    assert len(fake.dlq_writes) == 1
+    dlq = fake.dlq_writes[0]
+    assert "timeout" in dlq["reason"]
+    assert "times_delivered=4" in dlq["reason"]
+
+
+# --------------------------------------------------------------------------
+# inline свыше порога → rejected, no ack, no relay
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_oversized_inline_rejected_no_ack_credit_released():
+    over = _b64(101)  # декодированных 101 байт > порога 100
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec, inline_max=100) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            first = await _recv_job(c)
+            assert first["jobId"] == "1-0"
+            await c.send(json.dumps({"type": "result", "jobId": "1-0", "inline": over}))
+            # отклонено без ack, НО кредит освобождён → job2 диспетчеризуется (nit#1)
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    assert rec.requests == []  # relay НЕ вызывался (отклонено до relay)
+    assert fake.acks == []     # НЕ ack'нули — воркер обязан был идти большим путём
+
+
+@pytest.mark.asyncio
+async def test_inline_at_limit_accepted():
+    exact = _b64(100)  # ровно порог
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec, inline_max=100) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({"type": "result", "jobId": "1-0", "inline": exact}))
+            await asyncio.sleep(0.1)
+
+    assert len(rec.requests) == 1
+    # null-shape контракта: mime/processingMs присутствуют как null при отсутствии
+    assert rec.requests[0]["body"] == {
+        "jobId": "1-0", "data": exact, "mime": None, "processingMs": None,
+    }
+    assert fake.acks == [("conv.image", "1-0")]
+
+
+# --------------------------------------------------------------------------
+# slots≥2: возобновление раньше новых + Condition-gating N>1 (nit-test #2 s1-03)
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_two_slots_resume_before_new_and_credit_gating():
+    payload = _b64(10)
+    pjob = {"conversionId": 9, "targetFormat": "txt"}      # возобновляемая (PEL)
+    new1 = {"conversionId": 10, "targetFormat": "txt"}
+    new2 = {"conversionId": 11, "targetFormat": "txt"}
+    fake = FakeKeyDb(
+        pending_entries=[("9-0", pjob)], new_entries=[("10-0", new1), ("11-0", new2)]
+    )
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=2))
+            # порядок: возобновлённая (read_pending) ПЕРЕД новой (read_new)
+            assert (await _recv_job(c))["jobId"] == "9-0"
+            assert (await _recv_job(c))["jobId"] == "10-0"
+            # 2 слота заняты → третья (11-0) НЕ проталкивается
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(c.recv(), timeout=0.3)
+            # освобождаем один кредит → gating (len<slots) пускает 11-0
+            await c.send(json.dumps({"type": "result", "jobId": "9-0", "inline": payload}))
+            assert (await _recv_job(c))["jobId"] == "11-0"
+
+    assert fake.acks == [("conv.image", "9-0")]
+
+
+# --------------------------------------------------------------------------
+# Идемпотентность: двойной result по одному jobId → ровно один ack (carry-forward)
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_double_result_same_job_acked_once():
+    payload = _b64(10)
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            await _recv_job(c)
+            frame = json.dumps({"type": "result", "jobId": "1-0", "inline": payload})
+            await c.send(frame)
+            await c.send(frame)  # дубликат (полу-живой сокет / повтор)
+            await asyncio.sleep(0.15)
+
+    # relay и ack ровно по одному разу — второй result no-op (не в inflight)
+    assert len(rec.requests) == 1
+    assert fake.acks == [("conv.image", "1-0")]

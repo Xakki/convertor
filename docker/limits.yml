@@ -36,3 +36,13 @@ services:
         # Prometheus 7d peak (matrix_dev): mem 19M, cpu 0.004
         mem_limit: "128M"
         cpus: "1.0"
+
+    ws-gateway:
+        # Async-Python gateway: держит WS-соединения воркеров + читает keydb-стримы.
+        # I/O-bound, без тяжёлых вычислений — скромный запас на рост числа соединений.
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "1"
+                    memory: "256M"

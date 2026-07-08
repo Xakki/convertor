@@ -1,9 +1,8 @@
 """Data format conversion worker: csv ↔ json ↔ xml ↔ yaml ↔ toml.
 
-Phase 1, XREADGROUP-based: consumes stream conv.data (consumer group
-convertor), reads the local input the base class downloaded from S3
-(job['_localInput']), and returns (out_path, mime, target_ext) for the base
-class to upload to the results bucket.
+Транспорт: WS-клиент (StreamConsumerBase.run(), s1-10).
+Задача доставляется через process_job; job['_localInput'] уже заполнен WsClient'ом.
+convert() возвращает (out_path, mime, target_ext) → ResultSignal → gateway.
 """
 
 from __future__ import annotations
@@ -249,8 +248,9 @@ class DataWorker(StreamConsumerBase):
         if canon_out not in allowed:
             raise ValueError(f"unsupported conversion: {src_fmt} -> {target_fmt}")
 
-        WORK_DIR.mkdir(parents=True, exist_ok=True)
-        out_path = WORK_DIR / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
+        out_dir = Path(job.get("_jobDir") or str(WORK_DIR))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
 
         data = _read_data(src)
         _write_data(data, out_path)

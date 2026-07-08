@@ -5,7 +5,7 @@ function devserver() {
     tabs: [
       { id: 'methods',  label: 'Methods' },
       { id: 'stream',   label: 'Audio stream' },
-      { id: 'stats',    label: 'Pull stats' },
+      { id: 'stats',    label: 'WS stats' },
       { id: 'settings', label: 'Settings' },
     ],
     tab: 'methods',
@@ -244,7 +244,7 @@ function devserver() {
       this.ws.rec = null; this.ws.stream = null; this.ws.sock = null;
     },
 
-    // ============ PULL STATS ============
+    // ============ WS STATS ============
     startStatsPoll() {
       this.fetchStats();
       this._statsTimer = setInterval(() => this.fetchStats(), 2000);
@@ -258,11 +258,10 @@ function devserver() {
     // ============ SETTINGS ============
     get groups() {
       const seen = [];
-      for (const f of this.settings) if (f.key !== 'PULL_ENABLED' && !seen.includes(f.group)) seen.push(f.group);
+      for (const f of this.settings) if (!seen.includes(f.group)) seen.push(f.group);
       return seen;
     },
-    get pullField() { return this.settings.find(f => f.key === 'PULL_ENABLED') || null; },
-    fieldsByGroup(g) { return this.settings.filter(f => f.group === g && f.key !== 'PULL_ENABLED'); },
+    fieldsByGroup(g) { return this.settings.filter(f => f.group === g); },
     groupLabel(g) {
       return ({
         pull: 'Pull processing',

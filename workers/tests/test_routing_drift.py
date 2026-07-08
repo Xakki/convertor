@@ -211,18 +211,17 @@ def test_worker_matrix_subset_of_registry(
     both sides before comparison.  Genuine format differences (toml, wma, 3gp…)
     are NOT normalised and will surface as failures if missing from PHP.
     """
-    # Build normalised set from registry (skip AI virtual sources like mp3_stt / txt_tts)
+    # Build normalised set from registry; AI pairs are now flat (no _stt/_tts virtual keys)
     registry_pairs: set[tuple[str, str]] = {
         (_canon(e["from"]), _canon(e["to"]))
         for e in registry["matrix"]
-        if not (e["from"].endswith("_stt") or e["from"].endswith("_tts"))
     }
 
     failures: list[str] = []
     for worker_name, caps in workers:
         matrix: dict[str, list[str]] = caps.get("matrix", {})
         if not matrix:
-            continue  # AI worker has empty matrix — vacuously satisfied
+            continue  # worker has no matrix — vacuously satisfied
 
         for src, targets in matrix.items():
             canon_src = _canon(src)

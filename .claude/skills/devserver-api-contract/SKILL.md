@@ -33,14 +33,14 @@ keeps the prefix.
 
 ## Architecture notes (binding decisions)
 
-- **Pull-loop runs IN the dev-server.** The dev-server owns a controllable
-  background pull task (`PullRunner`) wrapping the worker poll loop. It starts
-  when effective `PULL_ENABLED=true`, stops when false. Toggling the setting at
-  runtime starts/stops this task — no process restart. This is how Stats sees
-  live data and Settings toggles processing. (Prod `worker` mode is unchanged;
-  the loop logic is refactored to be start/stop-able + instrumented, keeping
-  existing `workers/tests/test_ai_worker.py` green.)
-- **Stats are in-memory** in a shared `Stats` object the `PullRunner` updates and
+- **WS-runner runs IN the dev-server.** The dev-server owns a controllable
+  background WS task (`WsRunner`) that wraps a `WsClient` connecting to the
+  gateway. It always starts on lifespan startup (`WsClient.validate()` handles
+  the "no gateway configured" case gracefully — logs and returns without looping).
+  The runner can be hot-stopped/started via `runner.stop()`/`runner.start()`
+  calls in `routes_settings`. `update_cfg()` swaps in a new AI config; it takes
+  effect on the next job (LLM parameters etc. applied per-job).
+- **Stats are in-memory** in a shared `Stats` object the `WsRunner` updates and
   `routes_stats` reads. Not persisted; reset on restart.
 - **Settings overrides persist to a volume JSON** (`DEVSERVER_CONFIG_PATH`,
   default `/data/devserver_settings.json`). MUST NOT default under `WORK_DIR`
@@ -126,18 +126,16 @@ has no port). Missing Origin (CLI/TestClient) is allowed; the token check still 
 Backed by `StreamingWhisper.process_chunk(bytes)` (window/overlap from settings).
 
 ## GET /api/stats
-Live pull-processing stats from the in-process `PullRunner`.
+Live WS-stats from the in-process `WsRunner`.
 ```json
-{ "pullEnabled": true,
-  "state": "running",            // "running" | "idle" | "stopped"
-  "processed": 42, "success": 40, "failed": 2,
-  "latencyMs": { "avg": 1200, "p95": 3400, "last": 900 },
-  "currentJob": { "conversionId": "c_123", "sourceFormat": "mp3", "targetFormat": "txt", "startedAt": "2026-06-26T10:00:00Z" },
-  "lastErrors": [ { "conversionId": "c_120", "error": "...", "at": "2026-06-26T09:58:00Z" } ],
-  "startedAt": "2026-06-26T09:50:00Z" }
+{ "connected": true,
+  "inflight": 1,
+  "lastPong": null }
 ```
-When `PULL_ENABLED=false`: `{ "pullEnabled": false, "state": "stopped" }` plus
-last-known counters if any (UI shows "processing disabled").
+`connected` = WsRunner task alive (proxies "currently connected to gateway").
+`inflight` = число задач, обрабатываемых прямо сейчас.
+`lastPong` = ISO UTC string последнего pong от gateway (`null` до первого pong).
+When runner not started / gateway not configured: `{ "connected": false, "inflight": 0, "lastPong": null }`.
 
 ## GET /api/settings
 All editable settings with metadata. `apply` = `"hot"` (live) or `"restart"`
@@ -148,8 +146,6 @@ field title and `help` as a `<small>` + native `title=` tooltip. Both omitted fr
 the abbreviated sample below for brevity; they are present on every setting.
 ```json
 { "settings": [
-  { "key": "PULL_ENABLED",       "value": false, "type": "bool",   "group": "pull",      "apply": "hot",     "label": "Enable pull processing", "help": "Master switch for the in-process pull loop…" },
-  { "key": "POLL_INTERVAL",      "value": 10,    "type": "int",    "group": "pull",      "apply": "hot" },
   { "key": "LLM_MAX_TOKENS",     "value": 1024,  "type": "int",    "group": "llm",       "apply": "hot" },
   { "key": "LLM_TEMPERATURE",    "value": 0.7,   "type": "float",  "group": "llm",       "apply": "hot" },
   { "key": "LLM_SYSTEM_PROMPT",  "value": "",    "type": "str",    "group": "llm",       "apply": "hot" },
@@ -177,11 +173,11 @@ it as a "find models ↗" link next to the field. Absent on settings without one
 ## PUT /api/settings
 Body: `{ "<KEY>": <value>, ... }` (subset). Backend validates types/enums,
 writes the overlay JSON (persist on volume), re-derives effective config, and:
-- `hot` keys apply immediately; toggling `PULL_ENABLED` starts/stops `PullRunner`.
+- `hot` keys apply immediately (LLM params — runner picks up on next job).
 - `restart` keys are persisted and take effect on next model build / restart.
 Response:
 ```json
-{ "ok": true, "applied": ["PULL_ENABLED"], "pendingRestart": ["WHISPER_MODEL"],
+{ "ok": true, "applied": ["LLM_MAX_TOKENS"], "pendingRestart": ["WHISPER_MODEL"],
   "settings": [ /* same shape as GET, refreshed */ ] }
 ```
 Validation error: HTTP 422 `{ "ok": false, "error": "...", "key": "WHISPER_MODEL" }`.
@@ -197,9 +193,9 @@ doesn't cover (x-cloak, tab active state, status badges, record indicator, field
 rows). Asset/API/WS URLs are base-path relative (see above) so it serves at `:8877/`
 and under `/worker-ai/`.
 Tabs: **Methods** (pick mode/source/target, upload, run, preview/download),
-**Audio stream** (mic → WS → live transcript), **Pull stats** (poll `/api/stats`
-every ~2 s; show "disabled" when off), **Settings** (render groups, hot vs
-restart badge, edit + save, `PULL_ENABLED` toggle). Send bearer if configured.
+**Audio stream** (mic → WS → live transcript), **WS stats** (poll `/api/stats`
+every ~2 s; show connection state + in-flight count), **Settings** (render groups,
+hot vs restart badge, edit + save). Send bearer if configured.
 
 ## Conventions
 - All timestamps ISO-8601 UTC `Z`.

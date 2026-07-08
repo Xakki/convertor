@@ -14,9 +14,18 @@ export
 # (adds docker/docker-compose.e2e.yml). Plain `docker compose` still reads
 # COMPOSE_FILE from the auto-loaded .env in cwd.
 unexport COMPOSE_FILE
-
+# Don't leak APP_ENV=dev from root .env into recipe shells: the test compose
+# (--env-file .env.test) must win with APP_ENV=test so PHP boots in test mode,
+# skips .env.local, and uses test-worker-token / test-internal-token.
+# Shell env > --env-file precedence means we must unexport to let env-file win.
+unexport APP_ENV
 DC         = docker compose
 COMPOSE_TEST = docker compose --env-file .env.test
+# Strip dev-only vars for the e2e stack-up so --env-file .env.test wins (test tokens
+# + internal nginx URL). ONLY used as prefix for that one $(COMPOSE_TEST) up call;
+# dev `make up` and the restore line keep the exported .env.local values.
+E2E_CLEAN_ENV = env -u WORKER_API_TOKEN -u GATEWAY_INTERNAL_TOKEN -u API_BASE_URL
+DB_TEST_PASS  = 123456
 PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
 PUID := $(shell id -u)

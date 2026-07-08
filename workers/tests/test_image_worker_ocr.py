@@ -11,7 +11,7 @@ Real-tesseract verification lives in test_image_worker_ocr_integration.py
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from PIL import Image
@@ -59,18 +59,12 @@ def _make_job(conv_id: int, input_path: Path, src_ext: str, tgt_fmt: str) -> dic
         "targetFormat": tgt_fmt,
         "category": "image",
         "isAi": False,
-        "subType": None,
         "options": [],
     }
 
 
 def _worker(tmp_path: Path) -> ImageWorker:
-    import workers.common.stream_consumer as sc_mod
-
-    with patch.object(sc_mod, "REDIS_HOST", "localhost"), \
-         patch("workers.common.stream_consumer.redis.Redis", return_value=MagicMock()):
-        worker = ImageWorker()
-    return worker
+    return ImageWorker()
 
 
 _OCR_TEXT = "Hello OCR 12345\nSecond line here"
