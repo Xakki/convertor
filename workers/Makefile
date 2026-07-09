@@ -269,3 +269,20 @@ test-e2e: build-workers build-ffmpeg-test ## Real S3 in/out e2e for ffmpeg + dat
 	    echo "[test-e2e] restoring workers to base config…"; \
 	    $(DC) up -d --force-recreate --no-deps php nginx ws-gateway worker-ffmpeg-audio worker-ffmpeg-video worker-data >/dev/null; \
 	    exit $$rc
+
+# Public-API integration e2e (PHPUnit, group=integration): drives POST /convert →
+# poll status → download over REAL HTTP against the in-compose stack, one case per
+# category (image/data/ffmpeg/document). Brings up the full worker set under
+# .env.test (APP_ENV=test, test DB, KeyDB db3, S3 test_ prefix) via the same
+# E2E_CLEAN_ENV + COMPOSE_TEST recipe as test-e2e, migrates the test DB, runs
+# phpunit inside the php container, then restores the stack to base (dev) config.
+# Worker images must already exist — run `make up` (or `make build-workers`) first.
+.PHONY: test-api-integration
+test-api-integration: ## Public-API e2e integration tests (PHPUnit group=integration): image/data/ffmpeg/document — run `make up` first
+	$(E2E_CLEAN_ENV) $(COMPOSE_TEST) up -d --force-recreate --no-deps --wait php nginx ws-gateway worker-image worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-data
+	$(COMPOSE_TEST) exec -T php bin/console doctrine:migrations:migrate --no-interaction
+	$(COMPOSE_TEST) exec -T php php vendor/bin/phpunit --group integration; \
+	    rc=$$?; \
+	    echo "[test-api-integration] restoring workers to base config…"; \
+	    $(DC) up -d --force-recreate --no-deps php nginx ws-gateway worker-image worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-data >/dev/null; \
+	    exit $$rc

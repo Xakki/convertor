@@ -23,6 +23,15 @@
         </testsuite>
     </testsuites>
 
+    <!-- Plain `phpunit` (make test-php) stays fast and hermetic: the real-e2e
+         `integration` group is excluded by default (mirrors the pytest 'not e2e'
+         convention). Run it via the `make test-api-integration` target. -->
+    <groups>
+        <exclude>
+            <group>integration</group>
+        </exclude>
+    </groups>
+
     <source ignoreSuppressionOfDeprecations="true"
             ignoreIndirectDeprecations="true"
             restrictNotices="true"
