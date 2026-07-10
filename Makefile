@@ -106,6 +106,25 @@ login: ## Login to Docker registry
 .PHONY: test
 test: test-php test-python ## Run all tests (PHPUnit + pytest)
 
+# Провижининг тест-БД `convertor-test` + грант тест-юзеру + миграции под APP_ENV=test.
+# Идемпотентно, безопасно к повторному запуску (IF NOT EXISTS + --allow-no-migration).
+#
+# Почему $(DC), а НЕ $(COMPOSE_TEST): изоляция тестов — на уровне ПРИЛОЖЕНИЯ (отдельное
+# имя БД `convertor-test` + логический KeyDB db3), а не контейнера. Выбор тест-БД делает
+# Symfony через app-symfony/.env.test (APP_ENV=test), НЕ compose env-file. mariadb/keydb
+# для провижининга env-agnostic. $(COMPOSE_TEST) (APP_ENV=test) пересоздал бы уже
+# поднятые dev-контейнеры mariadb/keydb/php в test-режим и сломал бы dev-стек — как и
+# test-e2e, shared-инфру не трогаем. Миграция таргетит `convertor-test` строго из-за
+# `-e APP_ENV=test` на exec (composer-скрипт test-db-migrate → app-symfony/.env.test).
+.PHONY: test-db-setup
+test-db-setup: ## Провижининг тест-БД convertor-test + KeyDB + миграции (идемпотентно)
+	$(DC) up -d --wait mariadb keydb php
+	$(DC) exec -T -e DB_TEST_PASS='$(DB_TEST_PASS)' mariadb bash /docker-entrypoint-initdb.d/create-test-db.sh
+	docker exec -e APP_ENV=test $(PHP_CONT) composer test-db-migrate
+
+.PHONY: test-php-live
+test-php-live: test-db-setup test-php ## Провижининг тест-БД, затем PHPUnit (live-DB/KeyDB тесты реально выполняются)
+
 # ---------------------------------------------------------------------------
 # Per-component fragments (variables above must be defined before these are
 # included — fragments inherit DC / PHP_CONT / KEYDB_CONT / COMPOSE_TEST etc.)
