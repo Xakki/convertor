@@ -116,6 +116,11 @@ WORKDIR /app
 ENV WHISPER_DEVICE=cuda \
     WHISPER_COMPUTE_TYPE=float16
 
+# Import-based healthcheck — образ самодостаточен вне compose (параметры согласованы
+# с docker-compose.worker-ai.yml). Обязательно python3 (не python).
+HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
+    CMD python3 -c "import faster_whisper" || exit 1
+
 USER app
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python3", "-m", "workers.ai"]
