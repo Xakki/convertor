@@ -3,6 +3,13 @@ framework:
     http_method_override: true
     handle_all_throwables: true
 
+    # За фронтом стоит nginx (X-Forwarded-For / X-Real-IP), поэтому без доверенных
+    # прокси Request::getClientIp() вернул бы IP nginx для ВСЕХ запросов — и guest
+    # rate-limit «по IP» стал бы одним общим ведром на весь сайт. Доверяем прокси
+    # из TRUSTED_PROXIES (по умолчанию — приватные docker-сети), заголовки X-Forwarded-*.
+    trusted_proxies: '%env(TRUSTED_PROXIES)%'
+    trusted_headers: ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port']
+
     session:
         handler_id: null
         cookie_secure: auto

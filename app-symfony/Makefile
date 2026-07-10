@@ -31,6 +31,10 @@ seed-plans: ## Seed subscription plans
 console: ## Run Symfony console command (make console CMD="debug:router")
 	$(CONSOLE) $(CMD)
 
+.PHONY: tg-set-webhook
+tg-set-webhook: ## Register Telegram bot webhook (URL from API_URL + TELEGRAM_WEBHOOK_SECRET)
+	$(CONSOLE) app:telegram:set-webhook $(API_URL)
+
 .PHONY: composer
 composer: ## Run composer command (make composer CMD="require vendor/package")
 	$(PHP_EXEC) composer $(CMD)

@@ -1,0 +1,565 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Конвертер файлов — загрузка и конвертация{% endblock %}
+
+{% block stylesheets %}
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>[x-cloak]{display:none !important;}</style>
+{% endblock %}
+
+{% block javascripts %}
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+{% endblock %}
+
+{% block body %}
+<div
+    x-data="converterApp()"
+    x-init="init()"
+    class="min-h-screen bg-slate-50 text-slate-800"
+>
+    <header class="border-b border-slate-200 bg-white">
+        <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
+            <div class="flex items-center gap-2">
+                <span class="text-2xl">⚫️</span>
+                <span class="text-lg font-semibold">Конвертер файлов</span>
+            </div>
+
+            {# ── Область входа / статуса пользователя ── #}
+            <div>
+                <div x-show="!auth.token" x-cloak>
+                    {# Magic-link логин: POST /start → открыть deep-link в новой вкладке.
+                       Никакого поллинга — пользователь завершает вход в Telegram и
+                       открывает пришедшую ссылку на этом же устройстве. #}
+                    <button
+                        @click="startLogin()"
+                        :disabled="loggingIn"
+                        class="rounded bg-sky-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-600 disabled:bg-slate-300"
+                    >
+                        <span x-show="!loggingIn">Войти через Telegram</span>
+                        <span x-show="loggingIn" x-cloak>Открываем Telegram…</span>
+                    </button>
+                </div>
+                <div x-show="auth.token" x-cloak class="flex items-center gap-3 text-sm">
+                    <span class="text-slate-600">
+                        <span x-text="auth.username || 'вы вошли'"></span>
+                    </span>
+                    <button
+                        @click="logout()"
+                        class="rounded border border-slate-300 px-3 py-1 text-slate-600 hover:bg-slate-100"
+                    >Выйти</button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="mx-auto max-w-3xl px-4 py-8">
+        <template x-if="authError">
+            <div class="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="authError"></div>
+        </template>
+
+        {# Инструкция после нажатия «Войти»: завершить в Telegram и открыть
+           пришедшую ссылку на этом же устройстве. Поллинга нет. #}
+        <template x-if="loginHint">
+            <div class="mb-4 rounded border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+                Продолжите в Telegram: нажмите «Войти», затем откройте пришедшую ссылку
+                на&nbsp;этом&nbsp;же&nbsp;устройстве.
+            </div>
+        </template>
+
+        {# Гейт ai/video: конвертация без логина запрещена сервером (403). #}
+        <template x-if="!auth.token && loginRequired">
+            <div class="mb-6 flex flex-wrap items-center gap-3 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <span>Для ai/video конвертаций нужен вход через Telegram.</span>
+                <button
+                    @click="startLogin()"
+                    :disabled="loggingIn"
+                    class="rounded bg-sky-500 px-3 py-1 text-xs font-medium text-white hover:bg-sky-600 disabled:bg-slate-300"
+                >Войти через Telegram</button>
+            </div>
+        </template>
+
+        {# ── Форма загрузки и конвертации ── #}
+        <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+            {# Drag & drop зона #}
+            <div
+                @dragover.prevent="dragging = true"
+                @dragleave.prevent="dragging = false"
+                @drop.prevent="onDrop($event)"
+                @click="$refs.fileInput.click()"
+                :class="dragging ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300'"
+                class="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-10 text-center transition"
+            >
+                <svg class="mb-3 h-10 w-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"/>
+                </svg>
+                <template x-if="!file">
+                    <p class="text-sm text-slate-500">Перетащите файл сюда или нажмите, чтобы выбрать</p>
+                </template>
+                <template x-if="file">
+                    <div class="text-sm">
+                        <p class="font-medium text-slate-700" x-text="file.name"></p>
+                        <p class="text-slate-400" x-text="humanSize(file.size)"></p>
+                    </div>
+                </template>
+                <input type="file" x-ref="fileInput" class="hidden" @change="onFilePick($event)">
+            </div>
+
+            {# Выбор целевого формата #}
+            <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                <label class="block">
+                    <span class="mb-1 block text-sm font-medium text-slate-600">Исходный формат</span>
+                    <input
+                        type="text"
+                        :value="fromFormat || '—'"
+                        disabled
+                        class="w-full rounded border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                    >
+                </label>
+                <label class="block">
+                    <span class="mb-1 block text-sm font-medium text-slate-600">Целевой формат</span>
+                    <select
+                        x-model="toFormat"
+                        :disabled="targets.length === 0"
+                        class="w-full rounded border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:outline-none disabled:bg-slate-100"
+                    >
+                        <option value="">— выберите формат —</option>
+                        <template x-for="t in targets" :key="t">
+                            <option :value="t" x-text="t"></option>
+                        </template>
+                    </select>
+                </label>
+            </div>
+
+            {# OCR toggle: только для растр/pdf источников с текстовым таргетом #}
+            <label x-show="showOcr" x-cloak class="mt-4 flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" x-model="ocr" class="h-4 w-4 rounded border-slate-300">
+                Распознать текст (OCR)
+            </label>
+
+            {# Кнопка отправки #}
+            <div class="mt-6">
+                <button
+                    @click="submit()"
+                    :disabled="!canSubmit"
+                    class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                    <span x-show="!submitting">Конвертировать</span>
+                    <span x-show="submitting" x-cloak>Отправка…</span>
+                </button>
+            </div>
+
+            {# Ошибка отправки #}
+            <template x-if="error">
+                <div class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="error"></div>
+            </template>
+        </div>
+
+        {# ── Статус задачи и результат ── #}
+        <template x-if="job.id">
+            <div class="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-slate-500">Задача #<span x-text="job.id"></span></span>
+                    <span
+                        class="rounded-full px-3 py-1 text-xs font-medium"
+                        :class="{
+                            'bg-slate-100 text-slate-600': isActive(job.status),
+                            'bg-green-100 text-green-700': job.status === 'completed',
+                            'bg-red-100 text-red-700': isFailed(job.status),
+                        }"
+                        x-text="statusLabel(job.status)"
+                    ></span>
+                </div>
+
+                <template x-if="isActive(job.status)">
+                    <div class="mt-4 flex items-center gap-2 text-sm text-slate-500">
+                        <svg class="h-4 w-4 animate-spin text-indigo-500" viewBox="0 0 24 24" fill="none">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.4 0 0 5.4 0 12h4z"></path>
+                        </svg>
+                        Обработка…
+                    </div>
+                </template>
+
+                <template x-if="job.status === 'completed'">
+                    <div class="mt-4">
+                        {# Скачивание доступно и гостю: он владеет своей конвертацией
+                           через guest-cookie (fetch+blob с credentials:'include'). #}
+                        <button
+                            @click="download()"
+                            :disabled="downloading"
+                            class="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:bg-slate-300"
+                        >
+                            <span x-show="!downloading">Скачать результат</span>
+                            <span x-show="downloading" x-cloak>Загрузка…</span>
+                        </button>
+                    </div>
+                </template>
+
+                <template x-if="isFailed(job.status)">
+                    <div class="mt-4 text-sm text-red-600" x-text="job.error || (job.status === 'expired' ? 'Срок хранения результата истёк' : 'Конвертация не удалась')"></div>
+                </template>
+            </div>
+        </template>
+    </main>
+</div>
+
+<script>
+    const OCR_SOURCES = ['jpg', 'png', 'tiff', 'pdf'];
+    const OCR_TARGETS = ['txt', 'md', 'docx'];
+    const STATUS_LABELS = {
+        pending: 'В очереди',
+        processing: 'Обработка',
+        completed: 'Готово',
+        failed: 'Ошибка',
+        expired: 'Истёк',
+    };
+    // Статусы задачи: активные (идёт обработка) и терминальные (менять не будут).
+    const ACTIVE_STATUSES = ['pending', 'processing'];
+    const TERMINAL_STATUSES = ['completed', 'failed', 'expired'];
+    const FAILED_STATUSES = ['failed', 'expired'];
+    // Алиасы расширений → канонические форматы реестра (реестр знает только их).
+    const EXT_ALIASES = {
+        jpeg: 'jpg', jpe: 'jpg',
+        tif: 'tiff',
+        htm: 'html',
+        yml: 'yaml',
+    };
+
+    function converterApp() {
+        return {
+            auth: { token: null, username: null },
+            authError: '',
+            loggingIn: false,   // идёт открытие deep-link
+            loginHint: false,   // показать инструкцию «завершите в Telegram»
+            formats: [],        // [{from, to, category, isAi}]
+            file: null,
+            fromFormat: '',
+            toFormat: '',
+            ocr: false,
+            submitting: false,
+            downloading: false,
+            error: '',
+            dragging: false,
+            job: { id: null, status: null, error: null },
+            _pollTimer: null,
+            _pollTries: 0,
+            _pollGen: 0,        // токен поколения поллинга: отсекает устаревшие циклы
+
+            init() {
+                // Magic-ссылка из бота вернула сюда после провала → понятное сообщение.
+                if (new URLSearchParams(location.search).get('login_error') === '1') {
+                    this.authError = 'Ссылка недействительна, начните вход заново.';
+                    history.replaceState(null, '', location.pathname);
+                }
+
+                // Определяем залогиненное состояние по refresh-cookie: после 302 с
+                // /callback localStorage пуст, но refresh-cookie выставлена. Гость
+                // всегда получит 401 здесь — это норма, уходим в анонимный UI.
+                // Имя пользователя magic-link-флоу не отдаёт (/refresh → {token}),
+                // поэтому в шапке показываем фолбэк «вы вошли».
+                this.tryRefresh().then((ok) => {
+                    if (ok) this.loginHint = false;
+                });
+
+                // Загружаем матрицу форматов (публичный эндпоинт)
+                fetch('/api/v1/formats')
+                    .then((r) => r.json())
+                    .then((d) => { this.formats = d.formats || []; })
+                    .catch(() => { this.error = 'Не удалось загрузить список форматов'; });
+            },
+
+            // Инициировать вход: POST /start (credentials — принять tg_login_nonce),
+            // открыть deep-link в новой вкладке, показать инструкцию. Поллинга нет.
+            async startLogin() {
+                if (this.loggingIn) return;
+                this.loggingIn = true;
+                this.authError = '';
+                try {
+                    const res = await fetch('/api/v1/auth/telegram/start', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+                    if (!res.ok) {
+                        this.authError = 'Не удалось начать вход через Telegram (' + res.status + ').';
+                        return;
+                    }
+                    const d = await res.json();
+                    if (d.deep_link) window.open(d.deep_link, '_blank', 'noopener');
+                    this.loginHint = true;
+                } catch (e) {
+                    this.authError = 'Сетевая ошибка при входе через Telegram.';
+                } finally {
+                    this.loggingIn = false;
+                }
+            },
+
+            isActive(s) { return ACTIVE_STATUSES.includes(s); },
+            isTerminal(s) { return TERMINAL_STATUSES.includes(s); },
+            isFailed(s) { return FAILED_STATUSES.includes(s); },
+
+            get targets() {
+                if (!this.fromFormat) return [];
+                return this.formats
+                    .filter((f) => f.from === this.fromFormat)
+                    .map((f) => f.to)
+                    .filter((v, i, a) => a.indexOf(v) === i)
+                    .sort();
+            },
+
+            get showOcr() {
+                return OCR_SOURCES.includes(this.fromFormat)
+                    && OCR_TARGETS.includes(this.toFormat);
+            },
+
+            // Требует логина: ai-флаг ИЛИ категория video. Совпадает с гейтом
+            // сервера (isAi === true || category === 'video'); служит подсказкой
+            // ДО отправки. Финальное решение — 403 auth_required от /convert.
+            get loginRequired() {
+                if (!this.fromFormat || !this.toFormat) return false;
+                const pair = this.formats.find(
+                    (f) => f.from === this.fromFormat && f.to === this.toFormat,
+                );
+                if (!pair) return false;
+                return pair.isAi === true || pair.category === 'video';
+            },
+
+            get canSubmit() {
+                // Блокируем сабмит, пока текущая задача не дошла до терминала —
+                // иначе in-flight polling задачи A перезапишет job задачей B.
+                // Токен НЕ обязателен: аноним конвертит по guest-cookie; ai/video
+                // режется сервером (403), а не UI.
+                const jobBusy = this.job.id !== null && !this.isTerminal(this.job.status);
+                return !!this.file && !!this.toFormat
+                    && !this.submitting && !jobBusy;
+            },
+
+            onFilePick(e) { this.setFile(e.target.files[0]); },
+            onDrop(e) {
+                this.dragging = false;
+                this.setFile(e.dataTransfer.files[0]);
+            },
+            setFile(f) {
+                if (!f) return;
+                this.file = f;
+                this.fromFormat = this.deriveFormat(f.name);
+                this.toFormat = '';
+                this.ocr = false;
+                this.error = '';
+            },
+
+            // Расширение → канонический формат. Без точки — формат неизвестен (''),
+            // чтобы UI не показывал мусор вместо исходного формата.
+            deriveFormat(name) {
+                if (!name || name.indexOf('.') === -1) return '';
+                const ext = name.split('.').pop().toLowerCase();
+                return EXT_ALIASES[ext] || ext;
+            },
+
+            humanSize(bytes) {
+                if (bytes < 1024) return bytes + ' Б';
+                if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' КБ';
+                return (bytes / 1048576).toFixed(1) + ' МБ';
+            },
+
+            statusLabel(s) { return STATUS_LABELS[s] || s; },
+
+            // Единый транспорт: всегда credentials:'include' (guest-cookie несёт
+            // личность анонима), Bearer добавляем ТОЛЬКО при наличии токена (иначе
+            // не шлём 'Bearer null'). Одноразовый silent-refresh на 401 — лишь для
+            // залогиненного (был токен): guest-401 — не истечение сессии.
+            async authFetch(url, opts = {}) {
+                const withAuth = (o) => {
+                    const headers = { ...(o.headers || {}) };
+                    if (this.auth.token) headers['Authorization'] = 'Bearer ' + this.auth.token;
+                    return { ...o, headers, credentials: 'include' };
+                };
+                const hadToken = !!this.auth.token;
+                let res = await fetch(url, withAuth(opts));
+                if (res.status !== 401 || !hadToken) return res;
+
+                // Залогинен и словил 401 → ровно один тихий refresh + повтор.
+                const refreshed = await this.tryRefresh();
+                if (!refreshed) {
+                    this.sessionExpired();
+                    return res;
+                }
+                return fetch(url, withAuth(opts));
+            },
+
+            async tryRefresh() {
+                try {
+                    const res = await fetch('/api/v1/auth/refresh', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+                    if (!res.ok) return false;
+                    const d = await res.json();
+                    if (!d.token) return false;
+                    this.auth.token = d.token;
+                    localStorage.setItem('jwt', d.token);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            sessionExpired() {
+                this.clearAuth();
+                // Сбрасываем in-flight задачу: resetJob() бампает _pollGen (гасит
+                // текущий цикл поллинга) и обнуляет job.id, иначе jobBusy навсегда
+                // залипнет true и кнопка «Конвертировать» останется мёртвой даже
+                // после повторного входа. Экспирация ловится только на
+                // НЕтерминальном поле, так что готовый результат не теряем.
+                this.resetJob();
+                this.authError = 'Сессия истекла, войдите заново. Задача сброшена, повторите после входа.';
+            },
+
+            async submit() {
+                if (!this.canSubmit) return;
+                this.error = '';
+                this.submitting = true;
+                this.resetJob();
+
+                const fd = new FormData();
+                fd.append('file', this.file);
+                fd.append('to_format', this.toFormat);
+                if (this.showOcr && this.ocr) fd.append('ocr', '1');
+
+                try {
+                    const res = await this.authFetch('/api/v1/convert', { method: 'POST', body: fd });
+                    if (res.status === 202) {
+                        const d = await res.json();
+                        this.job = { id: d.conversion_id, status: d.status || 'pending', error: null };
+                        this.startPolling();
+                    } else if (res.status === 403 && await this.isAuthRequired(res)) {
+                        // Гейт ai/video для гостя: не общая ошибка, а приглашение войти.
+                        this.error = '';
+                        this.authError = 'Войдите через Telegram для ai/video конвертаций.';
+                        this.startLogin();
+                    } else {
+                        this.error = await this.errorMessage(res);
+                    }
+                } catch (e) {
+                    this.error = 'Сетевая ошибка при отправке файла';
+                } finally {
+                    this.submitting = false;
+                }
+            },
+
+            // 403 c телом {error:"auth_required"} — гейт ai/video, а не общий отказ.
+            async isAuthRequired(res) {
+                try {
+                    const d = await res.clone().json();
+                    return d.error === 'auth_required';
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            async errorMessage(res) {
+                const map = {
+                    401: 'Сессия истекла, войдите заново.',
+                    413: 'Файл слишком большой (превышен лимит размера).',
+                    415: 'Неподдерживаемый тип файла.',
+                    422: 'Такая конвертация не поддерживается.',
+                    429: 'Превышена дневная квота или слишком много запросов.',
+                };
+                let detail = '';
+                try { const d = await res.json(); detail = d.error || ''; } catch (e) {}
+                return map[res.status] || (detail || ('Ошибка ' + res.status));
+            },
+
+            resetJob() {
+                if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
+                this._pollTries = 0;
+                this._pollGen++;    // инвалидирует любой in-flight цикл предыдущей задачи
+                this.job = { id: null, status: null, error: null };
+            },
+
+            startPolling() {
+                this._pollTries = 0;
+                this.poll(this._pollGen);
+            },
+
+            async poll(gen) {
+                // Устаревший цикл (началась новая задача) — молча выходим.
+                if (gen !== this._pollGen || !this.job.id) return;
+                this._pollTries++;
+                // Кап ~5 минут: 2с × 150 попыток
+                if (this._pollTries > 150) {
+                    this.job.status = 'failed';
+                    this.job.error = 'Превышено время ожидания результата';
+                    return;
+                }
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + this.job.id + '/status');
+                    if (gen !== this._pollGen) return;   // задача сменилась/сброшена во время запроса
+                    // 401 после refresh-and-retry: если сессия истекла — sessionExpired()
+                    // уже сбросил задачу и сменил gen (поймано выше). Если дошли сюда —
+                    // просто прекращаем поллинг без записи статуса/перепланирования.
+                    if (res.status === 401) return;
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (gen !== this._pollGen) return;
+                        this.job.status = d.status;
+                        this.job.error = d.error;
+                        if (this.isTerminal(d.status)) return;
+                    }
+                } catch (e) { /* сеть моргнула — повторим */ }
+                this._pollTimer = setTimeout(() => this.poll(gen), 2000);
+            },
+
+            async download() {
+                if (!this.job.id) return;
+                this.downloading = true;
+                try {
+                    // Скачиваем через fetch → blob (плейн <a href> не отправит ни
+                    // Bearer, ни нужные credentials): authFetch шлёт guest-cookie
+                    // (credentials) либо Bearer. Имя файла — из Content-Disposition.
+                    const res = await this.authFetch('/api/v1/convert/' + this.job.id + '/download');
+                    // 401 после refresh-and-retry: если сессия истекла, sessionExpired()
+                    // уже показал уведомление и сбросил токен; просто выходим.
+                    if (res.status === 401) return;
+                    if (!res.ok) { this.error = 'Не удалось скачать результат'; return; }
+                    const blob = await res.blob();
+                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
+                        || ('result.' + this.toFormat);
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = name;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                } catch (e) {
+                    this.error = 'Сетевая ошибка при скачивании';
+                } finally {
+                    this.downloading = false;
+                }
+            },
+
+            filenameFrom(disposition) {
+                if (!disposition) return '';
+                const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+                if (utf) { try { return decodeURIComponent(utf[1]); } catch (e) {} }
+                const m = disposition.match(/filename="?([^";]+)"?/i);
+                return m ? m[1] : '';
+            },
+
+            clearAuth() {
+                this.auth = { token: null, username: null };
+                localStorage.removeItem('jwt');
+            },
+
+            logout() {
+                this.clearAuth();
+                this.authError = '';
+                this.loginHint = false;
+                // Отзыв refresh-cookie на бэке (best-effort)
+                fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
+            },
+        };
+    }
+</script>
+{% endblock %}

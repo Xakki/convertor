@@ -45,6 +45,21 @@ class User implements UserInterface
     #[ORM\Column(type: 'boolean')]
     private bool $isActive = true;
 
+    /**
+     * Гость — анонимный пользователь, привязанный к httpOnly-cookie `guest_id`.
+     * `telegramId`/`phone`/`email` у гостя = null. При Telegram-логине история
+     * гостя перепривязывается к реальному User (см. GuestUserService::mergeInto).
+     */
+    #[ORM\Column(type: 'boolean')]
+    private bool $isGuest = false;
+
+    /**
+     * Сырое значение cookie-id гостя (уникальное). У обычного пользователя = null.
+     * Аутентификатор ищет гостя по этому полю (только среди активных).
+     */
+    #[ORM\Column(type: 'string', length: 64, nullable: true, unique: true)]
+    private ?string $guestId = null;
+
     public function __construct()
     {
         $this->createdAt    = new \DateTimeImmutable();
@@ -171,9 +186,36 @@ class User implements UserInterface
         return $this;
     }
 
+    public function isGuest(): bool
+    {
+        return $this->isGuest;
+    }
+
+    public function setIsGuest(bool $isGuest): self
+    {
+        $this->isGuest = $isGuest;
+
+        return $this;
+    }
+
+    public function getGuestId(): ?string
+    {
+        return $this->guestId;
+    }
+
+    public function setGuestId(?string $guestId): self
+    {
+        $this->guestId = $guestId;
+
+        return $this;
+    }
+
     public function getRoles(): array
     {
-        return ['ROLE_USER'];
+        // Гость получает ТОЛЬКО ROLE_GUEST — это единственный признак, по которому
+        // гейт ai/video режет анонима (!isGranted('ROLE_USER')). role_hierarchy
+        // (ROLE_USER: [ROLE_GUEST]) даёт залогиненному проходить guest-роуты.
+        return $this->isGuest ? ['ROLE_GUEST'] : ['ROLE_USER'];
     }
 
     public function eraseCredentials(): void

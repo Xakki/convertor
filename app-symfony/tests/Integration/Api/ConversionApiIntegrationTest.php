@@ -75,6 +75,8 @@ final class ConversionApiIntegrationTest extends TestCase
         int $timeoutSec,
         string $tgIdBase,
     ): void {
+        self::markTestSkipped('login via obsolete widget removed — see kanban e2e-login-helper-magic-link');
+
         $path = \dirname(__DIR__, 2) . '/Fixtures/' . $fixture;
         self::assertFileExists($path, "fixture missing: {$fixture}");
 

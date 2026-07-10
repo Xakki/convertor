@@ -1,0 +1,22 @@
+framework:
+    rate_limiter:
+        # Лимит анонимных (guest) конвертаций по IP. Применяется в
+        # ConversionController::convert только для не-ROLE_USER. Стартовое N=20/час.
+        anon_convert:
+            policy: 'sliding_window'
+            limit: 20
+            interval: '1 hour'
+
+# В тестах getClientIp() всегда 127.0.0.1 → все guest-запросы делят одно ведро.
+# Дефолтный storage (cache.rate_limiter→filesystem) переживает запуски phpunit и
+# копит токены между прогонами. Кладём лимитер в in-memory (array) пул, чтобы
+# каждый прогон стартовал с чистого ведра и тесты не флакали на 429.
+when@test:
+    framework:
+        rate_limiter:
+            anon_convert:
+                cache_pool: 'cache.rate_limiter.test_array'
+        cache:
+            pools:
+                cache.rate_limiter.test_array:
+                    adapter: cache.adapter.array

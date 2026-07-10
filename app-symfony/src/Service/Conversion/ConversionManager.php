@@ -10,6 +10,7 @@ use App\Entity\FileStorage;
 use App\Entity\User;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
+use App\Exception\AuthRequiredException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Queue\ConversionStatusReader;
@@ -35,7 +36,11 @@ class ConversionManager
     ) {
     }
 
-    public function createConversion(User $user, UploadedFile $file, string $toFormat, bool $ocr = false): Conversion
+    /**
+     * @param bool $privileged есть ли у пользователя ROLE_USER (полный логин).
+     *                         Гость (false) не допускается к ai/video-парам.
+     */
+    public function createConversion(User $user, UploadedFile $file, string $toFormat, bool $ocr = false, bool $privileged = true): Conversion
     {
         $fromFormat = strtolower($file->getClientOriginalExtension());
 
@@ -54,6 +59,14 @@ class ConversionManager
             }
             $category = $this->registry->getCategory($fromFormat, $toFormat);
             $isAi     = $this->registry->isAi($fromFormat, $toFormat);
+        }
+
+        // Гейт ai/video: пара, требующая полного логина (isAi ИЛИ category=Video),
+        // недоступна гостю. Проверяем СРАЗУ после вычисления isAi/category и ДО
+        // любых size/quota/S3-эффектов — 403 отдаётся дёшево и без сайд-эффектов.
+        // (OCR-ветка форсит isAi=false/Image, поэтому под гейт не попадает.)
+        if (! $privileged && ($isAi || $category === FileCategory::Video)) {
+            throw new AuthRequiredException('Войдите через Telegram для ai/video конвертаций');
         }
 
         // Read metadata BEFORE the upload is consumed — keep size/mime from the

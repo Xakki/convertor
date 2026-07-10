@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller\Api;
 
 use App\Entity\User;
+use App\Exception\AuthRequiredException;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionRegistry;
@@ -12,6 +13,7 @@ use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -19,6 +21,7 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
+use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Security\Http\Attribute\CurrentUser;
 
@@ -31,6 +34,8 @@ class ConversionController extends AbstractController
         private readonly ConversionRepository $conversionRepository,
         private readonly QuotaService $quotaService,
         private readonly S3Storage $s3,
+        #[Autowire(service: 'limiter.anon_convert')]
+        private readonly RateLimiterFactory $anonConvertLimiter,
     ) {
     }
 
@@ -86,15 +91,36 @@ class ConversionController extends AbstractController
             return $this->json(['error' => 'to_format required'], Response::HTTP_BAD_REQUEST);
         }
 
+        // ROLE_USER = полный логин; гость его не имеет (role_hierarchy даёт
+        // залогиненному пройти guest-роуты, но НЕ наоборот).
+        $privileged = $this->isGranted('ROLE_USER');
+
+        // Rate-limit гостя по IP (залогиненные ограничены только квотой).
+        if (! $privileged) {
+            $limit = $this->anonConvertLimiter->create($request->getClientIp())->consume(1);
+            if (! $limit->isAccepted()) {
+                return $this->json(
+                    ['error' => 'Too many anonymous conversions, please try later or log in'],
+                    Response::HTTP_TOO_MANY_REQUESTS,
+                );
+            }
+        }
+
         try {
             // createConversion now enqueues (dispatch) + charges quota internally,
             // so the whole charge→submit→enqueue path is atomic in one place.
-            $conversion = $this->conversionManager->createConversion($user, $file, strtolower((string) $toFormat), $ocr);
+            $conversion = $this->conversionManager->createConversion($user, $file, strtolower((string) $toFormat), $ocr, $privileged);
 
             return $this->json([
                 'conversion_id' => $conversion->getId(),
                 'status'        => $conversion->getStatus()->value,
             ], Response::HTTP_ACCEPTED);
+        } catch (AuthRequiredException $e) {
+            // Гейт ai/video для гостя.
+            return $this->json(
+                ['error' => 'auth_required', 'message' => $e->getMessage()],
+                Response::HTTP_FORBIDDEN,
+            );
         } catch (\InvalidArgumentException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         } catch (UnprocessableEntityHttpException $e) {
@@ -269,6 +295,15 @@ class ConversionController extends AbstractController
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
         }
 
-        return $this->json($this->quotaService->getRemainingQuota($user));
+        $quota = $this->quotaService->getRemainingQuota($user);
+
+        // Для гостя переопределяем: ai недоступен (0), план — "guest". Не полагаемся
+        // на User.plan гостя (free-fallback дал бы ai_conversions:1).
+        if (! $this->isGranted('ROLE_USER')) {
+            $quota['ai_conversions'] = 0;
+            $quota['plan']           = 'guest';
+        }
+
+        return $this->json($quota);
     }
 }

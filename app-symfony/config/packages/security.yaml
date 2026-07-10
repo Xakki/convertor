@@ -30,21 +30,42 @@ security:
             custom_authenticators:
                 - App\Security\WorkerAuthenticator
 
+        # Telegram webhook: без firewall-аутентификации — вход защищён
+        # секрет-заголовком X-Telegram-Bot-Api-Secret-Token в контроллере.
+        # ДОЛЖЕН стоять ДО `api`, иначе catch-all ^/api потребует ROLE_USER.
+        telegram_webhook:
+            pattern: ^/api/v1/telegram/webhook
+            stateless: true
+            security: false
+
         api:
             pattern: ^/api
             stateless: true
             provider: app_user_provider
             jwt: ~
+            # GuestAuthenticator ПОСЛЕ jwt: срабатывает только когда нет Bearer
+            # (см. GuestAuthenticator::supports). JWT и guest взаимоисключающи.
+            custom_authenticators:
+                - App\Security\GuestAuthenticator
 
         main:
             lazy: true
             provider: app_user_provider
 
+    # Залогиненный (ROLE_USER) наследует ROLE_GUEST → проходит guest-роуты.
+    role_hierarchy:
+        ROLE_USER: [ROLE_GUEST]
+
     access_control:
         - { path: ^/api/v1/auth, roles: PUBLIC_ACCESS }
+        - { path: ^/api/v1/telegram/webhook, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/formats, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/internal, roles: IS_AUTHENTICATED_FULLY }
         - { path: ^/api/v1/worker, roles: IS_AUTHENTICATED_FULLY }
+        # Гостю открыты: convert, status/download (/convert/{id}/...), history, quota.
+        # Гейт ai/video режется в контроллере (403 auth_required), не на firewall.
+        - { path: ^/api/v1/convert, roles: ROLE_GUEST }
+        - { path: ^/api/v1/quota, roles: ROLE_GUEST }
         - { path: ^/api, roles: ROLE_USER }
 
 when@test:

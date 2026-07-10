@@ -28,6 +28,16 @@ class UserRepository extends ServiceEntityRepository
         return $this->findOneBy(['phone' => $phone]);
     }
 
+    /**
+     * Активный гость по сырому guestId из cookie. Только isGuest+isActive:
+     * после merge гость деактивируется и его guestId зануляется, поэтому
+     * устаревшая cookie не воскресит удалённого гостя.
+     */
+    public function findActiveGuestByGuestId(string $guestId): ?User
+    {
+        return $this->findOneBy(['guestId' => $guestId, 'isGuest' => true, 'isActive' => true]);
+    }
+
     public function save(User $user, bool $flush = false): void
     {
         $this->getEntityManager()->persist($user);

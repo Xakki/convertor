@@ -4,11 +4,9 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
-use App\DTO\TelegramAuthDTO;
 use App\Repository\UserRepository;
 use App\Service\Auth\RefreshCookieFactory;
 use App\Service\Auth\RefreshTokenService;
-use App\Service\Auth\TelegramAuthService;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use OpenApi\Attributes as OA;
 use Psr\Log\LoggerInterface;
@@ -17,79 +15,17 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
-use Symfony\Component\Validator\Validator\ValidatorInterface;
 
 #[Route('/api/v1/auth')]
 class AuthController extends AbstractController
 {
     public function __construct(
-        private readonly TelegramAuthService $telegramAuthService,
         private readonly JWTTokenManagerInterface $jwtManager,
-        private readonly ValidatorInterface $validator,
         private readonly LoggerInterface $logger,
         private readonly RefreshTokenService $refreshTokens,
         private readonly RefreshCookieFactory $refreshCookie,
         private readonly UserRepository $users,
     ) {
-    }
-
-    #[Route('/telegram', methods: ['POST'])]
-    #[OA\Tag(name: 'Auth')]
-    #[OA\Post(summary: 'Аутентификация через Telegram Login Widget', security: [])]
-    #[OA\RequestBody(
-        required: true,
-        content: new OA\JsonContent(
-            required: ['id', 'first_name', 'auth_date', 'hash'],
-            properties: [
-                new OA\Property(property: 'id', type: 'string', description: 'Telegram user id'),
-                new OA\Property(property: 'first_name', type: 'string'),
-                new OA\Property(property: 'last_name', type: 'string', nullable: true),
-                new OA\Property(property: 'username', type: 'string', nullable: true),
-                new OA\Property(property: 'photo_url', type: 'string', nullable: true),
-                new OA\Property(property: 'auth_date', type: 'integer'),
-                new OA\Property(property: 'hash', type: 'string', description: 'HMAC-SHA256 подпись Telegram'),
-            ],
-        ),
-    )]
-    #[OA\Response(
-        response: 200,
-        description: 'JWT-токен выдан (refresh-token — в httpOnly cookie)',
-        content: new OA\JsonContent(properties: [
-            new OA\Property(property: 'token', type: 'string', description: 'JWT access-token'),
-        ]),
-    )]
-    #[OA\Response(response: 400, description: 'Ошибка валидации данных')]
-    #[OA\Response(response: 401, description: 'Некорректные данные аутентификации Telegram')]
-    public function telegram(Request $request): JsonResponse
-    {
-        $data = json_decode($request->getContent(), true) ?? [];
-
-        $dto = new TelegramAuthDTO(
-            id: (string) ($data['id'] ?? ''),
-            firstName: (string) ($data['first_name'] ?? ''),
-            lastName: $data['last_name'] ?? null,
-            username: $data['username']  ?? null,
-            photoUrl: $data['photo_url'] ?? null,
-            authDate: isset($data['auth_date']) ? (int) $data['auth_date'] : null,
-            hash: $data['hash'] ?? null,
-        );
-
-        $errors = $this->validator->validate($dto);
-        if (count($errors) > 0) {
-            return $this->json(['error' => (string) $errors], Response::HTTP_BAD_REQUEST);
-        }
-
-        if (! $this->telegramAuthService->verify($dto)) {
-            return $this->json(['error' => 'Invalid Telegram auth data'], Response::HTTP_UNAUTHORIZED);
-        }
-
-        $user  = $this->telegramAuthService->findOrCreateUser($dto);
-        $token = $this->jwtManager->create($user);
-
-        $response = $this->json(['token' => $token]);
-        $response->headers->setCookie($this->refreshCookie->create($this->refreshTokens->issueFamily($user)));
-
-        return $response;
     }
 
     #[Route('/refresh', methods: ['POST'])]

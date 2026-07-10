@@ -45,10 +45,11 @@ SaaS-сервис конвертации файлов всех форматов.
 - PHP side: ставит задачу в Stream (Messenger) + персистит результат через internal relay/ConversionResultPersister; живой статус (`conv:status`) пишет gateway, не PHP.
 
 ## Authentication
-- Telegram Login Widget как основной метод
-- SMS OTP как резервный (SMSC.ru)
-- Верификация Telegram hash: HMAC-SHA256 с bot token
-- JWT: TTL 1h, refresh token 30 дней в httpOnly cookie
+- **Telegram-логин через бота — magic-link на своём устройстве (same-device), НЕ Login Widget.** Виджет снят (`login-widget-bot-username` = obsolete). Флоу: сайт `POST /api/v1/auth/telegram/start` → ставит httpOnly-cookie `tg_login_nonce` + отдаёт `code` + deep-link `t.me/<bot>?start=<code>`; юзер жмёт «Войти» в боте → webhook (`POST /api/v1/telegram/webhook`, защита `X-Telegram-Bot-Api-Secret-Token`) авторизует code (status-guard: первый тап), шлёт в чат magic-ссылку `…/api/v1/auth/telegram/callback?code=&s=<linkSecret>`; юзер открывает её на том же устройстве → `GET /callback` проверяет **оба** секрета (nonce-cookie + linkSecret из query, атомарно в Lua, one-time, no-burn на mismatch) → JWT+refresh + 302 на `/`. Два секрета обязательны: nonce-cookie бьёт session-fixation, доставляемый-в-чат linkSecret бьёт account-takeover. Детали — skill `redesign-auth-access-contract`.
+- **Анонимная конвертация без логина, кроме `isAi`/`category=Video`** — guest-User по подписанной httpOnly-cookie `guest_id` (`ROLE_GUEST`); ai/video → 403 `auth_required`. При логине история guest'а перепривязывается к реальному User.
+- SMS OTP — резервный, пока заглушка (501).
+- JWT: TTL 1h (LexikJWT), refresh-token 30 дней (opaque family, httpOnly cookie, Redis Lua-ротация). Фронт после `/callback`-редиректа тянет access-JWT через `POST /api/v1/auth/refresh`.
+- Регистрация webhook: `make tg-set-webhook` из корня (нужны `TELEGRAM_WEBHOOK_SECRET` в `app-symfony/.env.local` + публичный `API_URL` в `.env`). Секрет один и тот же для регистрации и для проверки заголовка `X-Telegram-Bot-Api-Secret-Token`.
 
 ## Payments
 - Telegram Stars: через Telegram Bot API (invoice → successful_payment webhook)

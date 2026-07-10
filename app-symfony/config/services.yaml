@@ -1,7 +1,4 @@
 parameters:
-    # Fallback so TELEGRAM_AUTH_MAX_AGE is optional in every env (24h replay window)
-    env(TELEGRAM_AUTH_MAX_AGE): '86400'
-
     # Worker pull-API static bearer token (must be set in .env.local for prod)
     env(WORKER_API_TOKEN): ''
 
@@ -20,6 +17,17 @@ parameters:
     env(REFRESH_COOKIE_NAME): 'refresh_token'
     env(REDIS_SESSIONS_DSN): 'redis://keydb:6379?dbindex=1'
 
+    # Guest-cookie (`guest_id`) defaults. Secure=true (prod); TTL 30 дней.
+    # Секрет подписи — GUEST_COOKIE_SECRET, по умолчанию = APP_SECRET.
+    env(GUEST_COOKIE_SECRET): '%env(APP_SECRET)%'
+    env(GUEST_COOKIE_SECURE): 'true'
+    env(GUEST_COOKIE_TTL): '2592000'
+
+    # Доверенные прокси для getClientIp() (guest rate-limit по IP). По умолчанию —
+    # приватные диапазоны (Symfony keyword `private_ranges`): доверяем nginx в
+    # docker-сети. В проде можно сузить до конкретного адреса фронта.
+    env(TRUSTED_PROXIES): 'private_ranges'
+
 services:
     _defaults:
         autowire: true
@@ -32,10 +40,14 @@ services:
             - '../src/Entity/'
             - '../src/Kernel.php'
 
-    App\Service\Auth\TelegramAuthService:
+    App\Service\Auth\GuestTokenService:
         arguments:
-            $telegramBotToken: '%env(TELEGRAM_BOT_TOKEN)%'
-            $maxAuthAge: '%env(int:TELEGRAM_AUTH_MAX_AGE)%'
+            $secret: '%env(GUEST_COOKIE_SECRET)%'
+
+    App\Service\Auth\GuestCookieFactory:
+        arguments:
+            $secure: '%env(bool:GUEST_COOKIE_SECURE)%'
+            $maxAge: '%env(int:GUEST_COOKIE_TTL)%'
 
     App\Service\Queue\RedisConnectionFactory:
         arguments:
@@ -55,12 +67,24 @@ services:
             $ttl: '%env(int:REFRESH_TTL)%'
             $grace: '%env(int:REFRESH_GRACE)%'
 
+    # One-time Telegram bot-login коды в KeyDB db 1 (sessions), TTL 5 мин.
+    App\Service\Auth\TelegramLoginCodeStore:
+        arguments:
+            $redisFactory: '@app.redis.sessions'
+            $ttl: 300
+
     App\Service\Auth\RefreshCookieFactory:
         arguments:
             $name: '%env(REFRESH_COOKIE_NAME)%'
             $secure: '%env(bool:REFRESH_COOKIE_SECURE)%'
             $sameSite: '%env(REFRESH_COOKIE_SAMESITE)%'
             $maxAge: '%env(int:REFRESH_TTL)%'
+
+    # Cookie `tg_login_nonce` (магик-линк логин). Secure — та же семантика, что и
+    # refresh-cookie; TTL = TTL кода (5 мин), задаётся в фабрике по умолчанию.
+    App\Service\Auth\TelegramLoginNonceCookieFactory:
+        arguments:
+            $secure: '%env(bool:REFRESH_COOKIE_SECURE)%'
 
     AsyncAws\S3\S3Client:
         arguments:

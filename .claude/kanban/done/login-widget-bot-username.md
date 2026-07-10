@@ -25,7 +25,10 @@ Telegram-логин на фронте не заработает с реальн�
 **Decisions:**
 - 2026-06-25: при дедупе `.env*` обнаружено, что `app-front` не отдаётся стеком и логин-флоу на бэке использует токен, не username. Реализацию отложили — по решению пользователя завести карточку (вариант доставки B рекомендован, но старт — после/вместе с подключением фронта).
 - `TELEGRAM_BOT_USERNAME` stays in **root `.env`** (Q12, user intent) and is made reachable by Symfony ; delivery = **Twig server-side render** (Q12.1) — widget rendered by Symfony template, no separate config endpoint needed. Depends on upload-conversion-ui (front served via Twig). Touch: login-modal.html:96.
+- 2026-07-10: попытка старта — зависимость НЕ готова. Проверено: `upload-conversion-ui` всё ещё в `todo/`; Twig-фронт — голый скелет (`base.html.twig` = дефолтная welcome-страница, из шаблонов только `conversion/_upload_form.html.twig`, web/page-контроллера нет — только `Api/`). Рендерить виджет пока не во что. `TELEGRAM_BOT_USERNAME=YouFileConvertBot` есть только в корневом `.env`, Symfony его не видит. **По решению пользователя — заблокировать/парковать**: сначала `upload-conversion-ui`, потом эта карточка.
 
-**Status:** ready (todo) — start after upload-conversion-ui.
+- 2026-07-10: **OBSOLETE.** Пользователь сменил модель авторизации: логин через **бота** (deep-link + «Войти» + pairing/poll), Telegram Login Widget убран вовсе. Премиса карточки (username в `data-telegram-login` виджета) исчезла. Прокидка `TELEGRAM_BOT_USERNAME` в Symfony (сделана в upload-conversion-ui) переиспользуется для deep-link. Заменяется картами [[telegram-bot-login-flow]] + [[upload-ui-bot-auth-rework]].
+
+**Status:** OBSOLETE — виджет отменён, заменён бот-флоу. Можно удалить/закрыть.
 
 Siblings: [[upload-conversion-ui]] · [[docs-admin-panel]]
