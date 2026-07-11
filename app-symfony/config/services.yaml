@@ -23,6 +23,14 @@ parameters:
     env(GUEST_COOKIE_SECURE): 'true'
     env(GUEST_COOKIE_TTL): '2592000'
 
+    # URL /metrics существующего metrics-exporter для admin-панели очередей.
+    # Дефолт = адрес по внутренней docker-сети backend; не секрет.
+    env(METRICS_EXPORTER_URL): 'http://metrics-exporter:9472/metrics'
+
+    # Базовый URL веб-Graylog для линк-аута из admin-панели логов. Пусто по
+    # умолчанию (плейсхолдер, не секрет) → UI прячет ссылку «открыть в Graylog».
+    env(GRAYLOG_URL): ''
+
     # Доверенные прокси для getClientIp() (guest rate-limit по IP). По умолчанию —
     # приватные диапазоны (Symfony keyword `private_ranges`): доверяем nginx в
     # docker-сети. В проде можно сузить до конкретного адреса фронта.
@@ -102,3 +110,13 @@ services:
     App\Service\Queue\ConversionResultPersister:
         arguments:
             $resultsBucket: '%env(S3_BUCKET_PREFIX)%-results'
+
+    # Мониторинг очередей admin-панели: URL metrics-exporter'а (остальное — autowire).
+    App\Service\Admin\QueueStatsProvider:
+        arguments:
+            $exporterUrl: '%env(METRICS_EXPORTER_URL)%'
+
+    # Лог конвертаций admin-панели: база-URL Graylog для линк-аута (остальное — autowire).
+    App\Controller\Admin\Api\ConversionLogController:
+        arguments:
+            $graylogUrl: '%env(GRAYLOG_URL)%'

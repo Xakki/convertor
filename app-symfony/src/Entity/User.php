@@ -46,6 +46,14 @@ class User implements UserInterface
     private bool $isActive = true;
 
     /**
+     * Админ-тир поверх обычного пользователя. Флаг выдаётся вручную
+     * (console-команда app:user:make-admin), UI-управления ролями нет.
+     * В getRoles() даёт ROLE_ADMIN — доступ к ^/admin и ^/api/v1/admin.
+     */
+    #[ORM\Column(type: 'boolean')]
+    private bool $isAdmin = false;
+
+    /**
      * Гость — анонимный пользователь, привязанный к httpOnly-cookie `guest_id`.
      * `telegramId`/`phone`/`email` у гостя = null. При Telegram-логине история
      * гостя перепривязывается к реальному User (см. GuestUserService::mergeInto).
@@ -186,6 +194,18 @@ class User implements UserInterface
         return $this;
     }
 
+    public function isAdmin(): bool
+    {
+        return $this->isAdmin;
+    }
+
+    public function setIsAdmin(bool $isAdmin): self
+    {
+        $this->isAdmin = $isAdmin;
+
+        return $this;
+    }
+
     public function isGuest(): bool
     {
         return $this->isGuest;
@@ -215,7 +235,18 @@ class User implements UserInterface
         // Гость получает ТОЛЬКО ROLE_GUEST — это единственный признак, по которому
         // гейт ai/video режет анонима (!isGranted('ROLE_USER')). role_hierarchy
         // (ROLE_USER: [ROLE_GUEST]) даёт залогиненному проходить guest-роуты.
-        return $this->isGuest ? ['ROLE_GUEST'] : ['ROLE_USER'];
+        if ($this->isGuest) {
+            return ['ROLE_GUEST'];
+        }
+
+        // Обычный пользователь → ROLE_USER; админ дополнительно получает
+        // ROLE_ADMIN (гейт ^/admin и ^/api/v1/admin в security.yaml).
+        $roles = ['ROLE_USER'];
+        if ($this->isAdmin) {
+            $roles[] = 'ROLE_ADMIN';
+        }
+
+        return $roles;
     }
 
     public function eraseCredentials(): void

@@ -1,0 +1,265 @@
+{# Секция управления пользователями admin-панели (эпик admin-panel, подзадача
+   users). Данные тянутся клиентом через shared-хелпер window.admin.fetch (Bearer
+   + refresh/redirect), рендерятся Alpine. Дизайн портирован из stats.html.twig /
+   app-front/admin/index.html. Секретов в разметке нет — всё из gated JSON-API
+   /api/v1/admin/users. id="users" — якорь боковой навигации. #}
+<section id="users" class="mt-8" aria-labelledby="users-heading"
+         x-data="adminUsers()" x-init="init()">
+    <div class="flex items-center justify-between">
+        <h2 id="users-heading" class="text-lg font-semibold text-white">Пользователи</h2>
+        <button @click="reload()"
+                class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                :disabled="loading"
+                aria-label="Обновить список">
+            <span x-show="!loading">Обновить</span>
+            <span x-show="loading" x-cloak>Загрузка…</span>
+        </button>
+    </div>
+
+    {# Поиск #}
+    <form class="mt-4 flex gap-2" @submit.prevent="search()">
+        <input type="text" x-model="q" placeholder="Email, Telegram ID или ID пользователя"
+               class="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+               aria-label="Поисковый запрос">
+        <button type="submit"
+                class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                :disabled="loading">Найти</button>
+        <button type="button" @click="q=''; search()"
+                class="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-zinc-800"
+                x-show="q !== ''" x-cloak>Сброс</button>
+    </form>
+
+    {# Ошибка / сообщение #}
+    <div x-show="error" x-cloak
+         class="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+         role="alert" x-text="error"></div>
+    <div x-show="notice" x-cloak
+         class="mt-4 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-300"
+         role="status" x-text="notice"></div>
+
+    {# Таблица #}
+    <div class="mt-4 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900">
+        <table class="min-w-full divide-y divide-zinc-800 text-sm">
+            <thead>
+                <tr class="text-left text-xs uppercase tracking-wider text-zinc-500">
+                    <th class="px-4 py-3">ID</th>
+                    <th class="px-4 py-3">Email / TG</th>
+                    <th class="px-4 py-3">План</th>
+                    <th class="px-4 py-3">Статус</th>
+                    <th class="px-4 py-3">Квота (обыч./AI)</th>
+                    <th class="px-4 py-3">Регистрация</th>
+                    <th class="px-4 py-3 text-right">Действия</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-800">
+                <template x-for="u in items" :key="u.id">
+                    <tr class="text-zinc-300">
+                        <td class="px-4 py-3 font-mono text-zinc-400" x-text="u.id"></td>
+                        <td class="px-4 py-3">
+                            <div class="text-white" x-text="u.email || '—'"></div>
+                            <div class="text-xs text-zinc-500" x-text="u.telegramId ? ('TG ' + u.telegramId) : (u.isGuest ? 'гость' : '')"></div>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-300" x-text="u.plan"></span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span x-show="u.isActive" class="rounded-full bg-green-500/15 px-2.5 py-0.5 text-xs text-green-400">активен</span>
+                            <span x-show="!u.isActive" x-cloak class="rounded-full bg-red-500/15 px-2.5 py-0.5 text-xs text-red-400">забанен</span>
+                        </td>
+                        <td class="px-4 py-3 font-mono text-xs text-zinc-400">
+                            <span x-text="u.dailyConversions"></span> / <span x-text="u.dailyAiConversions"></span>
+                        </td>
+                        <td class="px-4 py-3 text-xs text-zinc-500" x-text="fmtDate(u.createdAt)"></td>
+                        <td class="px-4 py-3">
+                            <div class="flex justify-end gap-1.5">
+                                <button x-show="u.isActive" @click="setBan(u, true)"
+                                        class="rounded border border-red-500/40 px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-500/10"
+                                        :disabled="loading">Бан</button>
+                                <button x-show="!u.isActive" x-cloak @click="setBan(u, false)"
+                                        class="rounded border border-green-500/40 px-2 py-1 text-xs text-green-400 transition-colors hover:bg-green-500/10"
+                                        :disabled="loading">Разбан</button>
+                                <button @click="resetQuota(u)"
+                                        class="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 transition-colors hover:bg-zinc-800"
+                                        :disabled="loading">Сброс квоты</button>
+                                <button @click="openPlan(u)"
+                                        class="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 transition-colors hover:bg-zinc-800"
+                                        :disabled="loading">План</button>
+                            </div>
+                        </td>
+                    </tr>
+                </template>
+                <tr x-show="!loading && items.length === 0" x-cloak>
+                    <td colspan="7" class="px-4 py-6 text-center text-sm text-zinc-500">Ничего не найдено</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    {# Пагинация #}
+    <div class="mt-4 flex items-center justify-between text-sm text-zinc-400" x-show="total > 0" x-cloak>
+        <span>Всего: <span class="text-white" x-text="total"></span></span>
+        <div class="flex items-center gap-3">
+            <button @click="goto(page - 1)" :disabled="page <= 1 || loading"
+                    class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs transition-colors hover:bg-zinc-800 disabled:opacity-40">← Назад</button>
+            <span>Стр. <span class="text-white" x-text="page"></span> из <span x-text="pages"></span></span>
+            <button @click="goto(page + 1)" :disabled="page >= pages || loading"
+                    class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs transition-colors hover:bg-zinc-800 disabled:opacity-40">Вперёд →</button>
+        </div>
+    </div>
+
+    {# Модалка смены плана #}
+    <div x-show="planModal.open" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+         @keydown.escape.window="planModal.open = false">
+        <div class="w-full max-w-sm rounded-xl border border-zinc-800 bg-slate-900 p-6" @click.outside="planModal.open = false">
+            <h3 class="text-lg font-semibold text-white">Смена плана</h3>
+            <p class="mt-1 text-sm text-zinc-500">
+                Пользователь <span class="font-mono text-zinc-300" x-text="'#' + planModal.userId"></span>
+            </p>
+            <label class="mt-4 block text-xs uppercase tracking-wider text-zinc-500">План</label>
+            <select x-model="planModal.plan"
+                    class="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+                <template x-for="p in planOptions" :key="p">
+                    <option :value="p" x-text="p"></option>
+                </template>
+            </select>
+            <div class="mt-6 flex justify-end gap-2">
+                <button @click="planModal.open = false"
+                        class="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:bg-zinc-800">Отмена</button>
+                <button @click="savePlan()" :disabled="loading"
+                        class="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500">Сохранить</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<script>
+    // Alpine-компонент секции пользователей. Все запросы — через shared
+    // window.admin.fetch (Bearer + refresh/redirect). Определён до deferred-Alpine.
+    function adminUsers() {
+        return {
+            loading: true,
+            error: '',
+            notice: '',
+            q: '',
+            page: 1,
+            pages: 1,
+            total: 0,
+            items: [],
+            planOptions: ['free', 'basic', 'pro'],
+            planModal: { open: false, userId: null, plan: 'free' },
+
+            async init() {
+                const ok = await window.admin.ready;
+                if (!ok) {
+                    return;
+                }
+                await this.reload();
+            },
+
+            search() {
+                this.page = 1;
+                return this.reload();
+            },
+
+            goto(p) {
+                if (p < 1 || p > this.pages || p === this.page) {
+                    return;
+                }
+                this.page = p;
+                return this.reload();
+            },
+
+            async reload() {
+                this.loading = true;
+                this.error = '';
+                this.notice = '';
+                try {
+                    const url = '/api/v1/admin/users?q=' + encodeURIComponent(this.q) + '&page=' + this.page;
+                    const res = await window.admin.fetch(url);
+                    if (!res.ok) {
+                        this.error = 'Не удалось загрузить пользователей (' + res.status + ')';
+                        return;
+                    }
+                    const data = await res.json();
+                    this.items = data.items || [];
+                    this.total = data.total || 0;
+                    this.pages = data.pages || 1;
+                    this.page = data.page || 1;
+                } catch (e) {
+                    this.error = 'Ошибка сети при загрузке пользователей';
+                } finally {
+                    this.loading = false;
+                }
+            },
+
+            // POST-действие над юзером; при успехе патчим строку данными из ответа.
+            async action(url, opts, okMsg) {
+                this.loading = true;
+                this.error = '';
+                this.notice = '';
+                try {
+                    const res = await window.admin.fetch(url, opts || { method: 'POST' });
+                    if (!res.ok) {
+                        this.error = 'Ошибка (' + res.status + ')';
+                        return null;
+                    }
+                    const user = await res.json();
+                    this.patchRow(user);
+                    this.notice = okMsg;
+                    return user;
+                } catch (e) {
+                    this.error = 'Ошибка сети';
+                    return null;
+                } finally {
+                    this.loading = false;
+                }
+            },
+
+            patchRow(user) {
+                const i = this.items.findIndex((u) => u.id === user.id);
+                if (i !== -1) {
+                    this.items[i] = user;
+                }
+            },
+
+            setBan(u, ban) {
+                if (ban && !confirm('Забанить пользователя #' + u.id + '?')) {
+                    return;
+                }
+                return this.action('/api/v1/admin/users/' + u.id + (ban ? '/ban' : '/unban'), null,
+                    ban ? 'Пользователь забанен' : 'Пользователь разбанен');
+            },
+
+            resetQuota(u) {
+                if (!confirm('Сбросить дневную квоту пользователя #' + u.id + '?')) {
+                    return;
+                }
+                return this.action('/api/v1/admin/users/' + u.id + '/reset-quota', null, 'Квота сброшена');
+            },
+
+            openPlan(u) {
+                this.planModal = { open: true, userId: u.id, plan: u.plan };
+            },
+
+            async savePlan() {
+                const user = await this.action('/api/v1/admin/users/' + this.planModal.userId + '/plan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ plan: this.planModal.plan }),
+                }, 'План изменён');
+                if (user) {
+                    this.planModal.open = false;
+                }
+            },
+
+            fmtDate(s) {
+                if (!s) {
+                    return '—';
+                }
+                const d = new Date(s);
+                return isNaN(d) ? s : d.toLocaleDateString('ru-RU');
+            },
+        };
+    }
+</script>

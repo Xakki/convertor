@@ -1,0 +1,190 @@
+{# Секция тумблера конвертаций admin-панели (эпик admin-panel, подзадача
+   conv-toggle). Список известных пар (from→to) с переключателями вкл/выкл.
+   Данные — клиентом через shared-хелпер window.admin.fetch (Bearer +
+   refresh/redirect), рендер Alpine. Дизайн портирован из users.html.twig.
+   Секретов в разметке нет — всё из gated JSON-API /api/v1/admin/conversions-toggle.
+   id="toggle" — якорь боковой навигации. Гранулярность — по паре (from→to):
+   отключение режет пару независимо от ocr-флага. #}
+<section id="toggle" class="mt-8" aria-labelledby="toggle-heading"
+         x-data="adminToggle()" x-init="init()">
+    <div class="flex items-center justify-between">
+        <h2 id="toggle-heading" class="text-lg font-semibold text-white">Конвертации</h2>
+        <button @click="reload()"
+                class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                :disabled="loading"
+                aria-label="Обновить список">
+            <span x-show="!loading">Обновить</span>
+            <span x-show="loading" x-cloak>Загрузка…</span>
+        </button>
+    </div>
+    <p class="mt-1 text-sm text-zinc-500">
+        Выключенная пара отклоняется на сабмите (не уходит в очередь). Отсутствие
+        отметки = включена по умолчанию.
+    </p>
+
+    {# Фильтры #}
+    <div class="mt-4 flex flex-wrap gap-2">
+        <input type="text" x-model="q" placeholder="Формат (напр. pdf, docx)"
+               class="flex-1 min-w-[12rem] rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+               aria-label="Фильтр по формату">
+        <select x-model="category"
+                class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+            <option value="">Все категории</option>
+            <template x-for="c in categories" :key="c">
+                <option :value="c" x-text="c"></option>
+            </template>
+        </select>
+        <label class="flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300">
+            <input type="checkbox" x-model="onlyDisabled" class="rounded border-zinc-600 bg-zinc-900 text-indigo-600 focus:ring-indigo-500">
+            Только выключенные
+        </label>
+    </div>
+
+    {# Ошибка / сообщение #}
+    <div x-show="error" x-cloak
+         class="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+         role="alert" x-text="error"></div>
+    <div x-show="notice" x-cloak
+         class="mt-4 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-300"
+         role="status" x-text="notice"></div>
+
+    {# Таблица #}
+    <div class="mt-4 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900">
+        <table class="min-w-full divide-y divide-zinc-800 text-sm">
+            <thead>
+                <tr class="text-left text-xs uppercase tracking-wider text-zinc-500">
+                    <th class="px-4 py-3">Из</th>
+                    <th class="px-4 py-3">В</th>
+                    <th class="px-4 py-3">Категория</th>
+                    <th class="px-4 py-3">AI</th>
+                    <th class="px-4 py-3 text-right">Состояние</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-800">
+                <template x-for="c in filtered()" :key="c.from + '>' + c.to">
+                    <tr class="text-zinc-300">
+                        <td class="px-4 py-3 font-mono text-white" x-text="c.from"></td>
+                        <td class="px-4 py-3 font-mono text-white" x-text="c.to"></td>
+                        <td class="px-4 py-3">
+                            <span class="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-300" x-text="c.category"></span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span x-show="c.isAi" class="rounded-full bg-indigo-500/15 px-2.5 py-0.5 text-xs text-indigo-300">AI</span>
+                            <span x-show="!c.isAi" class="text-zinc-600">—</span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="flex items-center justify-end gap-3">
+                                <span class="text-xs" :class="c.enabled ? 'text-green-400' : 'text-red-400'"
+                                      x-text="c.enabled ? 'включена' : 'выключена'"></span>
+                                {# Переключатель вкл/выкл #}
+                                <button type="button" role="switch" :aria-checked="c.enabled"
+                                        @click="toggle(c)" :disabled="loading"
+                                        class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-40"
+                                        :class="c.enabled ? 'bg-indigo-600' : 'bg-zinc-700'"
+                                        :aria-label="'Переключить ' + c.from + ' → ' + c.to">
+                                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                                          :class="c.enabled ? 'translate-x-6' : 'translate-x-1'"></span>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                </template>
+                <tr x-show="!loading && filtered().length === 0" x-cloak>
+                    <td colspan="5" class="px-4 py-6 text-center text-sm text-zinc-500">Ничего не найдено</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="mt-3 text-xs text-zinc-500" x-show="items.length > 0" x-cloak>
+        Показано <span x-text="filtered().length"></span> из <span x-text="items.length"></span> пар.
+    </div>
+</section>
+
+<script>
+    // Alpine-компонент секции конвертаций. Все запросы — через shared
+    // window.admin.fetch (Bearer + refresh/redirect). Определён до deferred-Alpine.
+    function adminToggle() {
+        return {
+            loading: true,
+            error: '',
+            notice: '',
+            q: '',
+            category: '',
+            onlyDisabled: false,
+            items: [],
+
+            async init() {
+                const ok = await window.admin.ready;
+                if (!ok) {
+                    return;
+                }
+                await this.reload();
+            },
+
+            get categories() {
+                return [...new Set(this.items.map((c) => c.category))].sort();
+            },
+
+            filtered() {
+                const q = this.q.trim().toLowerCase();
+                return this.items.filter((c) => {
+                    if (this.category && c.category !== this.category) {
+                        return false;
+                    }
+                    if (this.onlyDisabled && c.enabled) {
+                        return false;
+                    }
+                    if (q && !(c.from.includes(q) || c.to.includes(q))) {
+                        return false;
+                    }
+                    return true;
+                });
+            },
+
+            async reload() {
+                this.loading = true;
+                this.error = '';
+                this.notice = '';
+                try {
+                    const res = await window.admin.fetch('/api/v1/admin/conversions-toggle');
+                    if (!res.ok) {
+                        this.error = 'Не удалось загрузить конвертации (' + res.status + ')';
+                        return;
+                    }
+                    const data = await res.json();
+                    this.items = data.items || [];
+                } catch (e) {
+                    this.error = 'Ошибка сети при загрузке конвертаций';
+                } finally {
+                    this.loading = false;
+                }
+            },
+
+            async toggle(c) {
+                const next = !c.enabled;
+                this.loading = true;
+                this.error = '';
+                this.notice = '';
+                try {
+                    const res = await window.admin.fetch('/api/v1/admin/conversions-toggle', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ from: c.from, to: c.to, enabled: next }),
+                    });
+                    if (!res.ok) {
+                        this.error = 'Не удалось переключить (' + res.status + ')';
+                        return;
+                    }
+                    const data = await res.json();
+                    c.enabled = data.enabled;
+                    this.notice = c.from + ' → ' + c.to + (c.enabled ? ' включена' : ' выключена');
+                } catch (e) {
+                    this.error = 'Ошибка сети при переключении';
+                } finally {
+                    this.loading = false;
+                }
+            },
+        };
+    }
+</script>

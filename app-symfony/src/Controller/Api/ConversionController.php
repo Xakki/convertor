@@ -6,6 +6,7 @@ namespace App\Controller\Api;
 
 use App\Entity\User;
 use App\Exception\AuthRequiredException;
+use App\Exception\ConversionDisabledException;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionRegistry;
@@ -69,6 +70,7 @@ class ConversionController extends AbstractController
     )]
     #[OA\Response(response: 400, description: 'Некорректный запрос (нет файла / to_format)')]
     #[OA\Response(response: 401, description: 'Требуется аутентификация')]
+    #[OA\Response(response: 409, description: 'Конвертация отключена админом')]
     #[OA\Response(response: 413, description: 'Файл превышает лимит размера')]
     #[OA\Response(response: 415, description: 'Неподдерживаемый тип содержимого')]
     #[OA\Response(response: 422, description: 'Неподдерживаемая конвертация')]
@@ -120,6 +122,12 @@ class ConversionController extends AbstractController
             return $this->json(
                 ['error' => 'auth_required', 'message' => $e->getMessage()],
                 Response::HTTP_FORBIDDEN,
+            );
+        } catch (ConversionDisabledException $e) {
+            // Пара отключена админом (валидна, но временно выключена) → 409.
+            return $this->json(
+                ['error' => 'conversion_disabled', 'message' => $e->getMessage()],
+                Response::HTTP_CONFLICT,
             );
         } catch (\InvalidArgumentException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);

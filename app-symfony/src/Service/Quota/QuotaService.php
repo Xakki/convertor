@@ -109,13 +109,26 @@ class QuotaService
 
     public function resetIfNeeded(User $user): void
     {
-        $now     = new \DateTimeImmutable();
-        $resetAt = $user->getQuotaResetAt();
+        $now = new \DateTimeImmutable();
 
-        if ($resetAt->format('Y-m-d') < $now->format('Y-m-d')) {
-            $user->setDailyConversions(0);
-            $user->setDailyAiConversions(0);
-            $user->setQuotaResetAt($now);
+        if ($user->getQuotaResetAt()->format('Y-m-d') < $now->format('Y-m-d')) {
+            $this->reset($user);
+        }
+    }
+
+    /**
+     * Безусловный сброс дневной квоты: счётчики → 0, окно (`quotaResetAt`) → now.
+     * Единая точка обнуления счётчиков (её же зовёт resetIfNeeded при смене
+     * суток) — ручной admin-сброс не дублирует логику в контроллере, а бьёт
+     * ровно те же поля. $flush=false — если вызывающий владеет своим flush.
+     */
+    public function reset(User $user, bool $flush = true): void
+    {
+        $user->setDailyConversions(0);
+        $user->setDailyAiConversions(0);
+        $user->setQuotaResetAt(new \DateTimeImmutable());
+
+        if ($flush) {
             $this->em->flush();
         }
     }

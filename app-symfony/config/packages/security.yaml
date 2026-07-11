@@ -53,8 +53,10 @@ security:
             provider: app_user_provider
 
     # Залогиненный (ROLE_USER) наследует ROLE_GUEST → проходит guest-роуты.
+    # Админ (ROLE_ADMIN) наследует ROLE_USER → проходит и обычные роуты.
     role_hierarchy:
         ROLE_USER: [ROLE_GUEST]
+        ROLE_ADMIN: [ROLE_USER]
 
     access_control:
         - { path: ^/api/v1/auth, roles: PUBLIC_ACCESS }
@@ -62,6 +64,12 @@ security:
         - { path: ^/api/v1/formats, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/internal, roles: IS_AUTHENTICATED_FULLY }
         - { path: ^/api/v1/worker, roles: IS_AUTHENTICATED_FULLY }
+        # Админка, Option B: единственная реальная граница — admin-API.
+        # Правило ^/api/v1/admin ДОЛЖНО стоять ДО общего ^/api (ROLE_USER),
+        # иначе админ-эндпоинты попадут под ROLE_USER-гейт. Веб-страница
+        # `^/admin` НЕ гейтится (открытая оболочка, достижима навигацией;
+        # секретов не содержит) — доступ режется client-guard'ом + admin-API.
+        - { path: ^/api/v1/admin, roles: ROLE_ADMIN }
         # Гостю открыты: convert, status/download (/convert/{id}/...), history, quota.
         # Гейт ai/video режется в контроллере (403 auth_required), не на firewall.
         - { path: ^/api/v1/convert, roles: ROLE_GUEST }

@@ -1,0 +1,205 @@
+{# Секция статистики admin-панели (эпик admin-panel, подзадача stats).
+   Данные тянутся клиентом через shared-хелпер window.admin.fetch (Bearer +
+   refresh/redirect), рендерятся Alpine + Chart.js. Дизайн портирован из
+   app-front/admin/index.html. Секретов в разметке нет — всё из gated JSON-API
+   GET /api/v1/admin/stats. id="overview" — якорь боковой навигации. #}
+<section id="overview" class="mt-8" aria-labelledby="stats-heading"
+         x-data="adminStats()" x-init="init()">
+    <div class="flex items-center justify-between">
+        <h2 id="stats-heading" class="text-lg font-semibold text-white">Статистика</h2>
+        <button @click="reload()"
+                class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                :disabled="loading"
+                aria-label="Обновить статистику">
+            <span x-show="!loading">Обновить</span>
+            <span x-show="loading" x-cloak>Загрузка…</span>
+        </button>
+    </div>
+
+    {# Ошибка загрузки #}
+    <div x-show="error" x-cloak
+         class="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+         role="alert" x-text="error"></div>
+
+    {# Плитки-счётчики #}
+    <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
+         aria-label="Ключевые метрики">
+        <template x-for="tile in tiles" :key="tile.key">
+            <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium uppercase tracking-wider text-zinc-500" x-text="tile.label"></span>
+                    <span x-show="tile.placeholder" x-cloak
+                          class="rounded-full bg-zinc-700/50 px-2 py-0.5 text-[10px] uppercase text-zinc-400">заглушка</span>
+                </div>
+                <div class="mt-4 text-3xl font-bold text-white" x-text="tile.value"></div>
+                <div class="mt-1 text-xs text-zinc-500" x-text="tile.hint"></div>
+            </div>
+        </template>
+    </div>
+
+    {# График конвертаций за N дней #}
+    <div class="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+        <div class="flex items-center justify-between">
+            <h3 class="font-semibold text-white">
+                Конвертации за <span x-text="days"></span> дн.
+            </h3>
+            <div class="flex gap-3">
+                <span class="flex items-center gap-1.5 text-xs text-zinc-500">
+                    <span class="h-2.5 w-2.5 rounded-full bg-indigo-500"></span> Обычные
+                </span>
+                <span class="flex items-center gap-1.5 text-xs text-zinc-500">
+                    <span class="h-2.5 w-2.5 rounded-full bg-purple-500"></span> AI
+                </span>
+            </div>
+        </div>
+        <div class="mt-4 h-64" role="img" aria-label="График конвертаций по дням">
+            <canvas x-ref="chart" aria-label="График конвертаций"></canvas>
+        </div>
+    </div>
+
+    {# Разбивки: по статусам + топ пар форматов #}
+    <div class="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+            <h3 class="font-semibold text-white">По статусам</h3>
+            <ul class="mt-4 space-y-2" role="list">
+                <template x-for="row in statusRows" :key="row.key">
+                    <li class="flex items-center justify-between text-sm">
+                        <span class="text-zinc-400" x-text="row.label"></span>
+                        <span class="font-medium text-white" x-text="fmt(row.count)"></span>
+                    </li>
+                </template>
+                <li x-show="statusRows.length === 0" x-cloak class="text-sm text-zinc-500">Нет данных</li>
+            </ul>
+        </div>
+
+        <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+            <h3 class="font-semibold text-white">Топ форматов</h3>
+            <ul class="mt-4 space-y-2" role="list">
+                <template x-for="(row, i) in formatRows" :key="i">
+                    <li class="flex items-center justify-between text-sm">
+                        <span class="text-zinc-400">
+                            <span x-text="row.from"></span>
+                            <span class="text-zinc-600">→</span>
+                            <span x-text="row.to"></span>
+                        </span>
+                        <span class="font-medium text-white" x-text="fmt(row.count)"></span>
+                    </li>
+                </template>
+                <li x-show="formatRows.length === 0" x-cloak class="text-sm text-zinc-500">Нет данных</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<script>
+    // Alpine-компонент секции статистики. Определён до deferred-Alpine, поэтому
+    // доступен в x-data. Все данные — из shared window.admin.fetch.
+    function adminStats() {
+        const STATUS_LABELS = {
+            pending: 'В очереди',
+            processing: 'В работе',
+            completed: 'Готово',
+            failed: 'Ошибки',
+            expired: 'Истекло',
+        };
+        return {
+            loading: true,
+            error: '',
+            days: 7,
+            tiles: [],
+            statusRows: [],
+            formatRows: [],
+            chart: null,
+
+            async init() {
+                // Ждём shared client-guard: JWT готов, права проверены.
+                const ok = await window.admin.ready;
+                if (!ok) {
+                    return;
+                }
+                await this.reload();
+            },
+
+            async reload() {
+                this.loading = true;
+                this.error = '';
+                try {
+                    const res = await window.admin.fetch('/api/v1/admin/stats');
+                    if (!res.ok) {
+                        this.error = 'Не удалось загрузить статистику (' + res.status + ')';
+                        return;
+                    }
+                    this.apply(await res.json());
+                } catch (e) {
+                    this.error = 'Ошибка сети при загрузке статистики';
+                } finally {
+                    this.loading = false;
+                }
+            },
+
+            apply(data) {
+                const t = data.totals || {};
+                const rev = data.revenue || {};
+                this.days = data.days || 7;
+
+                this.tiles = [
+                    { key: 'conv', label: 'Всего конвертаций', value: this.fmt(t.conversions), hint: 'Сегодня: ' + this.fmt(t.conversionsToday) },
+                    { key: 'users', label: 'Пользователи', value: this.fmt(t.users), hint: 'Активных: ' + this.fmt(t.activeUsers) + ' · гостей: ' + this.fmt(t.guestUsers) },
+                    { key: 'errors', label: 'Доля ошибок', value: this.pct(t.errorRate), hint: 'Среднее время: ' + this.ms(t.avgProcessingMs) },
+                    { key: 'revenue', label: 'Выручка', value: rev.label || 'n/a', hint: 'Платежи ещё не персистятся', placeholder: !!rev.placeholder },
+                ];
+
+                this.statusRows = Object.keys(data.byStatus || {}).map((k) => ({
+                    key: k,
+                    label: STATUS_LABELS[k] || k,
+                    count: data.byStatus[k],
+                }));
+
+                this.formatRows = data.byFormat || [];
+
+                this.renderChart(data.chart || { labels: [], regular: [], ai: [] });
+            },
+
+            renderChart(c) {
+                const canvas = this.$refs.chart;
+                if (!canvas || typeof Chart === 'undefined') {
+                    return;
+                }
+                if (this.chart) {
+                    this.chart.destroy();
+                }
+                const labels = (c.labels || []).map((d) =>
+                    typeof d === 'string' && d.length >= 10 ? d.slice(8, 10) + '.' + d.slice(5, 7) : d);
+                this.chart = new Chart(canvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            { label: 'Обычные', data: c.regular || [], borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.1)', tension: 0.4, fill: true, pointRadius: 3 },
+                            { label: 'AI', data: c.ai || [], borderColor: '#a855f7', backgroundColor: 'rgba(168,85,247,0.1)', tension: 0.4, fill: true, pointRadius: 3 },
+                        ],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { grid: { color: 'rgba(63,63,70,0.4)' }, ticks: { color: '#a1a1aa' } },
+                            y: { beginAtZero: true, grid: { color: 'rgba(63,63,70,0.4)' }, ticks: { color: '#a1a1aa', precision: 0 } },
+                        },
+                    },
+                });
+            },
+
+            fmt(n) {
+                return (n === null || n === undefined) ? '—' : Number(n).toLocaleString('ru-RU');
+            },
+            pct(r) {
+                return (r === null || r === undefined) ? '—' : (Number(r) * 100).toFixed(1) + '%';
+            },
+            ms(v) {
+                return (v === null || v === undefined) ? '—' : this.fmt(v) + ' мс';
+            },
+        };
+    }
+</script>

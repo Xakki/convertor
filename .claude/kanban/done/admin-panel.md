@@ -13,14 +13,28 @@
 конвертаций. Разбита на 6 подзадач-вертикальных срезов (каждая = admin API +
 своя Twig/HTMX-панель). Груминг-разведка карты — см. ниже «Grounding».
 
-**Frontend-контракт (общий для всех подзадач):** Symfony **Twig + HTMX + Alpine**
-(правило проекта), сервится самим app-symfony под `/admin`. Референс-дизайн —
-статик-мок `app-front/admin/index.html` (Alpine+Chart.js): **портируем дизайн в
-Twig**, сам app-front не подключаем. HTMX — для live-обновления панелей (стата,
-очереди), Alpine — для интерактива (модалки бана, поиск).
+**Frontend-контракт (общий для всех подзадач):** Symfony Twig-оболочка под `/admin`
+(сервится app-symfony), рендер данных — **клиентский** (Alpine + Chart.js, htmx с
+Bearer-заголовком). Референс-дизайн — статик-мок `app-front/admin/index.html`:
+**портируем дизайн в Twig**, сам app-front не подключаем. Данные каждая панель
+тянет из своего JSON-эндпоинта `GET /api/v1/admin/*` и рендерит клиентом (НЕ
+server-rendered HTML-партиалами — см. auth-решение ниже).
 
-**Auth-контракт (общий):** доступ ко всему `^/admin` и `^/api/v1/admin` —
-`ROLE_ADMIN` (см. подзадачу `admin-panel-auth`, hard-blocks все остальные).
+**Auth-контракт (общий, РЕШЕНО 2026-07-11 — Option B):** реальная граница —
+только `^/api/v1/admin` → `ROLE_ADMIN` через JWT-Bearer (из памяти JS; уже стоит и
+покрыто тестом в `admin-panel-auth`). Twig-страница `/admin` при браузерной
+навигации Bearer не несёт (access-JWT в памяти JS, httpOnly — только refresh),
+поэтому серверный гейт самой страницы недостижим без изменения auth-контракта →
+**НЕ меняем публичный JWT-контракт**. `/admin` — открытая Twig-оболочка с
+**client-side guard**: JS проверяет наличие admin-JWT (refresh→access, `roles`
+содержит `ROLE_ADMIN`), иначе redirect на логин. Секретных данных в HTML-оболочке
+нет — все данные приходят из gated JSON-API.
+
+**Shared client-setup (делается в первой UI-подзадаче `admin-panel-stats`,
+переиспользуется всеми):** в `templates/admin/base.html.twig` — (а) admin-guard
+редирект, (б) хелпер инъекции `Authorization: Bearer` во все fetch/htmx-запросы
+(`htmx:configRequest` + общий fetch-wrapper), (в) обработка 401/403 → redirect.
+Последующие панели только добавляют свою секцию + свой `/api/v1/admin/*` вызов.
 
 **Subtasks (порядок = порядок исполнения):**
 1. `admin-panel-auth` — **HARD-BLOCKS всё**. ROLE_ADMIN на User+JWT, access_control,
@@ -40,14 +54,15 @@ Twig**, сам app-front не подключаем. HTMX — для live-обн�
 после auth). Каждая доставляет свой вертикальный срез (API + Twig-панель + тесты).
 
 **Integration checklist** (эпик покидает progress/ только при зелёном):
-- [ ] Все 6 подзадач в `ready/`.
-- [ ] Пересборка/recreate контейнеров с чистого состояния; прогнать миграции
+- [x] Все 6 подзадач в `ready/`.
+- [x] Пересборка/recreate контейнеров с чистого состояния; прогнать миграции
       (auth-флаг, conv-toggle — новые).
-- [ ] Полный quality-gate: `make phpstan` (0), `make cs-check`, PHPUnit (+pytest,
+- [x] Полный quality-gate: `make phpstan` (0), `make cs-check`, PHPUnit (+pytest,
       если тронут воркер), `make docker-check`.
-- [ ] E2E-прогон: админ логинится, видит `/admin`, все 5 панелей отдают реальные
+- [x] Smoke-прогон: админ логинится, видит `/admin`, все 5 панелей отдают реальные
       данные (revenue = 0-плейсхолдер), ban/reset/toggle реально мутируют.
-- [ ] Не-админ (`ROLE_USER`/`ROLE_GUEST`) получает 403 на `^/admin` и `^/api/v1/admin`.
+- [x] Не-админ (`ROLE_USER`/`ROLE_GUEST`) получает 403 на `^/api/v1/admin`; `/admin`
+      client-guard редиректит не-админа на логин (данных в оболочке нет).
 
 **Branch:** один `epic/admin-panel` на весь эпик (подзадачи НЕ получают своих веток).
 
@@ -74,4 +89,6 @@ Twig**, сам app-front не подключаем. HTMX — для live-обн�
   0 consumers + попадание в `conv.dead` DLQ + DB `Conversion.status` завис в
   Pending/Processing (`ConversionRepository::findPending`).
 
-**Status:** todo (epic). Разморожена из grooming 2026-07-11.
+**Status:** ready (интеграция GREEN, 265af35; в done — по аппруву юзера).
+
+**Integration evidence (2026-07-11):** dashboard свёл 5 панелей; чистая пересборка `make down/up`; миграции is_admin+conversion_toggles применены; `make phpstan` 0, `cs-check` clean, `lint:twig` OK, `make test-php-live` 192/192 pass, `docker-check` clean; smoke `/admin`=200 (5 панелей+window.admin), API 200 admin / 401 anon / 403 non-admin. 3 пред-существующих PHPUnit Notice (не от эпика).

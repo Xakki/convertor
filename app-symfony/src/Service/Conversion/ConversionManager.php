@@ -11,6 +11,7 @@ use App\Entity\User;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Exception\AuthRequiredException;
+use App\Exception\ConversionDisabledException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Queue\ConversionStatusReader;
@@ -33,6 +34,10 @@ class ConversionManager
         private readonly MessageBusInterface $bus,
         private readonly ConversionStatusReader $statusReader,
         private readonly S3Storage $s3,
+        // Опционален (как nullable-зависимости ConversionRegistry): в проде
+        // autowiring инжектит сервис, unit-тесты без БД получают null →
+        // toggle-проверка пропускается (поведение по умолчанию = всё включено).
+        private readonly ?ConversionToggleService $toggleService = null,
     ) {
     }
 
@@ -59,6 +64,13 @@ class ConversionManager
             }
             $category = $this->registry->getCategory($fromFormat, $toFormat);
             $isAi     = $this->registry->isAi($fromFormat, $toFormat);
+        }
+
+        // Toggle-гейт: пара, отключённая админом, режется ДО любых quota/S3-
+        // эффектов и до постановки в очередь. Проверка по паре (from→to) —
+        // независимо от ocr-флага (та же пара). Отсутствие ряда = включено.
+        if ($this->toggleService !== null && ! $this->toggleService->isEnabled($fromFormat, $toFormat)) {
+            throw new ConversionDisabledException('Конвертация временно отключена');
         }
 
         // Гейт ai/video: пара, требующая полного логина (isAi ИЛИ category=Video),

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+{# Базовый layout админки. Дизайн портирован из статик-мока
+   app-front/admin/index.html. Option B: страница /admin — открытая оболочка без
+   server-side гейта (реальная граница — только API ^/api/v1/admin по JWT).
+   Доступ к оболочке ограничивает клиентский auth-guard ниже (redirect не-админа);
+   секретных данных в HTML нет — всё приходит из gated JSON-API. #}
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>{% block title %}Администратор — Convertor{% endblock %}</title>
+
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2'><path d='M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10'/></svg>">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }</script>
+    <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    {% block head_scripts %}{% endblock %}
+
+    <style>[x-cloak] { display: none !important; }</style>
+</head>
+<body class="min-h-screen bg-slate-900 text-white antialiased">
+
+    {# Шапка #}
+    <header class="sticky top-0 z-40 border-b border-zinc-800 bg-slate-900/95 backdrop-blur-sm" role="banner">
+        <div class="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center gap-4">
+                <a href="/" class="flex items-center gap-2 text-lg font-bold text-white">
+                    <svg class="h-6 w-6 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"/>
+                    </svg>
+                    Convertor
+                </a>
+                <span class="rounded-full bg-red-500/20 px-2.5 py-0.5 text-xs font-semibold text-red-400">Admin</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="/" class="text-sm text-zinc-500 hover:text-white transition-colors">← На сайт</a>
+            </div>
+        </div>
+    </header>
+
+    <div class="flex">
+        {# Боковая навигация. Ссылки — на будущие панели эпика admin-panel. #}
+        <nav class="hidden w-56 shrink-0 lg:block" aria-label="Навигация администратора">
+            <div class="sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto border-r border-zinc-800 py-6">
+                <ul class="space-y-1 px-3" role="list">
+                    {% set nav_active = block('nav_active') %}
+                    {% set nav_items = [
+                        { key: 'stats',   href: '#overview',  label: 'Обзор' },
+                        { key: 'users',   href: '#users',     label: 'Пользователи' },
+                        { key: 'queues',  href: '#queues',    label: 'Очереди' },
+                        { key: 'logs',    href: '#logs',      label: 'Логи' },
+                        { key: 'toggle',  href: '#toggle',    label: 'Конвертации' },
+                    ] %}
+                    {% for item in nav_items %}
+                        <li>
+                            <a href="{{ item.href }}"
+                               class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors {{ nav_active == item.key ? 'font-medium text-white bg-zinc-800' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white' }}">
+                                {{ item.label }}
+                            </a>
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </nav>
+
+        <main class="flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
+            {% block body %}{% endblock %}
+        </main>
+    </div>
+
+    {# ===================================================================
+       Shared client-setup админки (Option B). Единый JS-слой для ВСЕХ
+       панелей эпика admin-panel (stats/users/queues/logs/toggle). Реальная
+       граница безопасности — только API `^/api/v1/admin` (JWT, ROLE_ADMIN);
+       страница /admin — открытая оболочка без секретов, доступ к ней режет
+       лишь client-guard ниже (UX-редирект не-админа).
+
+       Публичный контракт (использовать в панелях, base НЕ трогать):
+         window.admin.fetch(url, opts)  — fetch с авто-инъекцией Bearer +
+             одноразовым refresh и redirect на 401/403. Для JSON-вызовов.
+         window.admin.jwt               — текущий access-JWT (или null).
+         window.admin.refresh()         — принудительно обновить JWT (Promise<string|null>).
+         window.admin.ready             — Promise<boolean>, резолвится ПОСЛЕ
+             первичного refresh+guard (true=админ). Панель ждёт его перед
+             своими вызовами.
+         событие `admin:ready` на <body> + атрибут data-admin-ready="1" —
+             для htmx-панелей РЕКОМЕНДУЕМЫЙ триггер: `admin:ready from:body`
+             (БЕЗ `load`!). `load` срабатывает синхронно на init htmx — раньше,
+             чем async-guard положит Bearer → гарантированный первый 401. Guard
+             шлёт `admin:ready` один раз после первичного refresh, что и
+             покрывает первую загрузку панели.
+
+       Bearer инъектируется во ВСЕ htmx-запросы (htmx:configRequest); на 401/403
+       htmx-ответ делаем один refresh и ПЕРЕИГРЫВАЕМ упавший запрос (симметрично
+       admin.fetch), иначе redirect. Публичный JWT-контракт НЕ меняем —
+       access-JWT живёт только в памяти JS, наружу (cookie) не пишем.
+       =================================================================== #}
+    <script>
+    window.admin = (function () {
+        let jwt = null;
+
+        function decode(token) {
+            try {
+                return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function isAdmin(token) {
+            const p = decode(token);
+            return !!(p && Array.isArray(p.roles) && p.roles.includes('ROLE_ADMIN'));
+        }
+
+        function toLogin() {
+            window.location.href = '/';
+        }
+
+        // Обновить access-JWT тем же refresh-флоу, что и публичное приложение
+        // (httpOnly refresh-cookie). Возвращает новый JWT или null.
+        async function refresh() {
+            try {
+                const res = await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.token) {
+                        jwt = data.token;
+                        return jwt;
+                    }
+                }
+            } catch (e) { /* сеть/парсинг — трактуем как отсутствие прав */ }
+            return null;
+        }
+
+        // fetch-обёртка для JSON-вызовов панелей: инъекция Bearer + один retry
+        // через refresh на 401/403, иначе redirect на логин.
+        async function adminFetch(url, opts) {
+            opts = opts || {};
+            const send = function () {
+                const headers = Object.assign({}, opts.headers || {});
+                if (jwt) {
+                    headers['Authorization'] = 'Bearer ' + jwt;
+                }
+                return fetch(url, Object.assign({}, opts, {
+                    headers: headers,
+                    credentials: opts.credentials || 'same-origin',
+                }));
+            };
+
+            let res = await send();
+            if (res.status === 401 || res.status === 403) {
+                const t = await refresh();
+                if (!t) {
+                    toLogin();
+                    return res;
+                }
+                res = await send();
+                if (res.status === 401 || res.status === 403) {
+                    toLogin();
+                }
+            }
+            return res;
+        }
+
+        // Bearer во все htmx-запросы.
+        document.body.addEventListener('htmx:configRequest', function (e) {
+            if (jwt) {
+                e.detail.headers['Authorization'] = 'Bearer ' + jwt;
+            }
+        });
+
+        // htmx-ответ 401/403: один refresh + переигрываем упавший запрос
+        // (симметрично admin.fetch), иначе redirect. Флаг data-admin-auth-retry
+        // на элементе гасит бесконечный цикл, если и после refresh опять 401/403
+        // (реального ROLE_ADMIN нет) — тогда redirect.
+        document.body.addEventListener('htmx:responseError', function (e) {
+            const s = e.detail.xhr.status;
+            if (s !== 401 && s !== 403) {
+                return;
+            }
+            const cfg = e.detail.requestConfig || {};
+            const elt = cfg.elt;
+            if (elt && elt.dataset.adminAuthRetry === '1') {
+                toLogin();
+                return;
+            }
+            refresh().then(function (t) {
+                if (!t) {
+                    toLogin();
+                    return;
+                }
+                if (elt && cfg.verb && cfg.path && window.htmx) {
+                    elt.dataset.adminAuthRetry = '1';
+                    window.htmx.ajax(cfg.verb, cfg.path, {
+                        source: elt,
+                        target: cfg.target,
+                        values: cfg.parameters,
+                    });
+                }
+            });
+        });
+
+        // Успешный htmx-ответ снимает флаг retry — следующий 401/403 снова
+        // получит свой единственный refresh+retry.
+        document.body.addEventListener('htmx:afterRequest', function (e) {
+            if (e.detail.successful && e.detail.elt) {
+                delete e.detail.elt.dataset.adminAuthRetry;
+            }
+        });
+
+        // Первичный guard: тянем JWT, при отсутствии ROLE_ADMIN — redirect.
+        // ready резолвится всегда (панели ждут его перед своими вызовами).
+        const ready = (async function guard() {
+            const t = await refresh();
+            if (!t || !isAdmin(t)) {
+                toLogin();
+                return false;
+            }
+            document.body.setAttribute('data-admin-ready', '1');
+            document.body.dispatchEvent(new CustomEvent('admin:ready'));
+            return true;
+        })();
+
+        return {
+            fetch: adminFetch,
+            refresh: refresh,
+            ready: ready,
+            get jwt() { return jwt; },
+        };
+    })();
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

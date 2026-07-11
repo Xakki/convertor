@@ -1,0 +1,306 @@
+{# Секция лога конвертаций admin-панели (эпик admin-panel, подзадача logs).
+   DB-backed view по бизнес-состоянию Conversion. Данные тянутся клиентом через
+   shared-хелпер window.admin.fetch (Bearer + refresh/redirect) из gated JSON-API
+   /api/v1/admin/conversions и рендерятся Alpine. Рантайм-логи воркеров
+   (стектрейсы) в БД нет — линк-аут в Graylog по conversion id. Секретов в
+   разметке нет. id="logs" — якорь боковой навигации. #}
+<section id="logs" class="mt-8" aria-labelledby="logs-heading"
+         x-data="adminLogs()" x-init="init()">
+    <div class="flex items-center justify-between">
+        <h2 id="logs-heading" class="text-lg font-semibold text-white">Логи конвертаций</h2>
+        <button @click="reload()"
+                class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                :disabled="loading"
+                aria-label="Обновить лог">
+            <span x-show="!loading">Обновить</span>
+            <span x-show="loading" x-cloak>Загрузка…</span>
+        </button>
+    </div>
+
+    {# Фильтры #}
+    <form class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" @submit.prevent="search()">
+        <input type="text" x-model="f.user" placeholder="Пользователь (ID или email)"
+               class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+               aria-label="Фильтр по пользователю">
+
+        <select x-model="f.status"
+                class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                aria-label="Фильтр по статусу">
+            <option value="">Статус: любой</option>
+            <template x-for="s in statusOptions" :key="s.value">
+                <option :value="s.value" x-text="s.label"></option>
+            </template>
+        </select>
+
+        <select x-model="f.category"
+                class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                aria-label="Фильтр по категории">
+            <option value="">Категория: любая</option>
+            <template x-for="c in categoryOptions" :key="c.value">
+                <option :value="c.value" x-text="c.label"></option>
+            </template>
+        </select>
+
+        <select x-model="f.isAi"
+                class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                aria-label="Фильтр AI">
+            <option value="">AI: все</option>
+            <option value="1">Только AI</option>
+            <option value="0">Без AI</option>
+        </select>
+
+        <input type="text" x-model="f.fromFormat" placeholder="Формат из (напр. pdf)"
+               class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none"
+               aria-label="Фильтр по исходному формату">
+        <input type="text" x-model="f.toFormat" placeholder="Формат в (напр. txt)"
+               class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none"
+               aria-label="Фильтр по целевому формату">
+
+        <label class="flex flex-col text-xs text-zinc-500">
+            <span class="mb-1">Дата с</span>
+            <input type="date" x-model="f.from"
+                   class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                   aria-label="Дата с">
+        </label>
+        <label class="flex flex-col text-xs text-zinc-500">
+            <span class="mb-1">Дата по</span>
+            <input type="date" x-model="f.to"
+                   class="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                   aria-label="Дата по">
+        </label>
+
+        <div class="flex items-center gap-2 sm:col-span-2 lg:col-span-4">
+            <button type="submit"
+                    class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    :disabled="loading">Применить</button>
+            <button type="button" @click="reset()"
+                    class="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-zinc-800">Сброс</button>
+
+            {# Быстрый тумблер «только ошибки» = фильтр status=failed. #}
+            <button type="button" @click="toggleErrorsOnly()"
+                    class="ml-auto rounded-lg border px-3 py-2 text-sm transition-colors"
+                    :class="errorsOnly ? 'border-red-500/50 bg-red-500/10 text-red-300' : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'"
+                    :aria-pressed="errorsOnly">
+                Только ошибки
+            </button>
+        </div>
+    </form>
+
+    {# Ошибка загрузки #}
+    <div x-show="error" x-cloak
+         class="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+         role="alert" x-text="error"></div>
+
+    {# Таблица #}
+    <div class="mt-4 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900">
+        <table class="min-w-full divide-y divide-zinc-800 text-sm">
+            <thead>
+                <tr class="text-left text-xs uppercase tracking-wider text-zinc-500">
+                    <th class="px-4 py-3">ID</th>
+                    <th class="px-4 py-3">Пользователь</th>
+                    <th class="px-4 py-3">Конвертация</th>
+                    <th class="px-4 py-3">Категория</th>
+                    <th class="px-4 py-3">Статус</th>
+                    <th class="px-4 py-3">Время</th>
+                    <th class="px-4 py-3">Создано</th>
+                    <th class="px-4 py-3 text-right">Graylog</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-800">
+                <template x-for="c in items" :key="c.id">
+                    <tr class="align-top text-zinc-300">
+                        <td class="px-4 py-3 font-mono text-zinc-400" x-text="c.id"></td>
+                        <td class="px-4 py-3">
+                            <div class="text-white" x-text="(c.user && c.user.email) || '—'"></div>
+                            <div class="text-xs text-zinc-500" x-text="c.user ? ('#' + c.user.id) : ''"></div>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="font-mono text-zinc-200" x-text="c.fromFormat"></span>
+                            <span class="text-zinc-600">→</span>
+                            <span class="font-mono text-zinc-200" x-text="c.toFormat"></span>
+                            <div class="mt-1 flex gap-1">
+                                <span x-show="c.isAi" x-cloak class="rounded-full bg-purple-500/15 px-2 py-0.5 text-[10px] uppercase text-purple-300">AI</span>
+                                <span x-show="c.isOcr" x-cloak class="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] uppercase text-sky-300">OCR</span>
+                            </div>
+                            {# errorMessage — показываем под строкой, если есть. #}
+                            <div x-show="c.errorMessage" x-cloak
+                                 class="mt-1 max-w-md whitespace-pre-wrap break-words text-xs text-red-400"
+                                 x-text="c.errorMessage"></div>
+                        </td>
+                        <td class="px-4 py-3 text-zinc-400" x-text="c.category"></td>
+                        <td class="px-4 py-3">
+                            <span class="rounded-full px-2.5 py-0.5 text-xs" :class="statusClass(c.status)"
+                                  x-text="statusLabel(c.status)"></span>
+                        </td>
+                        <td class="px-4 py-3 font-mono text-xs text-zinc-400" x-text="ms(c.processingMs)"></td>
+                        <td class="px-4 py-3 text-xs text-zinc-500" x-text="fmtDate(c.createdAt)"></td>
+                        <td class="px-4 py-3 text-right">
+                            <a x-show="graylogUrl" x-cloak :href="graylogLink(c.id)" target="_blank" rel="noopener"
+                               class="rounded border border-zinc-700 px-2 py-1 text-xs text-indigo-300 transition-colors hover:bg-zinc-800">открыть ↗</a>
+                            <span x-show="!graylogUrl" x-cloak class="text-xs text-zinc-600">n/a</span>
+                        </td>
+                    </tr>
+                </template>
+                <tr x-show="!loading && items.length === 0" x-cloak>
+                    <td colspan="8" class="px-4 py-6 text-center text-sm text-zinc-500">Ничего не найдено</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    {# Пагинация #}
+    <div class="mt-4 flex items-center justify-between text-sm text-zinc-400" x-show="total > 0" x-cloak>
+        <span>Всего: <span class="text-white" x-text="total"></span></span>
+        <div class="flex items-center gap-3">
+            <button @click="goto(page - 1)" :disabled="page <= 1 || loading"
+                    class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs transition-colors hover:bg-zinc-800 disabled:opacity-40">← Назад</button>
+            <span>Стр. <span class="text-white" x-text="page"></span> из <span x-text="pages"></span></span>
+            <button @click="goto(page + 1)" :disabled="page >= pages || loading"
+                    class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs transition-colors hover:bg-zinc-800 disabled:opacity-40">Вперёд →</button>
+        </div>
+    </div>
+</section>
+
+<script>
+    // Alpine-компонент секции логов. Все запросы — через shared
+    // window.admin.fetch (Bearer + refresh/redirect). Определён до deferred-Alpine.
+    function adminLogs() {
+        const STATUS = {
+            pending:    { label: 'В очереди', cls: 'bg-zinc-700/50 text-zinc-300' },
+            processing: { label: 'В работе',  cls: 'bg-blue-500/15 text-blue-300' },
+            completed:  { label: 'Готово',    cls: 'bg-green-500/15 text-green-400' },
+            failed:     { label: 'Ошибка',    cls: 'bg-red-500/15 text-red-400' },
+            expired:    { label: 'Истекло',   cls: 'bg-yellow-500/15 text-yellow-300' },
+        };
+        return {
+            loading: true,
+            error: '',
+            page: 1,
+            pages: 1,
+            total: 0,
+            items: [],
+            // Базовый URL Graylog приходит из API (meta), пусто = ссылка скрыта.
+            graylogUrl: '',
+            statusOptions: [
+                { value: 'pending', label: 'В очереди' },
+                { value: 'processing', label: 'В работе' },
+                { value: 'completed', label: 'Готово' },
+                { value: 'failed', label: 'Ошибка' },
+                { value: 'expired', label: 'Истекло' },
+            ],
+            categoryOptions: [
+                { value: 'document', label: 'Документы' },
+                { value: 'image', label: 'Изображения' },
+                { value: 'audio', label: 'Аудио' },
+                { value: 'video', label: 'Видео' },
+                { value: 'data', label: 'Данные' },
+                { value: 'archive', label: 'Архивы' },
+                { value: 'markup', label: 'Разметка' },
+            ],
+            f: { user: '', status: '', category: '', isAi: '', fromFormat: '', toFormat: '', from: '', to: '' },
+
+            get errorsOnly() {
+                return this.f.status === 'failed';
+            },
+
+            async init() {
+                const ok = await window.admin.ready;
+                if (!ok) {
+                    return;
+                }
+                await this.reload();
+            },
+
+            search() {
+                this.page = 1;
+                return this.reload();
+            },
+
+            reset() {
+                this.f = { user: '', status: '', category: '', isAi: '', fromFormat: '', toFormat: '', from: '', to: '' };
+                return this.search();
+            },
+
+            toggleErrorsOnly() {
+                this.f.status = this.errorsOnly ? '' : 'failed';
+                return this.search();
+            },
+
+            goto(p) {
+                if (p < 1 || p > this.pages || p === this.page) {
+                    return;
+                }
+                this.page = p;
+                return this.reload();
+            },
+
+            async reload() {
+                this.loading = true;
+                this.error = '';
+                try {
+                    const res = await window.admin.fetch('/api/v1/admin/conversions?' + this.queryString());
+                    if (!res.ok) {
+                        this.error = 'Не удалось загрузить лог (' + res.status + ')';
+                        return;
+                    }
+                    const data = await res.json();
+                    this.items = data.items || [];
+                    this.total = data.total || 0;
+                    this.pages = data.pages || 1;
+                    this.page = data.page || 1;
+                    this.graylogUrl = data.graylogUrl || '';
+                } catch (e) {
+                    this.error = 'Ошибка сети при загрузке лога';
+                } finally {
+                    this.loading = false;
+                }
+            },
+
+            queryString() {
+                const p = new URLSearchParams();
+                p.set('page', this.page);
+                const map = {
+                    user: this.f.user, status: this.f.status, category: this.f.category,
+                    isAi: this.f.isAi, fromFormat: this.f.fromFormat, toFormat: this.f.toFormat,
+                    from: this.f.from, to: this.f.to,
+                };
+                for (const k in map) {
+                    if (map[k] !== '' && map[k] !== null && map[k] !== undefined) {
+                        p.set(k, map[k]);
+                    }
+                }
+                return p.toString();
+            },
+
+            // Линк-аут в Graylog по conversion id. Чистого correlation-ключа в
+            // логах воркеров нет (см. карту admin-panel-logs) — ищем полнотекстово
+            // по id за окно 7 дней; при появлении явного поля заменить на
+            // `conversion_id:<id>`.
+            graylogLink(id) {
+                if (!this.graylogUrl) {
+                    return '#';
+                }
+                const base = this.graylogUrl.replace(/\/+$/, '');
+                const q = encodeURIComponent('"' + id + '"');
+                return base + '/search?q=' + q + '&rangetype=relative&relative=604800';
+            },
+
+            statusLabel(s) {
+                return (STATUS[s] || {}).label || s;
+            },
+            statusClass(s) {
+                return (STATUS[s] || {}).cls || 'bg-zinc-700/50 text-zinc-300';
+            },
+            ms(v) {
+                return (v === null || v === undefined) ? '—' : Number(v).toLocaleString('ru-RU') + ' мс';
+            },
+            fmtDate(s) {
+                if (!s) {
+                    return '—';
+                }
+                const d = new Date(s);
+                return isNaN(d) ? s : d.toLocaleString('ru-RU');
+            },
+        };
+    }
+</script>

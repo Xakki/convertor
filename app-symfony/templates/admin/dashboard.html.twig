@@ -1,0 +1,28 @@
+{% extends 'admin/base.html.twig' %}
+
+{% block title %}Панель администратора — Convertor{% endblock %}
+{% block nav_active %}stats{% endblock %}
+
+{# Chart.js — только на dashboard-странице (графики секции статистики). #}
+{% block head_scripts %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block body %}
+    <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold text-white">Панель администратора</h1>
+        <div class="flex items-center gap-2 text-sm text-zinc-500">
+            <div class="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div>
+            Онлайн
+        </div>
+    </div>
+
+    {# Панели эпика admin-panel. Каждая несёт свой <section id="..."> с якорем
+       боковой навигации (#overview/#users/#queues/#logs/#toggle) и свой
+       Alpine-компонент; данные — client-side через shared window.admin.fetch. #}
+    {% include 'admin/stats.html.twig' %}   {# #overview — статистика #}
+    {% include 'admin/users.html.twig' %}   {# #users — пользователи #}
+    {% include 'admin/queues.html.twig' %}  {# #queues — очереди #}
+    {% include 'admin/logs.html.twig' %}    {# #logs — логи конвертаций #}
+    {% include 'admin/toggle.html.twig' %}  {# #toggle — тумблер конвертаций #}
+{% endblock %}
