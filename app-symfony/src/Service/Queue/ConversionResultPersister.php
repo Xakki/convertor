@@ -65,11 +65,15 @@ final class ConversionResultPersister
             $conversion->setStatus(ConversionStatus::Failed);
             $conversion->setErrorMessage(isset($body['error']) ? (string) $body['error'] : 'Conversion failed');
             $conversion->setProcessingMs($processingMs);
-            // Refund the quota charged at submit. Pure mutation — persisted by the
-            // same $em that loaded the user, in the single flush below. The
-            // idempotency guard above ensures this runs at most once per conversion.
-            $this->quotaService->refund($conversion->getUser(), $conversion->isAi());
-            $em->flush();
+            // Возврат квоты, списанной при сабмите. refund() делает атомарный
+            // decrement raw UPDATE'ом — коммитим его в ОДНОЙ транзакции с
+            // переходом Conversion в терминальный статус. Иначе при падении flush
+            // сообщение переставится, а idempotency-guard выше (статус ещё не
+            // терминальный) пропустит refund повторно → двойной возврат квоты.
+            $em->wrapInTransaction(function () use ($em, $conversion): void {
+                $this->quotaService->refund($conversion->getUser(), $conversion->isAi());
+                $em->flush();
+            });
 
             return;
         }

@@ -141,6 +141,12 @@ services:
         arguments:
             $resultsBucket: '%env(S3_BUCKET_PREFIX)%-results'
 
+    # $appEnv нужен для fail-fast на «тихом даунгрейде» плана: вне prod бросаем,
+    # в prod — только warning (fail-open, не ломаем платящих). Остальное — autowire.
+    App\Service\Quota\QuotaService:
+        arguments:
+            $appEnv: '%kernel.environment%'
+
     # Мониторинг очередей admin-панели: URL metrics-exporter'а (остальное — autowire).
     App\Service\Admin\QueueStatsProvider:
         arguments:

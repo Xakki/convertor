@@ -120,6 +120,10 @@ final class ConversionResultPersisterTest extends TestCase
 
         $em = $this->createMock(EntityManagerInterface::class);
         $em->method('find')->willReturn($conversion);
+        // Продакшн оборачивает refund+flush в wrapInTransaction (атомарность
+        // decrement'а с переходом в терминальный статус). Мок обязан РЕАЛЬНО
+        // выполнить замыкание, иначе внутренние refund()/flush() не сработают.
+        $em->method('wrapInTransaction')->willReturnCallback(static fn (callable $fn): mixed => $fn($em));
         $em->expects($this->once())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);

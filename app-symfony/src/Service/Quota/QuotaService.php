@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Service\Quota;
 
+use App\Entity\Plan;
 use App\Entity\User;
 use App\Repository\PlanRepository;
 use Doctrine\ORM\EntityManagerInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 
 class QuotaService
@@ -29,6 +31,8 @@ class QuotaService
     public function __construct(
         private readonly EntityManagerInterface $em,
         private readonly PlanRepository $planRepository,
+        private readonly LoggerInterface $logger,
+        private readonly string $appEnv,
     ) {
     }
 
@@ -59,32 +63,31 @@ class QuotaService
     /**
      * Commit one daily conversion. Call only AFTER the submit succeeded
      * (S3 upload + persist + enqueue) so the charge is never left dangling.
+     *
+     * Инкремент — атомарным `UPDATE … WHERE id` (в обход read-then-write), чтобы
+     * параллельные сабмиты одного юзера не теряли друг друга. Вызов идёт из
+     * HTTP-пути сабмита (без redelivery), поэтому отдельная транзакция не нужна.
      */
     public function charge(User $user, bool $isAi): void
     {
-        if ($isAi) {
-            $user->incrementDailyAiConversions();
-        } else {
-            $user->incrementDailyConversions();
-        }
-
-        $this->em->flush();
+        $this->applyDelta($user, $isAi, +1);
     }
 
     /**
-     * Refund one daily conversion (e.g. the worker reported a failure). Pure
-     * mutation + clamp-at-0: the caller owns the flush so the User is persisted
-     * by the same EM that loaded it (the result consumer re-resolves its EM per
-     * message). Clamp-at-0 also makes a refund a no-op once the daily window has
-     * rolled over and the counter was already reset.
+     * Refund one daily conversion (e.g. the worker reported a failure). Атомарный
+     * decrement с клемпом на 0 (raw UPDATE, не read-then-write) — параллельные
+     * возвраты не теряются, а клемп делает refund no-op после суточного сброса
+     * счётчика (окно уже прокрутилось).
+     *
+     * ВАЖНО: сам refund НЕ оборачивает decrement в транзакцию — это делает
+     * вызывающий ({@see \App\Service\Queue\ConversionResultPersister}), коммитя
+     * decrement вместе с переходом Conversion в терминальный статус одной
+     * транзакцией. Иначе при падении flush сообщение переставится, idempotency-
+     * guard пропустит refund повторно → двойной возврат квоты.
      */
     public function refund(User $user, bool $isAi): void
     {
-        if ($isAi) {
-            $user->setDailyAiConversions(max(0, $user->getDailyAiConversions() - 1));
-        } else {
-            $user->setDailyConversions(max(0, $user->getDailyConversions() - 1));
-        }
+        $this->applyDelta($user, $isAi, -1);
     }
 
     /**
@@ -121,6 +124,12 @@ class QuotaService
      * Единая точка обнуления счётчиков (её же зовёт resetIfNeeded при смене
      * суток) — ручной admin-сброс не дублирует логику в контроллере, а бьёт
      * ровно те же поля. $flush=false — если вызывающий владеет своим flush.
+     *
+     * TODO(scale-out): сброс пишет счётчики через flush (UnitOfWork), а
+     * charge/refund — raw UPDATE. На одном инстансе гонки нет (запросы одного
+     * юзера сериализуются). При горизонтальном масштабировании сброс на одном
+     * инстансе может затереть параллельный decrement на другом — тогда перевести
+     * сброс на атомарный `UPDATE … SET daily_* = 0` с guard по quota_reset_at.
      */
     public function reset(User $user, bool $flush = true): void
     {
@@ -140,8 +149,7 @@ class QuotaService
      */
     public function maxUploadBytes(User $user): int
     {
-        $plan = $this->planRepository->findByName($user->getPlan())
-            ?? $this->planRepository->findByName('free');
+        $plan = $this->resolvePlan($user);
 
         $mb = $plan?->getMaxFileSizeMb() ?? 0;
         if ($mb <= 0) {
@@ -159,8 +167,7 @@ class QuotaService
      */
     private function limitsFor(User $user): array
     {
-        $plan = $this->planRepository->findByName($user->getPlan())
-            ?? $this->planRepository->findByName('free');
+        $plan = $this->resolvePlan($user);
 
         if ($plan === null) {
             return self::FREE_FALLBACK;
@@ -170,5 +177,64 @@ class QuotaService
             'conversions'    => $plan->getDailyLimit(),
             'ai_conversions' => $plan->getDailyAiLimit(),
         ];
+    }
+
+    /**
+     * Атомарно применяет дельту (+1 charge / -1 refund) к дневному счётчику юзера
+     * прямым `UPDATE … WHERE id` в обход UnitOfWork. Затем `refresh()`
+     * синхронизирует in-memory User с БД: без этого последующий flush в том же
+     * запросе перезапишет счётчик устаревшим снимком, а check()/getRemainingQuota()
+     * видели бы неконсистентное значение. refresh() ещё и сбрасывает snapshot —
+     * так исчезает race «прочитал-записал».
+     */
+    private function applyDelta(User $user, bool $isAi, int $delta): void
+    {
+        // Имя колонки — из белого списка (не из ввода), поэтому интерполяция в SQL безопасна.
+        $col = $isAi ? 'daily_ai_conversions' : 'daily_conversions';
+        $sql = $delta < 0
+            ? "UPDATE users SET {$col} = GREATEST(0, {$col} - 1) WHERE id = :id"
+            : "UPDATE users SET {$col} = {$col} + 1 WHERE id = :id";
+
+        $this->em->getConnection()->executeStatement($sql, ['id' => $user->getId()]);
+        $this->em->refresh($user);
+    }
+
+    /**
+     * Резолвит план юзера из `plans`, сигналя о «тихом даунгрейде»: платному
+     * юзеру молча выдавался free/FREE_FALLBACK без единой ошибки. Даунгрейд =
+     * строки запрошенного плана нет (независимо от того, есть ли free), в т.ч.
+     * пустая таблица (нет и free → вызывающий возьмёт FREE_FALLBACK).
+     *
+     * На даунгрейде — ВСЕГДА warning (вкл. prod), а вне prod ещё и throw:
+     * misconfig обязан падать в CI/dev, но не ломать платящих в prod (fail-open).
+     */
+    private function resolvePlan(User $user): ?Plan
+    {
+        $requested = $user->getPlan();
+
+        $plan = $this->planRepository->findByName($requested);
+        if ($plan !== null) {
+            return $plan;
+        }
+
+        // Строки запрошенного плана нет → тихий даунгрейд. Пытаемся выдать free;
+        // если и его нет (пустая таблица) — вызывающий уйдёт в FREE_FALLBACK.
+        $free       = $this->planRepository->findByName('free');
+        $fallbackTo = $free !== null ? 'free' : 'FREE_FALLBACK';
+
+        $this->logger->warning('Quota silent plan downgrade: requested plan row missing', [
+            'requestedPlan' => $requested,
+            'fallbackTo'    => $fallbackTo,
+        ]);
+
+        if ($this->appEnv !== 'prod') {
+            throw new \RuntimeException(sprintf(
+                'Quota silent downgrade: plan "%s" not found, served %s. Seed the `plans` table.',
+                $requested,
+                $fallbackTo,
+            ));
+        }
+
+        return $free;
     }
 }
