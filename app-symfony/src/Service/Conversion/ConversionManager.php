@@ -106,6 +106,16 @@ class ConversionManager
 
         $this->em->persist($inputFile);
 
+        // Ленивая материализация гостя: строка в `users` создаётся ТОЛЬКО здесь,
+        // когда конвертация прошла все гейты (ai/video, size, mime, quota) и вход
+        // уже в S3. Транзиентный гость (GuestAuthenticator, no-cookie) до этого
+        // момента не персистится — unauth-флуд /quota и отклонённые convert не
+        // плодят guest-строк. Персист присваивает id → GuestCookieResponseListener
+        // увидит id!==null и выставит cookie `guest_id`.
+        if ($user->getId() === null) {
+            $this->em->persist($user);
+        }
+
         $conversion = new Conversion();
         $conversion->setUser($user);
         $conversion->setInputFile($inputFile);

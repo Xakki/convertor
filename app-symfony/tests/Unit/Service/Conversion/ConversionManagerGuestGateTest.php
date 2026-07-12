@@ -87,6 +87,67 @@ final class ConversionManagerGuestGateTest extends TestCase
         self::assertTrue($conversion->isAi());
     }
 
+    public function testTransientGuestIsMaterializedBeforeConversionPersist(): void
+    {
+        // Ленивая материализация: транзиентный гость (id===null) персистится в
+        // createConversion ПЕРЕД Conversion (Conversion.user NOT NULL, без каскада).
+        $quota = $this->createStub(QuotaService::class);
+        $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
+        $quota->method('check');
+        $quota->method('charge');
+
+        $persistOrder = [];
+        $em           = $this->createStub(EntityManagerInterface::class);
+        $em->method('persist')->willReturnCallback(static function (object $entity) use (&$persistOrder): void {
+            $persistOrder[] = $entity::class;
+            if ($entity instanceof Conversion) {
+                (new \ReflectionProperty(Conversion::class, 'id'))->setValue($entity, 55);
+            }
+        });
+
+        $manager = $this->buildManager($quota, $this->okS3Client(), $em);
+
+        $guest = $this->guestUser();
+        self::assertNull($guest->getId(), 'precondition: guest is transient');
+
+        $manager->createConversion($guest, $this->makeUpload('jpg'), 'txt', false, false);
+
+        self::assertContains(User::class, $persistOrder, 'transient guest must be persisted');
+        self::assertContains(Conversion::class, $persistOrder);
+        self::assertLessThan(
+            array_search(Conversion::class, $persistOrder, true),
+            array_search(User::class, $persistOrder, true),
+            'guest must be persisted BEFORE the conversion',
+        );
+    }
+
+    public function testExistingGuestIsNotRePersisted(): void
+    {
+        // Гость с уже присвоенным id (существующая строка) НЕ персистится повторно.
+        $quota = $this->createStub(QuotaService::class);
+        $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
+        $quota->method('check');
+        $quota->method('charge');
+
+        $persistOrder = [];
+        $em           = $this->createStub(EntityManagerInterface::class);
+        $em->method('persist')->willReturnCallback(static function (object $entity) use (&$persistOrder): void {
+            $persistOrder[] = $entity::class;
+            if ($entity instanceof Conversion) {
+                (new \ReflectionProperty(Conversion::class, 'id'))->setValue($entity, 55);
+            }
+        });
+
+        $manager = $this->buildManager($quota, $this->okS3Client(), $em);
+
+        $guest = $this->guestUser();
+        (new \ReflectionProperty(User::class, 'id'))->setValue($guest, 7);
+
+        $manager->createConversion($guest, $this->makeUpload('jpg'), 'txt', false, false);
+
+        self::assertNotContains(User::class, $persistOrder, 'persisted guest must NOT be re-persisted');
+    }
+
     private function assertGuestGated(string $from, string $to): void
     {
         $quota = $this->createMock(QuotaService::class);

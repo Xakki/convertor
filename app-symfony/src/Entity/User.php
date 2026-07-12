@@ -13,10 +13,12 @@ use Symfony\Component\Security\Core\User\UserInterface;
 #[ORM\HasLifecycleCallbacks]
 class User implements UserInterface
 {
+    // Nullable: транзиентный (ещё не персистнутый) гость имеет id===null до
+    // ленивой материализации в ConversionManager::createConversion.
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: 'integer')]
-    private int $id;
+    private ?int $id = null;
 
     #[ORM\Column(type: 'bigint', nullable: true, unique: true)]
     private ?string $telegramId = null;
@@ -74,7 +76,7 @@ class User implements UserInterface
         $this->quotaResetAt = new \DateTimeImmutable();
     }
 
-    public function getId(): int
+    public function getId(): ?int
     {
         return $this->id;
     }
@@ -255,6 +257,15 @@ class User implements UserInterface
 
     public function getUserIdentifier(): string
     {
-        return (string) $this->id;
+        // Гость идентифицируется по guestId: транзиентный (ещё не персистнутый)
+        // гость имеет id===null, но всегда имеет guestId. Обычный пользователь — по id.
+        $identifier = $this->isGuest ? (string) $this->guestId : (string) $this->id;
+
+        if ($identifier === '') {
+            // Инвариант: гость всегда с guestId, обычный юзер — с id (после persist).
+            throw new \LogicException('User has no identifier (transient without guestId/id)');
+        }
+
+        return $identifier;
     }
 }

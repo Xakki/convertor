@@ -130,7 +130,10 @@ class TelegramWebhookController extends AbstractController
 
         // authorize возвращает сырой linkSecret (или null, если код истёк ИЛИ уже
         // не pending — status-guard: первый тап побеждает, форвард не перепривязывает).
-        $linkSecret = $this->codeStore->authorize($code, $user->getId());
+        // findOrCreateUser персистит юзера → id всегда присвоен.
+        $userId = $user->getId();
+        \assert($userId !== null);
+        $linkSecret = $this->codeStore->authorize($code, $userId);
         if ($linkSecret === null) {
             $this->botClient->answerCallbackQuery($callbackId, 'Код истёк или уже использован, начните вход заново.');
 

@@ -101,15 +101,20 @@ final class AdminAccessControlTest extends WebTestCase
         self::assertSame(401, $client->getResponse()->getStatusCode());
     }
 
-    public function testAdminApiForbiddenForGuestRole(): void
+    public function testAdminApiUnreachableForGuestJwt(): void
     {
         $client = static::createClient();
-        // guest-User (ROLE_GUEST) с JWT: role_hierarchy не даёт ROLE_ADMIN → 403.
+        // Ленивая guest-модель: getUserIdentifier() гостя = его guestId, а не
+        // числовой id. app_user_provider грузит по property `id`, поэтому
+        // guest-JWT вообще не резолвится в пользователя → 401 (гость не может
+        // дойти до ^/api/v1/admin — сильнее, чем 403). В проде гость JWT не
+        // получает (вход по cookie), это синтетический guard-сценарий; 403-гейт
+        // роли покрыт testAdminApiForbiddenForRegularUserJwt.
         $guest = (new User())->setIsGuest(true)->setGuestId('admin-gate-guest-' . uniqid());
         $token = $this->persistAndJwt($guest);
 
         $client->request('GET', '/api/v1/admin/ping', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
-        self::assertSame(403, $client->getResponse()->getStatusCode());
+        self::assertSame(401, $client->getResponse()->getStatusCode());
     }
 
     public function testAdminApiForbiddenForRegularUserJwt(): void

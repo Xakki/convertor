@@ -8,7 +8,6 @@ use App\Entity\User;
 use App\Repository\UserRepository;
 use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
-use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -27,20 +26,28 @@ use Symfony\Component\Security\Http\Authenticator\Passport\SelfValidatingPasspor
  * обрабатывает JWT, невалидный Bearer → JWT падает 401 (guest НЕ спасает).
  *
  * Нет Bearer → читаем cookie `guest_id`, проверяем HMAC:
- *   - подпись валидна и найден активный гость → аутентифицируем его;
- *   - иначе → создаём нового guest-User (isGuest=true) и планируем выставить
- *     cookie в ответе (значение кладём в request-атрибут; сам Set-Cookie вешает
- *     {@see GuestCookieResponseListener} на kernel.response, т.к. из stateless
- *     firewall'а вернуть cookie напрямую из onAuthenticationSuccess нельзя —
- *     это оборвало бы контроллер).
+ *   - подпись валидна и найден активный гость → аутентифицируем его (уже в БД);
+ *   - иначе → создаём ТРАНЗИЕНТНОГО guest-User (isGuest=true), но НЕ персистим.
+ *
+ * Ленивая материализация: строка в `users` НЕ создаётся при аутентификации.
+ * Транзиентный гость живёт только в памяти запроса; строка в БД появляется
+ * ТОЛЬКО когда первая конвертация проходит все гейты (ai/video, size, mime,
+ * quota) — там {@see \App\Service\Conversion\ConversionManager::createConversion}
+ * персистит гостя. Так unauth-флуд `/quota` и отклонённые `/convert` (400/403)
+ * не плодят мусорных guest-строк.
+ *
+ * Cookie `guest_id` выставляет {@see GuestCookieResponseListener} на
+ * kernel.response, и ТОЛЬКО если гость реально материализовался за этот запрос
+ * (persist присвоил id). Мы лишь кладём созданного транзиентного гостя в
+ * request-атрибут; листенер сам решает, эмитить cookie или нет.
  *
  * Скоуп supports() ограничен guest-релевантными путями, чтобы хиты на публичные
- * роуты (formats/auth) не плодили мусорных гостевых строк.
+ * роуты (formats/auth) не плодили лишних гостевых объектов.
  */
 class GuestAuthenticator extends AbstractAuthenticator
 {
-    /** Request-атрибут: подписанное значение cookie, которое надо выставить в ответе. */
-    public const ATTR_SET_COOKIE = '_guest_set_cookie';
+    /** Request-атрибут: созданный транзиентный guest-User (кандидат на cookie). */
+    public const ATTR_GUEST_USER = '_guest_user';
 
     /**
      * Пути, где guest-аутентификация уместна (без ведущего `/api/v1`, т.к.
@@ -55,7 +62,6 @@ class GuestAuthenticator extends AbstractAuthenticator
         private readonly GuestTokenService $tokenService,
         private readonly GuestCookieFactory $cookieFactory,
         private readonly UserRepository $users,
-        private readonly EntityManagerInterface $em,
     ) {
     }
 
@@ -84,17 +90,16 @@ class GuestAuthenticator extends AbstractAuthenticator
 
         if ($guest === null) {
             $guest = $this->createGuest();
-            // Планируем Set-Cookie в ответе (см. GuestCookieResponseListener).
-            $request->attributes->set(
-                self::ATTR_SET_COOKIE,
-                $this->tokenService->sign((string) $guest->getGuestId()),
-            );
+            // Кладём транзиентного гостя в атрибут — кандидат на Set-Cookie.
+            // Cookie эмитится листенером ТОЛЬКО если гость материализуется за
+            // этот запрос (id!==null). Для существующего гостя атрибут не ставим.
+            $request->attributes->set(self::ATTR_GUEST_USER, $guest);
         }
 
-        $userId = (string) $guest->getId();
-
+        // Loader возвращает уже разрешённого гостя (существующего из БД или
+        // транзиентного). НЕ делаем find() по id — у транзиентного id===null.
         return new SelfValidatingPassport(
-            new UserBadge($userId, fn () => $this->users->find((int) $userId) ?? throw new \RuntimeException('Guest user vanished')),
+            new UserBadge($guest->getUserIdentifier(), fn () => $guest),
         );
     }
 
@@ -109,14 +114,15 @@ class GuestAuthenticator extends AbstractAuthenticator
         return new JsonResponse(['error' => 'Unauthorized'], Response::HTTP_UNAUTHORIZED);
     }
 
+    /**
+     * Создаёт ТРАНЗИЕНТНОГО гостя (без persist/flush). Строка в `users`
+     * материализуется позже — при первой успешной постановке конвертации.
+     */
     private function createGuest(): User
     {
         $guest = new User();
         $guest->setIsGuest(true);
         $guest->setGuestId($this->tokenService->generateGuestId());
-
-        $this->em->persist($guest);
-        $this->em->flush();
 
         return $guest;
     }

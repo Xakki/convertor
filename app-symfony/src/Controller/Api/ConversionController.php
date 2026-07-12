@@ -37,6 +37,8 @@ class ConversionController extends AbstractController
         private readonly S3Storage $s3,
         #[Autowire(service: 'limiter.anon_convert')]
         private readonly RateLimiterFactory $anonConvertLimiter,
+        #[Autowire(service: 'limiter.anon_quota')]
+        private readonly RateLimiterFactory $anonQuotaLimiter,
     ) {
     }
 
@@ -242,6 +244,12 @@ class ConversionController extends AbstractController
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
         }
 
+        // Транзиентный гость (ещё не конвертировал) не владеет ничем — пустая история
+        // без запроса по null-id.
+        if ($user->getId() === null) {
+            return $this->json(['items' => []]);
+        }
+
         $limit  = min((int) $request->query->get('limit', 20), 100);
         $offset = (int) $request->query->get('offset', 0);
 
@@ -297,10 +305,23 @@ class ConversionController extends AbstractController
         ]),
     )]
     #[OA\Response(response: 401, description: 'Требуется аутентификация')]
-    public function quota(#[CurrentUser] ?User $user): JsonResponse
+    public function quota(Request $request, #[CurrentUser] ?User $user): JsonResponse
     {
         if ($user === null) {
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
+        }
+
+        // Ленивая guest-модель уже убрала рост `users` от флуда /quota; этот
+        // лимитер — общая защита от request-флуда на дешёвом эндпоинте
+        // (defense-in-depth), только для гостя (залогиненных не трогаем).
+        if (! $this->isGranted('ROLE_USER')) {
+            $limit = $this->anonQuotaLimiter->create($request->getClientIp())->consume(1);
+            if (! $limit->isAccepted()) {
+                return $this->json(
+                    ['error' => 'Too many requests, please try later'],
+                    Response::HTTP_TOO_MANY_REQUESTS,
+                );
+            }
         }
 
         $quota = $this->quotaService->getRemainingQuota($user);

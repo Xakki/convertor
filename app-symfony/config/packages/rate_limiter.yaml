@@ -6,6 +6,14 @@ framework:
             policy: 'sliding_window'
             limit: 20
             interval: '1 hour'
+        # Лимит анонимных запросов GET /api/v1/quota по IP (не-ROLE_USER).
+        # Ленивая guest-модель уже убрала рост `users` от флуда /quota; этот
+        # лимитер — общая защита от request-флуда на дешёвом эндпоинте
+        # (defense-in-depth). /quota поллит фронт, потому щедрый N=60/час.
+        anon_quota:
+            policy: 'sliding_window'
+            limit: 60
+            interval: '1 hour'
 
 # В тестах getClientIp() всегда 127.0.0.1 → все guest-запросы делят одно ведро.
 # Дефолтный storage (cache.rate_limiter→filesystem) переживает запуски phpunit и
@@ -15,6 +23,8 @@ when@test:
     framework:
         rate_limiter:
             anon_convert:
+                cache_pool: 'cache.rate_limiter.test_array'
+            anon_quota:
                 cache_pool: 'cache.rate_limiter.test_array'
         cache:
             pools:
