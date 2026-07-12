@@ -20,9 +20,21 @@
 Сейчас приложение single-instance (как и quota-consumer), поэтому не воспроизводится.
 Всплывёт при горизонтальном масштабировании PHP.
 
-**Решение (черновик):**
-- Развести общий KeyDB cache-pool (DB0) и переключить `cache.app` (или отдельный
-  пул для toggle/registry) на него → инвалидация видна всем инстансам.
-- Согласовать с CLAUDE.md («KeyDB DB0: cache») — привести конфиг в соответствие.
+**Решение:**
+- `cache.app` целиком переключается на KeyDB DB0 (новый `REDIS_CACHE_DSN=redis://keydb:6379?dbindex=0`).
+  Все потребители `cache.app` (в т.ч. `ConversionToggleService`, `ConversionRegistry`) становятся shared →
+  инвалидация видна всем инстансам.
+- Приводим конфиг в соответствие CLAUDE.md («KeyDB DB0: cache»).
 
-**Status:** grooming.
+**Decisions (2026-07-12):**
+- Выбран вариант «весь cache.app → Redis DB0» (а не выделенный пул для toggle/registry) —
+  проще и ровно по CLAUDE.md-конвенции DB-индексов.
+
+**Реализация (2026-07-12):**
+- `cache.yaml`: `app: cache.adapter.redis` + `default_redis_provider: %env(REDIS_CACHE_DSN)%`;
+  `when@test` → `cache.adapter.array` (тесты не требуют живого KeyDB).
+- `.env`: `REDIS_CACHE_DSN=redis://keydb:6379?dbindex=0`; `services.yaml`: env()-дефолт того же DSN.
+- Побочный эффект (желаемый): `doctrine.result_cache_pool` = `cache.app` → тоже уходит на KeyDB DB0.
+- QA: `make phpstan` OK, `make cs-check` OK. Ревью: APPROVE, блокеров нет.
+
+**Status:** done.

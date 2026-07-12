@@ -46,8 +46,8 @@ final class ConversionToggleControllerTest extends WebTestCase
         }
         $em->flush();
 
-        // Сброс persistent-кеша (FilesystemAdapter) после удаления ряда — иначе
-        // следующий прогон увидит устаревший disabled-set при упавшем тесте.
+        // Сброс кеша (в test-env cache.app = ArrayAdapter) после удаления ряда —
+        // иначе следующий прогон увидит устаревший disabled-set при упавшем тесте.
         static::getContainer()->get(ConversionToggleService::class)->invalidate();
 
         parent::tearDown();

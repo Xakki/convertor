@@ -17,6 +17,9 @@ parameters:
     env(REFRESH_COOKIE_NAME): 'refresh_token'
     env(REDIS_SESSIONS_DSN): 'redis://keydb:6379?dbindex=1'
 
+    # DSN пула `cache.app` (общий Redis-кэш). KeyDB БД 0 — cache (см. CLAUDE.md).
+    env(REDIS_CACHE_DSN): 'redis://keydb:6379?dbindex=0'
+
     # Guest-cookie (`guest_id`) defaults. Secure=true (prod); TTL 30 дней.
     # Секрет подписи — GUEST_COOKIE_SECRET, по умолчанию = APP_SECRET.
     env(GUEST_COOKIE_SECRET): '%env(APP_SECRET)%'

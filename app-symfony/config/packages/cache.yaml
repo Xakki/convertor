@@ -3,17 +3,23 @@ framework:
         # Unique name of your app: used to compute stable namespaces for cache keys.
         #prefix_seed: your_vendor_name/app_name
 
-        # The "app" cache stores to the filesystem by default.
-        # The data in this cache should persist between deploys.
-        # Other options include:
-
-        # Redis
-        #app: cache.adapter.redis
-        #default_redis_provider: redis://localhost
-
-        # APCu (not recommended with heavy random-write workloads as memory fragmentation can cause perf issues)
-        #app: cache.adapter.apcu
+        # Пул `cache.app` — общий Redis-бэкенд на KeyDB, БД 0 (см. CLAUDE.md:
+        # «KeyDB — единственный instance, несколько баз (0: cache, 1: sessions, 2: queues)»).
+        # Зачем Redis, а не filesystem по умолчанию: инвалидация кэша
+        # (ConversionToggleService::invalidate() и ConversionRegistry::invalidateMatrix())
+        # должна быть видна ВСЕМ PHP-инстансам сразу. Filesystem-адаптер локален для
+        # каждого контейнера → сброс в одном инстансе не виден остальным.
+        app: cache.adapter.redis
+        default_redis_provider: '%env(REDIS_CACHE_DSN)%'
 
         # Namespaced pools use the above "app" backend by default
         #pools:
             #my.dedicated.cache: null
+
+# В test-окружении `cache.app` держим на in-memory array-адаптере: юнит- и
+# WebTestCase-тесты не должны требовать живой KeyDB (кэш всё равно эфемерный
+# per-request, инвалидация в рамках одного процесса работает и на array).
+when@test:
+    framework:
+        cache:
+            app: cache.adapter.array
