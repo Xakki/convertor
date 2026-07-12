@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Service\Storage;
 
+use AsyncAws\S3\Input\DeleteObjectRequest;
 use AsyncAws\S3\Input\GetObjectRequest;
 use AsyncAws\S3\Input\PutObjectRequest;
 use AsyncAws\S3\Result\GetObjectOutput;
@@ -56,6 +57,20 @@ final class S3Storage
         }
 
         $this->client->putObject(new PutObjectRequest($input))->resolve();
+    }
+
+    /**
+     * DELETE an object из указанного бакета. Форсирует resolve() — как putObject —
+     * чтобы ошибки (auth, недоступность S3) всплывали синхронно здесь. Удаление
+     * несуществующего ключа для S3/MinIO идемпотентно (success, без NoSuchKey), так
+     * что «объект уже удалён» ошибкой не считается; ловим только реальные сбои.
+     */
+    public function deleteObject(string $bucket, string $key): void
+    {
+        $this->client->deleteObject(new DeleteObjectRequest([
+            'Bucket' => $bucket,
+            'Key'    => $key,
+        ]))->resolve();
     }
 
     /**

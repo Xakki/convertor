@@ -28,6 +28,7 @@
         "symfony/rate-limiter": "^7.0",
         "symfony/redis-messenger": "^7.0",
         "symfony/runtime": "^7.0",
+        "symfony/scheduler": "7.*",
         "symfony/security-bundle": "^7.0",
         "symfony/serializer": "^7.0",
         "symfony/twig-bundle": "^7.0",

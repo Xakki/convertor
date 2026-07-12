@@ -190,6 +190,44 @@ class ConversionRepository extends ServiceEntityRepository
         return ['items' => $items, 'total' => $total];
     }
 
+    /**
+     * Кандидаты на авто-удаление (задача file-cleanup-24h-cron). Порог хранения
+     * теперь ПЕР-КОНВЕРСИЯ (см. FileCleanupService::resolveRetentionHours), поэтому
+     * запрос — грубый пре-фильтр: `createdAt < :minThreshold` (минимальный из всех
+     * настроенных порогов) + окончательное решение по каждой строке принимает
+     * сервис. Пагинация — КУРСОР по id (`c.id > :afterId ORDER BY c.id ASC`): даёт
+     * гарантированный прогресс даже когда сервис пропускает «не доросшие» строки
+     * (re-query по createdAt на переменном пороге зациклился бы).
+     *
+     * ИСКЛЮЧАЕТСЯ только статус `Processing` — задача в работе (воркер может ещё
+     * держать вход), удалять её вход на лету небезопасно. «Зависшие» Processing
+     * отдельно вскрываются алертом {@see findStuck()} (admin-панель), не здесь.
+     *
+     * `inputFile` (to-one, not null), `outputFile` (to-one, nullable) и `user`
+     * (to-one) — fetch-join: input/output ради удаления S3-объектов, user ради
+     * разрешения тарифа без N+1. Для to-one setMaxResults пагинацию не ломает.
+     *
+     * @return Conversion[]
+     */
+    public function findExpiredCandidates(\DateTimeImmutable $minThreshold, int $afterId, int $limit): array
+    {
+        return $this->createQueryBuilder('c')
+            ->addSelect('inp', 'outp', 'u')
+            ->innerJoin('c.inputFile', 'inp')
+            ->leftJoin('c.outputFile', 'outp')
+            ->leftJoin('c.user', 'u')
+            ->where('c.createdAt < :minThreshold')
+            ->andWhere('c.id > :afterId')
+            ->andWhere('c.status != :notProcessing')
+            ->setParameter('minThreshold', $minThreshold)
+            ->setParameter('afterId', $afterId)
+            ->setParameter('notProcessing', ConversionStatus::Processing->value)
+            ->orderBy('c.id', 'ASC')
+            ->setMaxResults(max(1, $limit))
+            ->getQuery()
+            ->getResult();
+    }
+
     public function save(Conversion $conversion, bool $flush = false): void
     {
         $this->getEntityManager()->persist($conversion);

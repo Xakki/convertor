@@ -34,6 +34,18 @@ parameters:
     # умолчанию (плейсхолдер, не секрет) → UI прячет ссылку «открыть в Graylog».
     env(GRAYLOG_URL): ''
 
+    # Пер-конверсия окно хранения до авто-удаления (Symfony Scheduler, задача
+    # file-cleanup-24h-cron). Все значения — часы, не секрет. Разрешение по
+    # приоритету осей: status → tariff → category → fallback; первая ось со
+    # значением > 0 выигрывает. 0/пусто = ось не настроена, пропустить.
+    env(FILE_RETENTION_HOURS): '240'                  # fallback, 240 = 10 суток
+    env(FILE_RETENTION_HOURS_STATUS_FAILED): '24'     # ось status: failed
+    env(FILE_RETENTION_HOURS_STATUS_EXPIRED): '24'    # ось status: expired
+    env(FILE_RETENTION_HOURS_TARIFF_GUEST): '24'      # ось tariff: guest
+    env(FILE_RETENTION_HOURS_TARIFF_FREE): '0'        # ось tariff: free (0 → skip)
+    env(FILE_RETENTION_HOURS_TARIFF_PAID): '720'      # ось tariff: paid, 720 = 30 суток
+    env(FILE_RETENTION_HOURS_CATEGORY_VIDEO): '48'    # ось category: video
+
     # Доверенные прокси для getClientIp() (guest rate-limit по IP). По умолчанию —
     # приватные диапазоны (Symfony keyword `private_ranges`): доверяем nginx в
     # docker-сети. В проде можно сузить до конкретного адреса фронта.
@@ -109,6 +121,21 @@ services:
     App\Service\Storage\S3Storage:
         arguments:
             $bucketPrefix: '%env(S3_BUCKET_PREFIX)%'
+
+    # Авто-очистка устаревших файлов/строк БД по расписанию (Scheduler).
+    # Пороги — пер-конверсия, ключи карт = enum->value (status/category).
+    App\Service\Storage\FileCleanupService:
+        arguments:
+            $defaultRetentionHours: '%env(int:FILE_RETENTION_HOURS)%'
+            $statusRetentionHours:
+                failed: '%env(int:FILE_RETENTION_HOURS_STATUS_FAILED)%'
+                expired: '%env(int:FILE_RETENTION_HOURS_STATUS_EXPIRED)%'
+            $tariffRetentionHours:
+                guest: '%env(int:FILE_RETENTION_HOURS_TARIFF_GUEST)%'
+                free: '%env(int:FILE_RETENTION_HOURS_TARIFF_FREE)%'
+                paid: '%env(int:FILE_RETENTION_HOURS_TARIFF_PAID)%'
+            $categoryRetentionHours:
+                video: '%env(int:FILE_RETENTION_HOURS_CATEGORY_VIDEO)%'
 
     App\Service\Queue\ConversionResultPersister:
         arguments:
