@@ -11,13 +11,16 @@
 > **Чекбоксы:** `[x]` — сделано (карточка в `kanban/done/`), `[ ]` — в работе/в очереди.
 > **Приоритеты внутри стадии:** **P0** — блокер/критично, **P1** — высокий, **P2** — обычный.
 > ❄️ — заморожено (`kanban/freeze/`, ждёт разморозки).
-> Статус актуализирован: **2026-06-21**.
+> Статус актуализирован: **2026-07-12**.
 
 ---
 
-## Стадия 1 — Рабочие конвертации по API (без токена и лимитов)
+## Стадия 1 — Рабочие конвертации по API (без токена и лимитов) — ✅ завершена
 
 **Цель:** текущие конвертации реально работают через REST API, документированы и покрыты тестами.
+
+> ✅ **Стадия завершена** — все задачи в `done/`, кроме `[ ] smoke-run-verify` (финальный e2e-гейт,
+> остаётся в `todo/`).
 
 > **Реальность (актуализация 2026-06-21):** воркеры image/ffmpeg/data/libreoffice **на KeyDB Streams + S3**
 > (старый list-транспорт и HTTP-прокси удалены); PHP тоже на Streams; Telegram-login + JWT + квота работают.
@@ -35,19 +38,19 @@
 - [x] **P0 — [[backend-hardening-bugs]]** — security/рантайм-баги аудита: Telegram replay (нет окна `auth_date`),
   возврат квоты при фейле, Archive-dispatch без stream, download getChunks, refresh-token.
 - [x] **P1 — [[csv-xml-writer-hardening]]** — корректный `*→csv` для всех источников (CSV-writer теряет поля; xml→csv; типизация XML).
-- [ ] **P1 — [[upload-mime-size-validation]]** — MIME-allowlist + max-size на `POST /convert` до S3-PUT.
-- [ ] **P2 — [[api-openapi-swagger]]** — `/api/doc` + аннотации (бандл есть, документация пустая).
-- [ ] **P2 — [[worker-conversion-tests]]** — unit воркеров (`conftest.py`/`pytest.ini`, моки subprocess/SDK).
-- [ ] **P2 — [[api-integration-tests]]** — реальный прогон файлов через эндпоинты + замер скорости.
+- [x] **P1 — [[upload-mime-size-validation]]** — MIME-allowlist + max-size на `POST /convert` до S3-PUT.
+- [x] **P2 — [[api-openapi-swagger]]** — `/api/doc` + аннотации (бандл есть, документация пустая).
+- [x] **P2 — [[worker-conversion-tests]]** — unit воркеров (`conftest.py`/`pytest.ini`, моки subprocess/SDK).
+- [x] **P2 — [[api-integration-tests]]** — реальный прогон файлов через эндпоинты + замер скорости.
 - [ ] **P2 — [[smoke-run-verify]]** — финальный e2e-гейт (стек healthy + 1 конвертация на категорию + логи/тесты).
 
 **Условия:** без авторизации по токену, без лимитов.
 **Exit:** каждый реализованный эндпоинт отдаёт корректный результат на реальном файле (вкл. документы);
 swagger полон; unit зелёные; интеграционные с замером скорости зелёные.
 
-> ℹ️ Валидация воркеров image/libreoffice/data/ffmpeg завершена (см. ✅ выше). Остаётся
-> [[validate-ai-worker]] (Стадия 2). Stage-7-форматы (Таблицы/Презентации/epub-вход) вынесены
-> в [[stage7-libreoffice-extra-formats]].
+> ℹ️ Валидация воркеров image/libreoffice/data/ffmpeg завершена (см. ✅ выше); AI-воркер тоже
+> провалидирован ([[validate-ai-worker]], Стадия 2). Stage-7-форматы (Таблицы/Презентации/epub-вход)
+> вынесены в [[stage7-libreoffice-extra-formats]].
 
 ---
 
@@ -55,13 +58,17 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** воркеры запускаются по одной команде и обрабатывают задачи; AI работает на видеокарте.
 
-- [ ] **P1 — [[validate-ai-worker]]** — AI-контейнер на GPU: runtime-wiring, egress модели (Whisper), STT/TTS,
+- [x] **P1 — [[validate-ai-worker]]** — AI-контейнер на GPU: runtime-wiring, egress модели (Whisper), STT/TTS,
   AI-тесты. Гибрид: внешние API/g4f default + local fallback.
 - [ ] **P1 — [[distributed-workers]]** — запуск воркеров отдельными контейнерами на любом хосте (только Redis
   Streams через TLS SNI + S3; без app-стека и `/shared-files`).
-- [ ] **P2 — [[stream-subscription-distribution]]** — механика Streams: документация, лаг-метрики (XPENDING) в
+- [x] **P2 — [[stream-subscription-distribution]]** — механика Streams: документация, лаг-метрики (XPENDING) в
   Prometheus/Grafana, drift-тест «routing-key без consumer».
-- [ ] **P2 — [[add-open-ai]]** — g4f-бэкенд (MarkItDown, STT/TTS, text→image) поверх aip.xakki.ru.
+- [ ] **P2 — [[openai-00-integration]]** — g4f-бэкенд (MarkItDown, STT/TTS, text→image) поверх aip.xakki.ru.
+
+**Registry (динамическая матрица форматов из БД):**
+- [x] **[[registry-01-worker-register]]** — Phase 1: воркеры само-регистрируют capabilities → DB-матрица.
+- [ ] **[[registry-00-self-registration]]** — EPIC: динамическая матрица форматов из БД (Phase 2/3, заблок.).
 
 **Exit:** воркеры (включая GPU-AI) поднимаются одной командой, забирают и выполняют задачи; AI-конвертации проверены.
 
@@ -71,7 +78,8 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** появляется админ и доступ к API через токены.
 
-- [ ] **P1 — [[docs-admin-panel]]** — админ-пользователь + панель (stats, user-management, очереди, логи).
+- [x] **P1 — [[admin-panel]]** — админ-пользователь + панель (stats, user-management, очереди, логи).
+  Все 6 подзадач в `done/`: admin-panel-auth / -stats / -users / -queues / -logs / -conv-toggle.
 - [ ] **P1 — Работа API через токены** — выпуск/проверка API-токенов поверх текущего JWT. *(карточки нет — завести)*
 
 **Exit:** админ заходит в панель; API-запросы авторизуются по токену.
@@ -92,7 +100,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** публичная страница с загрузкой/конвертацией и историей.
 
-- [ ] **P1 — [[upload-conversion-ui]]** — страница загрузки/конвертации (drag&drop, выбор формата из реестра,
+- [x] **P1 — [[upload-conversion-ui]]** — страница загрузки/конвертации (drag&drop, выбор формата из реестра,
   OCR-тоггл, статус через HTMX, ссылка на скачивание).
 - [ ] **P1 — Лендинг** (публичная страница над формой загрузки). *(карточки нет — завести)*
 - [ ] **P2 — История конвертаций** со ссылками на файлы (S3 presign). *(карточки нет — завести)*
@@ -106,7 +114,9 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** вводятся лимиты на конвертацию и платная разблокировка.
 
-- [ ] **P1 — Лимиты на конвертацию** (QuotaService → enforcement). *(карточки нет — завести)*; часть — в [[docs-prod-polish]].
+- [ ] **P1 — Лимиты на конвертацию** (QuotaService → enforcement). *(карточки нет — завести)*
+- [ ] **P1 — [[quota-service-hardening]]** — hardening QuotaService.
+- [ ] **P2 — [[sms-otp-backup-auth]]** — SMS OTP резервный auth (SMSC.ru).
 - [ ] ❄️ **P1 — [[docs-payments-integration]]** — оплата только Telegram Stars (заморожено, ждёт разморозки;
   Stripe/Cryptomus вне MVP, YooMoney исключён).
 
@@ -124,6 +134,7 @@ swagger полон; unit зелёные; интеграционные с зам�
   (Impress) / PDF→jpg постранично, разметка rst/latex/wiki (решение 2026-06-20).
 - [ ] **[[archive-input-fanout]]** — распаковка архива на входе → fan-out файлов в отдельные очереди по target-формату
   (batch-распаковка, не конвертация формата архива).
+- [ ] **[[conversion-chaining]]** — цепочки конвертаций A→B→C (grooming, Стадия 7).
 - [ ] **Расширение data-воркера** (лёгкие форматы, тот же движок pandas/stdlib) — кандидаты:
   - **TSV** и иные разделители (`;`, `|`) ↔ csv/json — тривиально через pandas.
   - **NDJSON / JSON Lines** ↔ csv/json.
@@ -144,10 +155,25 @@ swagger полон; unit зелёные; интеграционные с зам�
 - [x] **[[optimize-worker-dockerfiles]]** — оптимизация образов воркеров (multi-stage, non-root, pinned).
 - [x] **[[fix-configs-working-state]]**, **[[fix-queue-php-worker-mismatch]]** — базовый boot + контракт очереди (Streams).
 - [x] **[[storage-input-to-s3]]** — файлы в S3 (in/out), `/shared-files` убран.
-- [ ] **[[docs-workers-conversion-validation]]** — зонтик воркер-валидации (umbrella в grooming; per-worker карточки все в done).
-- [ ] **[[docs-prod-polish]]** — rate limiting, авто-очистка 24ч, метрики, SMS (пересекается со Стадией 6).
-- [ ] **[[extract-worker-common-helpers]]** — DRY: общие хелперы воркеров в `workers/common` (subprocess-runner, MIME-таблицы).
-- [ ] **[[align-document-stream-matrix-dlq]]** — выровнять матрицу `conv.document` (PHP-реестр vs воркер) + fast-DLQ перманентных ошибок.
+- [x] **[[docs-workers-conversion-validation]]** — зонтик воркер-валидации (umbrella в grooming; per-worker карточки все в done).
+- [ ] **[[rate-limit-per-ip-user]]** — rate limiting per-IP/per-user (KeyDB).
+- [ ] **[[file-cleanup-24h-cron]]** — авто-удаление файлов через 24ч (Scheduler).
+- [ ] **[[metrics-alerting]]** — метрики/алертинг (worker health). *(пересекается со Стадией 6)*
+- [x] **[[extract-worker-common-helpers]]** — DRY: общие хелперы воркеров в `workers/common` (subprocess-runner, MIME-таблицы).
+- [x] **[[align-document-stream-matrix-dlq]]** — выровнять матрицу `conv.document` (PHP-реестр vs воркер) + fast-DLQ перманентных ошибок.
+
+**Хардненинг / tech-debt (todo):**
+- [ ] **[[guest-row-flood-hardening]]** — защита от флуда guest-строк.
+- [ ] **[[e2e-login-helper-magic-link]]** — e2e-хелпер логина через magic-link.
+- [ ] **[[e2e-magic-link-callback-mockbot]]** — e2e callback c mock-ботом (grooming).
+- [ ] **[[formats-api-ocr-capable-flag]]** — флаг ocr-capable в `/formats` API.
+- [ ] **[[admin-ban-instant-lockout]]** — мгновенный lockout при бане.
+- [ ] **[[refresh-token-injectable-clock]]** — injectable clock для refresh-token тестов.
+- [ ] **[[conversions-admin-indexes]]** — индексы для админ-выборок conversions.
+- [ ] **[[cache-app-keydb-vs-filesystem]]** — app-cache: KeyDB vs filesystem.
+- [ ] **[[test-db-provisioning-hardening]]** — hardening провижининга тест-БД.
+- [ ] **[[verify-webm-harness-rewrite]]** — переписать webm verify-harness.
+- [ ] **[[ai-worker-benchmarks]]** — бенчмарки AI-воркера.
 
 ---
 

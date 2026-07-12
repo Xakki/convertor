@@ -8,7 +8,7 @@
 - backend
 
 **Описание:**
-Первая фаза эпика `[[registry-self-registration]]` — **инфраструктура, без изменения поведения**.
+Первая фаза эпика `[[registry-00-self-registration]]` — **инфраструктура, без изменения поведения**.
 Воркеры при старте регистрируют свои возможности в PHP через pull-API; `ConversionRegistry`
 строит матрицу конвертаций из БД, **с сохранением hardcoded `workerCapabilities()` как fallback**
 (когда БД пуста/недоступна). Ни один advertised pair не исчезает, `/formats` не меняется внешне,
@@ -71,7 +71,7 @@ Stage-7 pairs (→ 400). Multi-candidate router — Phase 3.
 
 **Зависит от:** `[[s1-11-onserver-workers-migrate]]` (seam — приземлён). Независим от AI-pair shape.
 
-**Эпик:** `[[registry-self-registration]]`
+**Эпик:** `[[registry-00-self-registration]]`
 
 **Status:** ready
 

@@ -18,13 +18,10 @@ refresh-token family забаненного юзера. Enforcement — толь
 **Проблема:**
 - Между ban и истечением access-JWT (≤1ч) забаненный сохраняет доступ.
 
-**Решение (черновик):**
-- При ban проактивно инвалидировать refresh-family (как делает refresh-guard), И/ИЛИ
-  завести короткий deny-list активных JWT (jti) в KeyDB + `UserChecker`/listener,
-  проверяющий его → мгновенный lockout. Оценить стоимость проверки на каждый запрос.
-
-**Open questions:**
-- Нужен ли мгновенный lockout вообще (SLA бана), или ≤1ч приемлемо?
-- Если да — deny-list по jti (стоимость на запрос) vs форс-логаут через версию токена (`tokenVersion` на User, в JWT-claim)?
+**Decisions (2026-07-11):** мгновенный lockout через `tokenVersion` + `UserChecker`.
+- Добавить колонку `tokenVersion` (int, default 0) на сущность `User`; включать её в claims access-JWT при выпуске (LexikJWT payload-enricher / `JWTCreatedEvent`).
+- `UserChecker` (или authenticated-listener) сравнивает `tokenVersion` из JWT-claim с `User.tokenVersion`; при несовпадении — отказ (мгновенно режет уже выданные access-JWT). Стоимость: требует загрузки User из БД на запрос.
+- Ban (`POST /api/v1/admin/users/{id}/ban`) инкрементирует `User.tokenVersion` И проактивно инвалидирует refresh-family (как refresh-guard) → полный мгновенный lockout.
+- Нужна миграция Doctrine на новую колонку.
 
 **Status:** grooming.

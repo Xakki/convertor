@@ -39,9 +39,9 @@
 
 #### MarkItDown (doc → markdown)
 - **Что:** альтернативный конвертер doc→markdown на базе `microsoft/markitdown`.
-- **Источник:** обсуждение в [[add-open-ai]]; текущая реализация doc→markdown — на pandoc.
+- **Источник:** обсуждение в [[openai-00-integration]]; текущая реализация doc→markdown — на pandoc.
 - **Движок/подход:** `microsoft/markitdown` (Python).
-- **Почему отложено:** сейчас doc→markdown держим на pandoc; MarkItDown отложен (см. [[add-open-ai]]).
+- **Почему отложено:** сейчас doc→markdown держим на pandoc; MarkItDown отложен (см. [[openai-00-integration]]).
 
 **Влияние:**
 Ширина матрицы форматов `ROADMAP.md` не покрыта полностью; перечисленные конвертации заявлены, но не реализованы. Без этой карточки пункты рискуют потеряться между MVP-scope и матрицей.
@@ -59,4 +59,4 @@
 **Decisions:**
 - Выделено как отложенный бэклог из [[docs-workers-conversion-validation]] 2026-06-20 по просьбе пользователя — записать все отложенные пункты, чтобы ничего не потерялось.
 
-Связано: [[docs-workers-conversion-validation]] · [[add-open-ai]]
+Связано: [[docs-workers-conversion-validation]] · [[openai-00-integration]]

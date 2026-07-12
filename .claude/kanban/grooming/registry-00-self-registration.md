@@ -76,7 +76,7 @@ generalized router the static matrix can't express.
   targets a seam S1 is deleting). Best-effort/non-fatal rule unchanged.
 
 **Status:** grooming (epic, Stage 2+). Design settled.
-- **Phase 1 выделен в todo** → `[[registry-phase1-worker-register]]` (2026-07-07, после приземления
+- **Phase 1 выделен в todo** → `[[registry-01-worker-register]]` (2026-07-07, после приземления
   s1-11). Seam register() уточнён: хук в `WsClient` на `ready` (единообразно для всех воркеров),
   а не старый `StreamConsumerBase.__init__`. Register-контракт закреплён в карточке Phase 1.
 - Phase 2/3 остаются здесь до своей очереди (Phase 2 блокирована `[[php-ai-virtual-key-submit-resolution]]`;

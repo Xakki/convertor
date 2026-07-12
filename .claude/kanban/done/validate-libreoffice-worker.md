@@ -22,7 +22,7 @@ LibreOffice-воркер (`workers/libreoffice/main.py`) сейчас — HTTP-�
 - Переписать LibreOffice-воркер как **KeyDB Streams consumer** для routing_key `document` (категория `markup` сворачивается в `document` — оба роутятся в `conv.document`); убрать HTTP-прокси-модель.
 - Перевести I/O на S3: вход из `-inputs`, результат в `-results` (сейчас воркер всё ещё ждёт удалённый том `/share`, которого больше нет).
 - Провалидировать конвертации doc/pdf/markup(md) против матрицы форматов `ROADMAP.md` (справочные данные).
-- pandoc сохраняется; MarkItDown отложен (зафиксировано в [[add-open-ai]]).
+- pandoc сохраняется; MarkItDown отложен (зафиксировано в [[openai-00-integration]]).
 
 **Зависимости:**
 - S3 runtime блокируется [[finish-worker-compose-wiring]]: после переписи на consumer воркеру нужны S3_*-env и egress-сеть (как у эталонного worker-image), иначе до S3 в рантайме не дотянется.
@@ -44,7 +44,7 @@ LibreOffice-воркер (`workers/libreoffice/main.py`) сейчас — HTTP-�
 - **Поднято до MVP-критичного / топ-приоритета Стадии 1** при ре-груминге 2026-06-20: остальные воркеры уже Streams-consumer'ы, а `conv.document` (document + markup) без consumer'а — документы как core product не конвертируются вообще.
 - **Модель: KeyDB Streams consumer** routing_key `document` (markup сворачивается в document), не HTTP — решение пользователя 2026-06-20, глобальное правило «воркеры только Streams + S3».
 - **Таблицы / Презентации / PDF→jpg постранично — отложены в Стадию 7** (решение 2026-06-20).
-- pandoc сохраняется для docs→markdown; MarkItDown отложен (см. [[add-open-ai]]).
+- pandoc сохраняется для docs→markdown; MarkItDown отложен (см. [[openai-00-integration]]).
 - **epub как ВХОД — урезан до `epub→md` (pandoc); `pages` убран** (решение пользователя 2026-06-21): soffice не умеет ИМПОРТ epub (только экспорт), поэтому остальные epub-source цели рекламировались сломанными. epub остаётся валидной ЦЕЛЬю (soffice экспорт). pages (Apple Pages, libetonyek) — отложен. Расходится с ROADMAP стр. 147 → вынесено в follow-up [[stage7-libreoffice-extra-formats]].
 
 **Execution Log (2026-06-21):**

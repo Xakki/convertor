@@ -61,7 +61,7 @@ Spec (источник истины по всем решениям): `docs/super
 - `[[s1-13-integration-doc-fixes]]` — сквозной smoke по всем воркерам; фиксы доков (`docs/queue-contract.md` §2 single-JSON, имена каналов в CLAUDE.md → `conv.<type>` вкл. `data`).
 
 **Зависимости/взаимодействия:**
-- `[[registry-self-registration]]` — его Phase 1 сейчас регистрирует воркеров из `StreamConsumerBase.__init__` (AI — через `PullApiClient`). После S1 self-регистрация должна вызываться из базы WS-клиента (`workers/common/ws_client.py`), а не из stream-consumer'а. Скоординировать при пересечении.
+- `[[registry-00-self-registration]]` — его Phase 1 сейчас регистрирует воркеров из `StreamConsumerBase.__init__` (AI — через `PullApiClient`). После S1 self-регистрация должна вызываться из базы WS-клиента (`workers/common/ws_client.py`), а не из stream-consumer'а. Скоординировать при пересечении.
 - `[[extract-worker-common-helpers]]` — перекрывается: S1 наполняет `workers/common` (`ws_client.py`, `envelope.py`, обобщённый `process_job`). После S1 пересмотреть, что из его scope ещё актуально.
 - `[[queue-channel-names-mismatch]]` — **сворачивается** в S1: фикс имён каналов в CLAUDE.md (`conv.<type>` вкл. `data`) выполняется в `[[s1-13-integration-doc-fixes]]`.
 - `[[worker-pull-api-live-status-hash]]` — **superseded** S1 → `[[s1-07-progress-conv-status]]` (conv:status пишет gateway). Отдельно не брать.

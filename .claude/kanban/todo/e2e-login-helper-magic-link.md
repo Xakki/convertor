@@ -13,14 +13,10 @@
 - Новый флоу (magic-link) требует реального Telegram round-trip — в e2e его не воспроизвести напрямую.
 - Виджет-эндпоинт `POST /api/v1/auth/telegram` помечен к удалению (карта [[upload-ui-bot-auth-rework]] / контракт «Устаревшее»). После удаления хелпер сломается окончательно.
 
-**Решение (черновик, на груминг):**
-- Ввести **test-only auth-путь** для e2e: напр. в `when@test` — эндпоинт/фикстура, выдающая JWT для сид-юзера без Telegram (за флагом окружения, недоступно в prod), ИЛИ прямой `issueFamily`+JWT в setup теста, минуя HTTP-логин.
-- Обновить `login()`-хелпер `ConversionApiIntegrationTest` на этот путь.
-- Согласовать с удалением виджета (карта C), чтобы не осталось висящих ссылок на `POST /api/v1/auth/telegram`.
-
-**Открытые вопросы:**
-- Тест-only эндпоинт vs прямая генерация JWT в фикстуре (безопасность: не должно течь в prod).
-- Нужны ли e2e-кейсы для самого magic-link callback (с мок-ботом) отдельно.
+**Decisions (2026-07-11):** JWT прямо в фикстуре.
+- В setup теста `ConversionApiIntegrationTest` генерировать `issueFamily`+JWT для сид-юзера напрямую (минуя HTTP-логин), обновить `login()`-хелпер на этот путь. НЕ вводить test-only HTTP-эндпоинт (ноль prod-поверхности).
+- Согласовать с удалением obsolete виджет-эндпоинта `POST /api/v1/auth/telegram` (карта [[upload-ui-bot-auth-rework]]) — не оставлять висящих ссылок.
+- Отдельные e2e для самого magic-link callback с мок-ботом ВЫНЕСЕНЫ отдельной grooming-картой [[e2e-magic-link-callback-mockbot]]; эту карту не блокируют.
 
 **Контекст:** выявлено при ре-ревью magic-link rework эпика auth-redesign (2026-07-10).
 

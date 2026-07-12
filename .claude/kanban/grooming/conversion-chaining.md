@@ -50,7 +50,7 @@ User requests A→C explicitly; the backend finds the path and runs it transpare
 - **Phase 2** — depth-3+ if warranted; parameterized input bucket; cost/quality tiebreaks; eager cleanup.
 
 **Dependencies:**
-- `registry-self-registration` — **reframed from HARD block to enablement lever.** The graph mechanism
+- `registry-00-self-registration` — **reframed from HARD block to enablement lever.** The graph mechanism
   exists now (`buildMatrix()` → depth-2 BFS runs today); self-registration buys **edge accuracy**.
   Enablement should gate on either self-registration OR a curated MVP-validated edge subset.
 - `align-document-stream-matrix-dlq` (todo) — land BEFORE enabling chaining: its `PermanentError`

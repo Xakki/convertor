@@ -71,4 +71,4 @@ STT/TTS/embedding-пары присутствуют в реестре конве
 
 **Гейты (все зелёные):** phpstan No errors; PHPUnit 100 tests / 386 assertions; test-python 97/18/33/31/15/110; test-drift 2 passed; test-gateway 96 passed.
 
-**Разблокирует:** registry Phase 2 (`[[registry-self-registration]]`) — AI-воркер теперь объявляет реальную плоскую матрицу.
+**Разблокирует:** registry Phase 2 (`[[registry-00-self-registration]]`) — AI-воркер теперь объявляет реальную плоскую матрицу.

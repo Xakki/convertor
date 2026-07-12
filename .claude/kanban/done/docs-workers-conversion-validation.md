@@ -45,7 +45,7 @@
 **Decisions (зафиксировано с пользователем 2026-06-20):**
 - **Split per-worker.** Эпик становится umbrella/tracking-карточкой; вся работа — в 5 per-worker subcard'ах выше.
 - **Миграция Redis-LISTS → KeyDB Streams (stream-consumer)** делается ВНУТРИ карточки соответствующего воркера, не отдельной prereq-картой.
-- **AI backend = гибрид.** Внешние провайдеры (OpenAI/Gemini/Claude + g4f через `aip.xakki.ru`, см. [[add-open-ai]]) — по умолчанию; local whisper/espeak — fallback. Локальному fallback всё ещё нужен фикс egress модели Whisper (pre-bake в образ ИЛИ контролируемый egress на сети `backend` `internal:true`).
+- **AI backend = гибрид.** Внешние провайдеры (OpenAI/Gemini/Claude + g4f через `aip.xakki.ru`, см. [[openai-00-integration]]) — по умолчанию; local whisper/espeak — fallback. Локальному fallback всё ещё нужен фикс egress модели Whisper (pre-bake в образ ИЛИ контролируемый egress на сети `backend` `internal:true`).
 - **MVP-deferred** (см. секцию выше) — вне scope сейчас, но теперь трекаются в backlog-карточке [[post-mvp-conversion-formats]] (заведена по просьбе пользователя 2026-06-20): архивы, CAD/DWG, доп. форматы изображений (SVG/HEIC/AVIF), разметка rst/latex/wiki, MarkItDown.
-- Docs→markdown остаётся на **pandoc**; MarkItDown отложен (зафиксировано в [[add-open-ai]]).
+- Docs→markdown остаётся на **pandoc**; MarkItDown отложен (зафиксировано в [[openai-00-integration]]).
 - Связанная карточка unit-тестов: [[worker-conversion-tests]].
