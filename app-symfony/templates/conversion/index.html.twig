@@ -204,8 +204,6 @@
 </div>
 
 <script>
-    const OCR_SOURCES = ['jpg', 'png', 'tiff', 'pdf'];
-    const OCR_TARGETS = ['txt', 'md', 'docx'];
     const STATUS_LABELS = {
         pending: 'В очереди',
         processing: 'Обработка',
@@ -231,7 +229,7 @@
             authError: '',
             loggingIn: false,   // идёт открытие deep-link
             loginHint: false,   // показать инструкцию «завершите в Telegram»
-            formats: [],        // [{from, to, category, isAi}]
+            formats: [],        // [{from, to, category, isAi, ocrCapable}]
             file: null,
             fromFormat: '',
             toFormat: '',
@@ -307,8 +305,11 @@
             },
 
             get showOcr() {
-                return OCR_SOURCES.includes(this.fromFormat)
-                    && OCR_TARGETS.includes(this.toFormat);
+                if (!this.fromFormat || !this.toFormat) return false;
+                const pair = this.formats.find(
+                    (f) => f.from === this.fromFormat && f.to === this.toFormat,
+                );
+                return pair?.ocrCapable === true;
             },
 
             // Требует логина: ai-флаг ИЛИ категория video. Совпадает с гейтом

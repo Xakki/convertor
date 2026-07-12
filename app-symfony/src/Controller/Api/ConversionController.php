@@ -282,6 +282,7 @@ class ConversionController extends AbstractController
                 new OA\Property(property: 'to', type: 'string', example: 'pdf'),
                 new OA\Property(property: 'category', type: 'string', example: 'document'),
                 new OA\Property(property: 'isAi', type: 'boolean'),
+                new OA\Property(property: 'ocrCapable', type: 'boolean'),
             ])),
         ]),
     )]

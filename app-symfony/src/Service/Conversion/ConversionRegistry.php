@@ -63,7 +63,7 @@ class ConversionRegistry
     }
 
     /**
-     * @return list<array{from: string, to: string, category: string, isAi: bool}>
+     * @return list<array{from: string, to: string, category: string, isAi: bool, ocrCapable: bool}>
      */
     public function getSupportedFormats(): array
     {
@@ -71,10 +71,11 @@ class ConversionRegistry
         foreach ($this->getMatrix() as $from => $targets) {
             foreach ($targets as $to => $meta) {
                 $result[] = [
-                    'from'     => $from,
-                    'to'       => $to,
-                    'category' => $meta['category']->value,
-                    'isAi'     => $meta['isAi'],
+                    'from'       => $from,
+                    'to'         => $to,
+                    'category'   => $meta['category']->value,
+                    'isAi'       => $meta['isAi'],
+                    'ocrCapable' => $this->isOcrSupported($from, $to),
                 ];
             }
         }
