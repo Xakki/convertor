@@ -18,7 +18,8 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  */
 class TelegramBotClient
 {
-    private const API_BASE = 'https://api.telegram.org/bot';
+    private const API_BASE  = 'https://api.telegram.org/bot';
+    private const FILE_BASE = 'https://api.telegram.org/file/bot';
 
     public function __construct(
         private readonly HttpClientInterface $httpClient,
@@ -69,6 +70,58 @@ class TelegramBotClient
         }
 
         return $this->call('editMessageReplyMarkup', $payload);
+    }
+
+    /**
+     * getUserProfilePhotos — список фото профиля пользователя. Апдейты Telegram
+     * НИКОГДА не несут аватар, его берём только этим методом. `limit=1` — нам
+     * нужна лишь текущая (первая) фотография. Ответ: result.photos[i] — массив
+     * PhotoSize (разные разрешения одного фото).
+     *
+     * @return array<string, mixed>
+     */
+    public function getUserProfilePhotos(int|string $telegramId, int $limit = 1): array
+    {
+        return $this->call('getUserProfilePhotos', ['user_id' => $telegramId, 'limit' => $limit]);
+    }
+
+    /**
+     * getFile — по file_id возвращает File с `file_path` для скачивания. Сам
+     * file_path НЕ содержит токена, но URL скачивания (см. downloadFile) — да.
+     *
+     * @return array<string, mixed>
+     */
+    public function getFile(string $fileId): array
+    {
+        return $this->call('getFile', ['file_id' => $fileId]);
+    }
+
+    /**
+     * Скачивает содержимое файла по `file_path` из getFile. URL скачивания —
+     * `…/file/bot<TOKEN>/<path>` — несёт bot-токен, поэтому ошибки скрабим (как в
+     * call()) и НЕ пробрасываем исходное исключение (его chain тоже несёт URL).
+     * Возвращает сырые байты; null — если файл недоступен/скачивание не удалось.
+     */
+    public function downloadFile(string $filePath): ?string
+    {
+        if (trim($this->telegramBotToken) === '') {
+            throw new \RuntimeException('TELEGRAM_BOT_TOKEN is not configured.');
+        }
+
+        try {
+            $response = $this->httpClient->request(
+                'GET',
+                self::FILE_BASE . $this->telegramBotToken . '/' . ltrim($filePath, '/'),
+            );
+
+            return $response->getContent();
+        } catch (ExceptionInterface $e) {
+            $this->logger->error('Telegram file download failed', [
+                'error' => $this->scrubToken($e->getMessage()),
+            ]);
+
+            return null;
+        }
     }
 
     /**

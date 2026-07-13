@@ -23,6 +23,29 @@ class User implements UserInterface
     #[ORM\Column(type: 'bigint', nullable: true, unique: true)]
     private ?string $telegramId = null;
 
+    /**
+     * Имя из Telegram-профиля (`first_name`). Обновляется при каждом bot-логине.
+     * Nullable — у гостя и у старых записей отсутствует.
+     */
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    private ?string $firstName = null;
+
+    /**
+     * Username из Telegram-профиля (без @). Обновляется при каждом bot-логине
+     * (username в TG изменяем). Nullable — не у всех пользователей он задан.
+     */
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    private ?string $username = null;
+
+    /**
+     * Наша ссылка на закешированный в S3 аватар (ключ объекта, напр.
+     * `avatars/{id}.jpg`), НЕ сырой TG-URL. Сырой getFile-URL несёт bot-токен и
+     * протухает — его НЕ персистим и не отдаём наружу. Nullable — аватара может
+     * не быть (пользователь без фото / фетч не удался).
+     */
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    private ?string $photoUrl = null;
+
     #[ORM\Column(type: 'string', length: 20, nullable: true, unique: true)]
     private ?string $phone = null;
 
@@ -89,6 +112,42 @@ class User implements UserInterface
     public function setTelegramId(?string $telegramId): self
     {
         $this->telegramId = $telegramId;
+
+        return $this;
+    }
+
+    public function getFirstName(): ?string
+    {
+        return $this->firstName;
+    }
+
+    public function setFirstName(?string $firstName): self
+    {
+        $this->firstName = $firstName;
+
+        return $this;
+    }
+
+    public function getUsername(): ?string
+    {
+        return $this->username;
+    }
+
+    public function setUsername(?string $username): self
+    {
+        $this->username = $username;
+
+        return $this;
+    }
+
+    public function getPhotoUrl(): ?string
+    {
+        return $this->photoUrl;
+    }
+
+    public function setPhotoUrl(?string $photoUrl): self
+    {
+        $this->photoUrl = $photoUrl;
 
         return $this;
     }

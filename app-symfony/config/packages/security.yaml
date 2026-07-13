@@ -74,6 +74,9 @@ security:
         # Гейт ai/video режется в контроллере (403 auth_required), не на firewall.
         - { path: ^/api/v1/convert, roles: ROLE_GUEST }
         - { path: ^/api/v1/quota, roles: ROLE_GUEST }
+        # /me доступен гостю на уровне firewall, чтобы контроллер вернул чистый 401
+        # (а не firewall-403) для гостя/анонима — у них нет TG-профиля.
+        - { path: ^/api/v1/me$, roles: PUBLIC_ACCESS }
         - { path: ^/api, roles: ROLE_USER }
 
 when@test:
