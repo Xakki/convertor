@@ -52,6 +52,7 @@ SaaS-сервис конвертации файлов всех форматов.
 - Регистрация webhook: `make tg-set-webhook` из корня (нужны `TELEGRAM_WEBHOOK_SECRET` в `app-symfony/.env.local` + публичный `API_URL` в `.env`). Секрет один и тот же для регистрации и для проверки заголовка `X-Telegram-Bot-Api-Secret-Token`.
 
 ## Payments
+- **(MVP: только Telegram Stars; Stripe/Cryptomus — вне MVP)**
 - Telegram Stars: через Telegram Bot API (invoice → successful_payment webhook)
 - Stripe: через Stripe Checkout (KZ карта поддерживается)
 - Cryptomus: REST API v1 (USDT/BTC, доступно из РФ)

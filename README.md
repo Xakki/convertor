@@ -1,114 +1,113 @@
-# About
-API service for converting various files to text, with Markdown support
+# Convertor Service
 
-# TODO List
+SaaS-сервис конвертации файлов всех форматов: **документы, изображения, аудио, видео, данные и AI-конвертации** (OCR, речь↔текст). Загружаете файл — получаете результат в нужном формате. Без обязательного логина для большинства конвертаций.
 
-- [ ] Docker compose environment
-- [ ] Telegram auth
+## Технологии
 
+- **Backend:** PHP 8.5 + Symfony 7 (REST API `/api/v1/`, JWT, OpenAPI через NelmioApiDoc)
+- **Frontend:** Twig + Alpine.js 3 + HTMX + Tailwind CSS (без тяжёлых SPA, всё с CDN)
+- **Воркеры:** Python 3.12 — по одному контейнеру на категорию (libreoffice/document, ffmpeg audio+video, image, data; AI — отдельный remote-воркер)
+- **Очереди:** KeyDB Streams (Redis-совместимый) + Symfony Messenger
+- **WS-Gateway:** асинхронный Python-сервис — единственный мост между очередями и воркерами
+- **БД:** MariaDB 11 + Doctrine ORM
+- **Хранилище:** только S3/MinIO (бакеты `${S3_BUCKET_PREFIX}-inputs` / `-results`)
 
-# AI Worker — GPU setup
+## Архитектура
 
-The AI worker (`docker/workers/ai.cuda.Dockerfile`) is built locally on the GPU host.
-Only the light base image (`ai-base.Dockerfile`) is published to Harbor.
+Сервис поднимается одним docker-compose стеком из **12 сервисов**:
 
-## Choosing CUDA_ARCH for your NVIDIA GPU
+`php`, `cron`, `mariadb`, `keydb`, `nginx`, `worker-libreoffice`, `worker-ffmpeg-audio`, `worker-ffmpeg-video`, `worker-image`, `worker-data`, `ws-gateway`, `metrics-exporter`.
 
-Find your compute capability at build time:
-```
-nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-# e.g. "8.6" → strip the dot → CUDA_ARCH=86
-```
+AI-воркер (GPU) — **remote, вне основного стека**: запускается отдельно (напр. на домашнем WSL+GPU) через `docker-compose.worker-ai.yml` и подключается к публичному `wss://`. В `make up` его нет.
 
-| GPU series / card              | Architecture  | `CUDA_ARCH` |
-|-------------------------------|---------------|-------------|
-| GTX 10xx (1080/1070/1060)     | Pascal        | `61`        |
-| RTX 20xx, T4                  | Turing        | `75`        |
-| RTX 30xx (3060/3080/3090)     | Ampere        | `86`        |
-| A100                          | Ampere        | `80`        |
-| RTX 40xx (4070/4080/4090)     | Ada Lovelace  | `89`        |
-| H100                          | Hopper        | `90`        |
+### Транспорт: WS-Gateway как единственный читатель очередей
 
-## Build commands
+Ключевой инвариант: **ни один воркер не трогает KeyDB и S3 напрямую**. Всё общение идёт через WS-Gateway (WebSocket) и Symfony API (HTTP).
 
-```bash
-# 1. Build + push the light base to Harbor (run on saFin or any builder with Harbor access):
-make build-ai-base
-make push-ai-base
+- **ws-gateway** — единственный, кто читает KeyDB Streams (`XREADGROUP`/`XACK`/`XAUTOCLAIM`). Каждый воркер — это WS-клиент gateway.
+- KeyDB наружу не публикуется; удалённый воркер цепляется к публичному `wss://`.
+- Воркеры не держат S3-креды и авторизуются статичным bearer-токеном (`WORKER_API_TOKEN`).
 
-# 2. Build the CUDA working image locally on the GPU host:
-make build-ai-cuda CUDA_ARCH=86             # RTX 3080/3090
-make build-ai-cuda CUDA_ARCH=75             # RTX 20xx / T4
-make build-ai-cuda CUDA_ARCH=86 WITH_LLAMACPP=1  # with embedded llama.cpp binary
+### Путь конвертации (end-to-end)
 
-# 3. Build the CPU working image (for CI or CPU-only runs):
-make build-ai-cpu
-```
+1. Пользователь загружает файл → Symfony кладёт его в S3 (`-inputs`), создаёт `Conversion` в БД и ставит задачу в KeyDB Stream `conv.<type>` (Messenger).
+2. **ws-gateway** читает задачу из стрима и раздаёт её подключённому воркеру нужного типа по WS.
+3. Воркер тянет вход через `GET /api/v1/worker/jobs/{id}/input` (Symfony стримит из S3), выполняет конвертацию.
+4. **Малый результат** (≤ `WS_RESULT_INLINE_MAX`, обычно ≤256 KB) — воркер шлёт inline по WS → gateway → внутренний relay-эндпоинт Symfony (защита `GATEWAY_INTERNAL_TOKEN`) → Symfony пишет S3+БД. **Большой результат** — воркер делает `POST /api/v1/worker/jobs/{id}/result` (multipart) напрямую в Symfony.
+5. Gateway делает `XACK`; живой статус (`conv:status`) пишет тоже gateway. Пользователь забирает результат из S3 (`-results`) по presigned-ссылке.
 
-## Model sharing (avoid re-downloading weights)
+Воркеры **flag-agnostic**: валидируют только форматы (source→target) и выполняют конвертацию; выбор поведения (OCR / STT / TTS) и нужного стрима — на стороне API.
 
-Pass already-downloaded HuggingFace weights from the host:
-```
--v ~/.cache/huggingface:/home/app/.cache/huggingface
-```
-For Ollama: use `-e OLLAMA_URL=http://host.docker.internal:11434` to point at host Ollama,
-or `-v ~/.ollama:/root/.ollama` to share Ollama model weights directly.
+## Первый запуск
 
-## Dev-server (web UI)
-
-A local FastAPI dev-server (`python -m workers.ai --devserver`) for manually exercising
-every conversion method, live mic→STT over WebSocket, watching pull-processing stats, and
-editing worker settings — separate from the production pull-worker.
-
-Build the CUDA image first (see *Build commands* above), then run it in dev-server mode.
-The web-server port is fully configurable via the `DEVSERVER_PORT` container argument — a
-single value drives both the in-container uvicorn listener and the published port:
+Требуется Docker + Docker Compose. Все команды — через `make` (напрямую `docker compose` не дёргать).
 
 ```bash
-# Build the CUDA image (run on the GPU host):
-make build-ai-cuda CUDA_ARCH=86            # pick CUDA_ARCH for your card (table above)
+# 1. Секреты и локальная конфигурация
+cp .env.local_example .env.local
+#    заполнить .env.local (БД, S3/MinIO, токены воркеров/gateway, Telegram-бот)
 
-# Run the dev-server in CUDA mode. DEVSERVER_HOST=0.0.0.0 makes the published port reachable.
-docker run --rm --gpus all \
-  -e DEVSERVER_HOST=0.0.0.0 \
-  -e DEVSERVER_PORT=8877 \
-  -e WHISPER_DEVICE=cuda -e WHISPER_COMPUTE_TYPE=float16 \
-  -p 8877:8877 \
-  -v worker-ai-data:/data \
-  -v ~/.cache/huggingface:/home/app/.cache/huggingface \
-  xakki-convertor/worker-ai:cuda \
-  python3 -m workers.ai --devserver
+# 2. Первичная инициализация: build + up + migrate + seed-plans
+make init
 ```
 
-Change the port with one argument, e.g. `-e DEVSERVER_PORT=9000 -p 9000:9000`.
-By default (no `DEVSERVER_TOKEN`) the server is unauthenticated — keep it on localhost.
-To require a bearer when exposing it, add `-e DEVSERVER_TOKEN=<secret>` (then send
-`Authorization: Bearer <secret>` on `/api/*`, or `?token=<secret>` on the WebSocket).
+> ⚠️ **Caveat по `seed-plans`.** Таргет `make init` вызывает `seed-plans`, но сейчас это фактически no-op: под ним нет реализованных фикстур/команды (`doctrine:fixtures:load --group=plans` → `app:seed:plans` → `|| true`), любая ошибка молча проглатывается. Тарифные планы этой командой пока не сидятся.
 
-Open the web UI at `http://127.0.0.1:8877/` (or your chosen port). Four tabs:
-**Methods** (run any conversion on an uploaded file), **Audio stream** (mic → live STT),
-**Pull stats** (live pull-processing metrics), **Settings** (edit all non-secret worker
-settings + toggle `PULL_ENABLED` at runtime).
+Последующие запуски:
 
-Settings edits persist to `DEVSERVER_CONFIG_PATH` (default `/data/devserver_settings.json`)
-on the `worker-ai-data` volume mounted at `/data`, so they survive container restarts.
+```bash
+make up        # поднять стек
+make down      # остановить
+make restart   # перезапустить
+make ps        # статус контейнеров
+make logs      # логи всех сервисов (make logs-<service> — по одному)
+```
 
-Compose alternative: `docker-compose.worker-ai.yml` carries the `DEVSERVER_*` env (and a
-commented `command:` + `ports: ["${DEVSERVER_PORT:-8877}:${DEVSERVER_PORT:-8877}"]` example);
-uncomment those to launch the dev-server via compose instead of the pull-worker.
+### Создать первого админа
 
----
+Админ-панель (`/admin` UI + `/api/v1/admin/*`) закрыта `ROLE_ADMIN`. UI управления ролями нет — первый админ выдаётся консольной командой:
 
-# Service: libreoffice
+```bash
+make console CMD="app:user:make-admin <email|id>"
+```
 
-Image: harbor.xakki.ru/library/libreoffice
+## Ключевые make-таргеты
 
-Source: https://gitlab.com/Xakki/dockers-images
+| Таргет | Назначение |
+|--------|-----------|
+| `make init` | Первичная инициализация (build + up + migrate + seed-plans) |
+| `make up` / `make down` / `make restart` | Старт / стоп / рестарт стека |
+| `make build` / `make rebuild` | Сборка образов (`rebuild` — без кэша) |
+| `make pull` | Подтянуть базовые образы из Harbor |
+| `make ps` / `make logs` / `make logs-<svc>` | Статус / логи |
+| `make login` | Логин в Docker-registry (Harbor) |
+| `make docker-check` | Валидация compose (`config -q`) |
+| `make migrate` | Doctrine-миграции |
+| `make console CMD="…"` | Произвольная Symfony-консоль |
+| `make tg-set-webhook` | Регистрация Telegram webhook |
+| `make restart-php` / `make shell-php` | Рестарт / shell php-контейнера |
+| `make composer CMD="…"` | Composer внутри контейнера |
+| `make test` | Все тесты (PHPUnit + pytest) |
+| `make phpstan` / `make cs` / `make cs-check` | Статанализ и code style |
 
-Этот код представляет собой асинхронный веб-сервер на aiohttp, предназначенный для конвертации документов с использованием внешней утилиты LibreOffice (soffice).
+`make help` — полный список.
 
-Сервер предоставляет 4 API-маршрута для двух различных сценариев:
+## Аутентификация и доступ
 
-Multipart Upload: Клиент загружает файл (.doc и т.п.) в теле HTTP-запроса. Сервер конвертирует его и немедленно отправляет сконвертированный файл (e.g., .docx или .txt) обратно в теле ответа.
+- **Анонимная конвертация без логина** — гость по подписанной httpOnly-cookie `guest_id` (`ROLE_GUEST`). Исключения: AI-конвертации и Видео требуют логина (`403 auth_required`). При логине история гостя перепривязывается к пользователю.
+- **Telegram-логин через бота** — magic-link на своём устройстве (same-device, не Login Widget): `POST /api/v1/auth/telegram/start` → deep-link `t.me/<bot>?start=<code>` → тап в боте (webhook) → magic-ссылка в чат → открытие на том же устройстве проверяет два секрета (nonce-cookie + linkSecret) → JWT + refresh.
+- **JWT** — TTL 1h (LexikJWT), **refresh-token** — 30 дней (httpOnly cookie, ротация в Redis).
+- **SMS OTP** — резервный, пока заглушка (501).
 
-Shared File: Клиент отправляет JSON-запрос, указывая имя файла, который уже существует на сервере в каталоге /shared-files/. Сервер конвертирует его и возвращает JSON-ответ с путем к новому, сконвертированному файлу.
+Регистрация webhook: `make tg-set-webhook` (нужны `TELEGRAM_WEBHOOK_SECRET` в `app-symfony/.env.local` + публичный `API_URL`).
+
+## Оплата
+
+- **MVP — только Telegram Stars** (XTR, через Bot API: invoice → `successful_payment` webhook).
+- Вне MVP (заморожено): Stripe, Cryptomus.
+
+## Куда смотреть дальше
+
+- **`ROADMAP.md`** — канонический порядок MVP (7 стадий), матрица форматов, лимиты, API, UI.
+- **`CLAUDE.md`** — правила проекта, детали архитектуры очередей/транспорта, auth, S3, секреты.
+- **`.claude/kanban/`** — карточки задач (источник статуса реализации).
