@@ -76,6 +76,12 @@ gateway-logs: ## Tail логи ws-gateway
 .PHONY: build-workers
 build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway ## Build all on-server worker images (AI worker is remote — see build-ai-base / build-ai-cuda / build-ai-cpu)
 
+# Пересоздать ТОЛЬКО контейнеры воркеров из свежих :latest-образов, не трогая
+# php/nginx/keydb/mariadb/ws-gateway. --no-deps — чтобы up не поднимал зависимости.
+.PHONY: workers-recreate
+workers-recreate: ## Recreate только worker-контейнеры (не трогает php/nginx/gateway/keydb/mariadb)
+	$(DC) up -d --no-deps worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data
+
 .PHONY: build-data-test
 build-data-test: build-data ## Build worker-data:test (test deps pre-baked, не попадает в :latest)
 	$(call build_test_img,worker-data)

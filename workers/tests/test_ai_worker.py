@@ -571,6 +571,10 @@ async def test_handle_job_happy_path(tmp_path):
     assert result.path == str(tmp_path / "out-42.txt")
     assert result.mime == "text/plain"
     assert result.ext == "txt"
+    # processing_ms замеряется вокруг convert() — непустой int (мс)
+    assert result.processing_ms is not None
+    assert isinstance(result.processing_ms, int)
+    assert result.processing_ms >= 0
 
 
 async def test_handle_job_invalid_pair_permanent_fail(tmp_path):

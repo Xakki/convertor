@@ -120,8 +120,33 @@ async def test_process_job_returns_completed_on_success(tmp_path):
     assert result.ext == "json"
     assert result.path == str(out_file)
     assert result.permanent is False
+    # processing_ms замеряется вокруг convert() и должен быть непустым int (мс)
+    assert result.processing_ms is not None
+    assert isinstance(result.processing_ms, int)
+    assert result.processing_ms >= 0
     progress.report.assert_any_call(5, "starting")
     progress.report.assert_any_call(95, "done")
+
+
+async def test_process_job_measures_processing_ms(tmp_path):
+    """process_job замеряет время convert() → processing_ms > 0 для небыстрого convert."""
+    import time as _time
+
+    out_file = tmp_path / "out.json"
+    out_file.write_text("{}", encoding="utf-8")
+
+    class W(StreamConsumerBase):
+        CAPABILITIES = {"routing_keys": ["data"], "matrix": {}}
+
+        def convert(self, job: dict) -> tuple[str, str, str]:
+            _time.sleep(0.01)  # 10ms — гарантирует ненулевой замер
+            return str(out_file), "application/json", "json"
+
+    result = await W().process_job(_job(), _make_progress())
+
+    assert result.ok is True
+    assert result.processing_ms is not None
+    assert result.processing_ms >= 10
 
 
 async def test_process_job_value_error_is_permanent():

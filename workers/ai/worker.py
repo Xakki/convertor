@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
 from typing import Any
 
 from workers.ai.config import Config, load_config
@@ -99,6 +100,7 @@ def build_handle_job(cfg: Config):
         }
 
         progress.report(5, "starting")
+        started = time.monotonic()
         try:
             out_str, mime, target_ext = await convert(payload, cfg)
         except ValueError as exc:
@@ -116,9 +118,12 @@ def build_handle_job(cfg: Config):
             logger.error("conversion failed for job %s: %s", job_id, err)
             return ResultSignal.failed(error=err, permanent=False)
 
+        processing_ms = int((time.monotonic() - started) * 1000)
         progress.report(95, "done")
         logger.info("job %s converted (%s → %s)", job_id, src_fmt, tgt_fmt)
-        return ResultSignal.completed(path=out_str, mime=mime, ext=target_ext)
+        return ResultSignal.completed(
+            path=out_str, mime=mime, ext=target_ext, processing_ms=processing_ms
+        )
 
     return handle_job
 

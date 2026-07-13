@@ -16,6 +16,7 @@ import logging
 import os
 import signal
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,7 @@ class StreamConsumerBase(ABC):
         tgt_fmt = str(job.get("targetFormat", "")).lower().lstrip(".")
 
         progress.report(5, "starting")
+        started = time.monotonic()
         try:
             local_output, mime, target_ext = await asyncio.to_thread(self.convert, job)
         except ValueError as exc:
@@ -99,9 +101,12 @@ class StreamConsumerBase(ABC):
             logger.error("conversion failed for job %s: %s", job_id, err)
             return ResultSignal.failed(error=err, permanent=False)
 
+        processing_ms = int((time.monotonic() - started) * 1000)
         progress.report(95, "done")
         logger.info("job %s converted (%s → %s)", job_id, src_fmt, tgt_fmt)
-        return ResultSignal.completed(path=local_output, mime=mime, ext=target_ext)
+        return ResultSignal.completed(
+            path=local_output, mime=mime, ext=target_ext, processing_ms=processing_ms
+        )
 
     def run(self) -> None:
         """WS-транспорт entry point — mirrors workers/ai/worker.py."""
