@@ -49,12 +49,14 @@ env-anchor php/cron — это и есть поверхность рассинх
   `.env`/`.env.local_example`).
 - Tests/QA green: `make phpstan`, `make cs-check`, `make docker-check`.
 
-**Open questions:** *(grooming)*
-- Какой из трёх вариантов (общий инжект / boot-assertion / make-check) — или их
-  комбинация? Инжект в php-env устраняет корень, но расширяет env-поверхность
-  Symfony; проверка дешевле, но оставляет два источника.
-- Нужно ли то же самое для остальных потенциально-shared значений (напр. REDIS
-  DSN, S3), или строго для этих двух токенов.
+**Decisions:**
+Единый источник истины: прокинуть `WORKER_API_TOKEN` и
+`GATEWAY_INTERNAL_TOKEN` в environment php/cron-сервисов из корневого
+`.env.local` (сейчас docker-compose намеренно их туда НЕ инжектит — это и есть
+поверхность рассинхрона; Symfony читает их через Dotenv из app-symfony/.env*).
+После инжекта Symfony и воркеры/gateway берут значение из одного места. Scope —
+только эти два токена; REDIS DSN и S3-креды уже совпадают между файлами, их не
+трогаем.
 
 **Контекст:** инцидент «#6 stuck» (2026-07-12). Поверхность — `docker-compose.yml`
 строки 15–17.

@@ -38,10 +38,13 @@ account-takeover-защита (linkSecret), one-time-инвалидация ко
 - Проверены оба секрета (nonce-cookie + linkSecret), one-time, no-burn на mismatch.
 - Tests/QA green: `make test` / `make test-php-live` (live-стек), `make phpstan`, `make cs-check`.
 
-**Open questions:** *(grooming — нужен разбор подхода к мок-боту)*
-- Как стабить Telegram round-trip: мок Bot API HTTP-клиента vs прямой вызов
-  webhook-хендлера в тесте vs test-двойник bot-сервиса.
-- Где хранить состояние code/nonce в e2e (реальный KeyDB тест-стека vs in-memory).
+**Decisions:** Стаб Telegram round-trip = мокать ТОЛЬКО исходящий Bot API
+HTTP-клиент (`TelegramBotClient`/HTTP), а реальные контроллеры
+`start`→`webhook`→`callback` гонять через HTTP — проверяем настоящий флоу двух
+секретов (nonce-cookie + linkSecret), one-time, no-burn на mismatch, защиту
+заголовка `X-Telegram-Bot-Api-Secret-Token`. Состояние code/nonce — в реальном
+KeyDB тест-стека `make test-e2e` с ИЗОЛИРОВАННЫМ тест-префиксом (не in-memory),
+в русле существующего e2e (изоляция по тест-БД/префиксу).
 
 **Контекст:** выделено из [[e2e-login-helper-magic-link]] (2026-07-11).
 

@@ -24,6 +24,12 @@ free non-ai/non-video пара), проверяющий одним прогон�
 - в ответе выставлена подписанная cookie `guest_id`;
 - в `users` появилась **ровно одна** новая guest-строка.
 
+**Decisions:** e2e success-путь 202 (guest-материализация + cookie `guest_id` +
+ровно одна guest-строка) гоняем в стеке `make test-e2e` на реальном KeyDB с
+изолированным тест-префиксом стримов/ключей (НЕ in-memory override) —
+консистентно с e2e-ws-transport-stack. Живой Messenger-транспорт использует
+изолированный тест-стрим, чтобы не мусорить dev.
+
 ## Контекст / грабли
 
 - S3 фейкается в `WebTestCase` через `container->set(S3Storage::class, …)`

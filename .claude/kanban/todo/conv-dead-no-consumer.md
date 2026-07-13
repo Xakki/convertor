@@ -41,12 +41,13 @@ reconciler, который:
 - `conv.dead` перестаёт быть write-only (есть читатель ИЛИ reconciler).
 - Tests/QA green: `make test`, `make phpstan`, `make cs-check`.
 
-**Open questions:** *(grooming)*
-- Потребитель `conv.dead` в gateway (Python, XREADGROUP) vs Symfony-side
-  reconciler (Scheduler/cron, сверка pending-строк с DLQ) — где логичнее финализация?
-- Нужен ли operator-requeue в первой итерации или только пометка `failed`.
-- Формат/полнота DLQ-payload: достаточно ли в нём `conversionId` + причины для
-  финализации без обращения к стриму-источнику.
+**Decisions:**
+Финализацию делает НОВЫЙ консьюмер `conv.dead` в gateway (Python, XREADGROUP) —
+согласовано с принципом "единственный читатель KeyDB Streams = gateway";
+gateway читает DLQ и шлёт Symfony через internal relay команду finalize-failed
+(проставить `Conversion.status=failed` + причину из DLQ-payload). Объём первой
+итерации: пометка failed И operator-requeue из админки (`/api/v1/admin/*`) —
+оператор может вручную перезапустить DLQ-задачу.
 
 **Контекст:** инцидент «#6 stuck» / разбор DLQ (2026-07-12). Смежные:
 [[dlq-xadd-xack-nonatomic]], [[s1-06-reclaim-poison-dlq]].
