@@ -21,10 +21,19 @@ class ConversionRepository extends ServiceEntityRepository
         parent::__construct($registry, Conversion::class);
     }
 
-    /** @return Conversion[] */
+    /**
+     * История пользователя. inputFile/outputFile — fetch-join, чтобы сериализация
+     * истории (source_name/size, result_size/mime, previewable) не плодила N+1.
+     * outputFile nullable → LEFT JOIN (иначе строки без результата отсеклись бы);
+     * inputFile тоже LEFT (единообразно, to-one — setMaxResults пагинацию не ломает).
+     *
+     * @return Conversion[]
+     */
     public function findByUser(User $user, int $limit = 20, int $offset = 0): array
     {
         return $this->createQueryBuilder('c')
+            ->leftJoin('c.inputFile', 'inp')->addSelect('inp')
+            ->leftJoin('c.outputFile', 'outp')->addSelect('outp')
             ->where('c.user = :user')
             ->setParameter('user', $user)
             ->orderBy('c.createdAt', 'DESC')

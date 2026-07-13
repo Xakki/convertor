@@ -60,6 +60,25 @@ final class S3Storage
     }
 
     /**
+     * Читает объект целиком в строку (байты). Для мелких объектов — аватары
+     * профиля, отдаваемые как data-URI в /me. Возвращает null, если объекта нет
+     * (NoSuchKey) или чтение не удалось — вызывающий трактует это как «нет фото».
+     */
+    public function getObjectContents(string $bucket, string $key): ?string
+    {
+        try {
+            $output = $this->client->getObject(new GetObjectRequest([
+                'Bucket' => $bucket,
+                'Key'    => $key,
+            ]));
+
+            return $output->getBody()->getContentAsString();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
      * DELETE an object из указанного бакета. Форсирует resolve() — как putObject —
      * чтобы ошибки (auth, недоступность S3) всплывали синхронно здесь. Удаление
      * несуществующего ключа для S3/MinIO идемпотентно (success, без NoSuchKey), так
@@ -111,12 +130,60 @@ final class S3Storage
         $response = $this->streamBody($output);
         $response->headers->set('Content-Type', $mime);
         $response->headers->set('Content-Disposition', self::contentDisposition($filename));
+        // Не даём браузеру MIME-sniff'ить недоверенные байты результата в HTML.
+        $response->headers->set('X-Content-Type-Options', 'nosniff');
 
         return $response;
     }
 
     /**
-     * Строит заголовок Content-Disposition (attachment) для отдачи файла.
+     * Стриминг объекта из ПРОИЗВОЛЬНОГО бакета клиенту как attachment (per-user
+     * доступ проверяет контроллер). В отличие от downloadResponse — resolve()
+     * форсируется ДО отдачи ответа: отсутствие объекта (NoSuchKeyException)
+     * всплывает здесь, а не оборванным потоком в середине ответа, чтобы контроллер
+     * вернул чистый HTTP-код (410 Gone), а не 500.
+     */
+    public function attachmentResponse(string $bucket, string $key, string $filename, string $mime): StreamedResponse
+    {
+        $output = $this->client->getObject(new GetObjectRequest([
+            'Bucket' => $bucket,
+            'Key'    => $key,
+        ]));
+
+        $output->resolve();
+
+        $response = $this->streamBody($output);
+        $response->headers->set('Content-Type', $mime);
+        $response->headers->set('Content-Disposition', self::contentDisposition($filename));
+        // Не даём браузеру MIME-sniff'ить недоверенные байты входного файла в HTML.
+        $response->headers->set('X-Content-Type-Options', 'nosniff');
+
+        return $response;
+    }
+
+    /**
+     * Читает НЕ БОЛЕЕ $maxBytes байт объекта через НАСТОЯЩИЙ Range-запрос
+     * (`Range: bytes=0-…`), а не read-then-truncate — большой объект не тянется
+     * целиком в память (защита от OOM/DoS на превью многогигабайтного результата).
+     * resolve() форсируется: NoSuchKeyException всплывает здесь → контроллер 410.
+     */
+    public function readCapped(string $bucket, string $key, int $maxBytes): string
+    {
+        $output = $this->client->getObject(new GetObjectRequest([
+            'Bucket' => $bucket,
+            'Key'    => $key,
+            'Range'  => sprintf('bytes=0-%d', max(0, $maxBytes - 1)),
+        ]));
+
+        $output->resolve();
+
+        return $output->getBody()->getContentAsString();
+    }
+
+    /**
+     * Строит заголовок Content-Disposition для отдачи файла. По умолчанию
+     * `attachment` (скачивание); превью результата передаёт `inline`, чтобы
+     * браузер показал текст, а не качал его.
      *
      * makeDisposition требует ASCII-совместимый fallback: если его не передать, Symfony
      * берёт fallback = само имя и падает InvalidArgumentException на любом не-ASCII имени
@@ -125,10 +192,10 @@ final class S3Storage
      * оригинальное UTF-8 имя уходит в `filename*` (RFC 5987) — современные браузеры видят
      * настоящее (в т.ч. кириллическое) имя.
      */
-    public static function contentDisposition(string $filename): string
+    public static function contentDisposition(string $filename, string $disposition = HeaderUtils::DISPOSITION_ATTACHMENT): string
     {
         return HeaderUtils::makeDisposition(
-            HeaderUtils::DISPOSITION_ATTACHMENT,
+            $disposition,
             $filename,
             self::asciiFallback($filename),
         );

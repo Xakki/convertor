@@ -69,4 +69,18 @@ final class S3StorageDispositionTest extends TestCase
 
         self::assertStringContainsString('filename=report-6.pdf', $header);
     }
+
+    /**
+     * Параметризация disposition (для inline-превью результата): по умолчанию —
+     * attachment (существующие вызовы не ломаются), явный inline даёт `inline;`
+     * с тем же ASCII-fallback + filename* для не-ASCII имени.
+     */
+    public function testInlineDispositionForPreview(): void
+    {
+        $header = S3Storage::contentDisposition('отчёт-7.md', \Symfony\Component\HttpFoundation\HeaderUtils::DISPOSITION_INLINE);
+
+        self::assertStringStartsWith('inline;', $header);
+        self::assertMatchesRegularExpression('/(?<!\*)filename="?([^";]+)"?/i', $header);
+        self::assertStringContainsStringIgnoringCase("filename*=utf-8''", $header);
+    }
 }

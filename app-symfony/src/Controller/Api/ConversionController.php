@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
+use App\Entity\Conversion;
+use App\Entity\FileStorage;
 use App\Entity\User;
+use App\Enum\ConversionStatus;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
 use App\Repository\ConversionRepository;
@@ -12,9 +15,11 @@ use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionRegistry;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
+use AsyncAws\S3\Exception\NoSuchKeyException;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\HttpFoundation\HeaderUtils;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -29,6 +34,15 @@ use Symfony\Component\Security\Http\Attribute\CurrentUser;
 #[Route('/api/v1')]
 class ConversionController extends AbstractController
 {
+    /** Потолок чтения результата для inline-превью (64 KiB) — не тянем весь объект. */
+    private const PREVIEW_MAX_BYTES = 65536;
+
+    /** Целевые форматы, чей результат отдаётся текстовым превью. */
+    private const PREVIEWABLE_FORMATS = ['md', 'txt', 'json', 'csv', 'html'];
+
+    /** MIME результата, пригодные для текстового превью (сверх любого `text/*`). */
+    private const PREVIEWABLE_MIMES = ['application/json', 'text/csv', 'text/markdown', 'text/html', 'text/plain'];
+
     public function __construct(
         private readonly ConversionManager $conversionManager,
         private readonly ConversionRegistry $registry,
@@ -218,6 +232,137 @@ class ConversionController extends AbstractController
         );
     }
 
+    #[Route('/convert/{id}/source', methods: ['GET'])]
+    #[OA\Tag(name: 'Conversion')]
+    #[OA\Get(summary: 'Скачать исходный (входной) файл конвертации')]
+    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID задачи', schema: new OA\Schema(type: 'integer'))]
+    #[OA\Response(
+        response: 200,
+        description: 'Бинарный входной файл',
+        content: new OA\MediaType(
+            mediaType: 'application/octet-stream',
+            schema: new OA\Schema(type: 'string', format: 'binary'),
+        ),
+    )]
+    #[OA\Response(response: 401, description: 'Требуется аутентификация')]
+    #[OA\Response(response: 404, description: 'Задача не найдена')]
+    #[OA\Response(response: 410, description: 'Входной файл удалён по ретеншену')]
+    public function source(int $id, #[CurrentUser] ?User $user): Response
+    {
+        if ($user === null) {
+            return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
+        }
+
+        $conversion = $this->conversionRepository->find($id);
+
+        // 404 (не 403) на чужую/несуществующую — не палим факт существования.
+        if ($conversion === null || $conversion->getUser()->getId() !== $user->getId()) {
+            throw new NotFoundHttpException('Conversion not found');
+        }
+
+        // inputFile — non-nullable relation (см. Conversion::$inputFile), поэтому
+        // «relation null» недостижим по типам; ветку 410 держит NoSuchKey (вход
+        // мог быть удалён FileCleanupService, а строка ещё живёт при сбое S3-delete).
+        $inputFile = $conversion->getInputFile();
+
+        try {
+            return $this->s3->attachmentResponse(
+                $this->s3->inputsBucket(),
+                $inputFile->getStoragePath(),
+                $inputFile->getOriginalName(),
+                $inputFile->getMimeType(),
+            );
+        } catch (NoSuchKeyException) {
+            return $this->json(
+                ['error' => 'gone', 'message' => 'Input file expired or no longer available'],
+                Response::HTTP_GONE,
+            );
+        }
+    }
+
+    #[Route('/convert/{id}/preview', methods: ['GET'])]
+    #[OA\Tag(name: 'Conversion')]
+    #[OA\Get(summary: 'Inline текстовое превью результата (первые 64 KiB)')]
+    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID задачи', schema: new OA\Schema(type: 'integer'))]
+    #[OA\Response(
+        response: 200,
+        description: 'Текст результата (усечён до 64 KiB; заголовок X-Preview-Truncated при усечении)',
+        content: new OA\MediaType(mediaType: 'text/plain', schema: new OA\Schema(type: 'string')),
+    )]
+    #[OA\Response(response: 401, description: 'Требуется аутентификация')]
+    #[OA\Response(response: 404, description: 'Задача/результат не найдены')]
+    #[OA\Response(response: 409, description: 'Конвертация ещё не завершена')]
+    #[OA\Response(response: 410, description: 'Результат удалён по ретеншену')]
+    #[OA\Response(response: 415, description: 'Результат не является текстом для превью')]
+    public function preview(int $id, #[CurrentUser] ?User $user): Response
+    {
+        if ($user === null) {
+            return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
+        }
+
+        $conversion = $this->conversionRepository->find($id);
+
+        if ($conversion === null || $conversion->getUser()->getId() !== $user->getId()) {
+            throw new NotFoundHttpException('Conversion not found');
+        }
+
+        if ($conversion->getStatus() !== ConversionStatus::Completed) {
+            return $this->json(
+                ['error' => 'not_ready', 'message' => 'Conversion is not completed'],
+                Response::HTTP_CONFLICT,
+            );
+        }
+
+        $outputFile = $conversion->getOutputFile();
+        if ($outputFile === null) {
+            return $this->json(['error' => 'Result not available'], Response::HTTP_NOT_FOUND);
+        }
+
+        if (! self::isPreviewable($outputFile, $conversion->getToFormat())) {
+            return $this->json(
+                ['error' => 'unsupported', 'message' => 'Result is not text-previewable'],
+                Response::HTTP_UNSUPPORTED_MEDIA_TYPE,
+            );
+        }
+
+        // Пустой (0-байт) результат: Range `bytes=0-…` на нём отдаёт 416 (не
+        // NoSuchKey) → был бы 500. Отдаём пустое превью, не дёргая S3.
+        if ($outputFile->getSizeBytes() === 0) {
+            $bytes = '';
+        } else {
+            try {
+                $bytes = $this->s3->readCapped(
+                    $this->s3->resultsBucket(),
+                    $outputFile->getStoragePath(),
+                    self::PREVIEW_MAX_BYTES,
+                );
+            } catch (NoSuchKeyException) {
+                return $this->json(
+                    ['error' => 'gone', 'message' => 'Result expired or no longer available'],
+                    Response::HTTP_GONE,
+                );
+            }
+        }
+
+        // Возвращаем как text/plain (НЕ text/html и НЕ исходный mime): байты — просто
+        // текст, экранирование/рендер — на фронте. Content-Disposition inline.
+        $response = new Response($bytes, Response::HTTP_OK, [
+            'Content-Type'        => 'text/plain; charset=utf-8',
+            'Content-Disposition' => S3Storage::contentDisposition(
+                $outputFile->getOriginalName(),
+                HeaderUtils::DISPOSITION_INLINE,
+            ),
+            // Не даём браузеру MIME-sniff'ить недоверенные байты результата в HTML (defense-in-depth на XSS).
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+
+        if ($outputFile->getSizeBytes() > self::PREVIEW_MAX_BYTES) {
+            $response->headers->set('X-Preview-Truncated', '1');
+        }
+
+        return $response;
+    }
+
     #[Route('/convert/history', methods: ['GET'])]
     #[OA\Tag(name: 'Conversion')]
     #[OA\Get(summary: 'История конвертаций пользователя')]
@@ -234,6 +379,12 @@ class ConversionController extends AbstractController
                 new OA\Property(property: 'status', type: 'string'),
                 new OA\Property(property: 'is_ai', type: 'boolean'),
                 new OA\Property(property: 'created_at', type: 'string', format: 'date-time'),
+                new OA\Property(property: 'processing_ms', type: 'integer', nullable: true),
+                new OA\Property(property: 'source_name', type: 'string'),
+                new OA\Property(property: 'source_size', type: 'integer'),
+                new OA\Property(property: 'result_size', type: 'integer', nullable: true),
+                new OA\Property(property: 'result_mime', type: 'string', nullable: true),
+                new OA\Property(property: 'previewable', type: 'boolean'),
             ])),
         ]),
     )]
@@ -256,18 +407,61 @@ class ConversionController extends AbstractController
         $conversions = $this->conversionRepository->findByUser($user, $limit, $offset);
 
         return $this->json([
-            'items' => array_map(
-                static fn ($c) => [
-                    'id'          => $c->getId(),
-                    'from_format' => $c->getFromFormat(),
-                    'to_format'   => $c->getToFormat(),
-                    'status'      => $c->getStatus()->value,
-                    'is_ai'       => $c->isAi(),
-                    'created_at'  => $c->getCreatedAt()->format(\DateTimeInterface::ATOM),
-                ],
-                $conversions,
-            ),
+            'items' => array_map(self::serializeHistoryItem(...), $conversions),
         ]);
+    }
+
+    /**
+     * Сериализация строки истории. Связи input/output приходят fetch-join'ом
+     * (ConversionRepository::findByUser) — доп. запросов на элемент нет.
+     *
+     * @return array<string, mixed>
+     */
+    private static function serializeHistoryItem(Conversion $c): array
+    {
+        $input  = $c->getInputFile();
+        $output = $c->getOutputFile();
+
+        return [
+            'id'            => $c->getId(),
+            'from_format'   => $c->getFromFormat(),
+            'to_format'     => $c->getToFormat(),
+            'status'        => $c->getStatus()->value,
+            'is_ai'         => $c->isAi(),
+            'created_at'    => $c->getCreatedAt()->format(\DateTimeInterface::ATOM),
+            'processing_ms' => $c->getProcessingMs(),
+            'source_name'   => $input->getOriginalName(),
+            'source_size'   => $input->getSizeBytes(),
+            'result_size'   => $output?->getSizeBytes(),
+            'result_mime'   => $output?->getMimeType(),
+            'previewable'   => self::isPreviewable($output, $c->getToFormat()),
+        ];
+    }
+
+    /**
+     * Результат пригоден к текстовому превью, когда он ЕСТЬ и его mime/формат
+     * текстовый: любой `text/*`, либо application/json, либо целевой формат из
+     * {md,txt,json,csv,html}. Единый критерий для флага `previewable` в истории и
+     * для 415-гейта в preview().
+     */
+    private static function isPreviewable(?FileStorage $output, string $toFormat): bool
+    {
+        if ($output === null) {
+            return false;
+        }
+
+        // Отсекаем возможные параметры (`text/plain; charset=utf-8`).
+        $mime = strtolower(trim(explode(';', $output->getMimeType())[0]));
+
+        if (str_starts_with($mime, 'text/')) {
+            return true;
+        }
+
+        if (in_array($mime, self::PREVIEWABLE_MIMES, true)) {
+            return true;
+        }
+
+        return in_array(strtolower($toFormat), self::PREVIEWABLE_FORMATS, true);
     }
 
     #[Route('/formats', methods: ['GET'])]
