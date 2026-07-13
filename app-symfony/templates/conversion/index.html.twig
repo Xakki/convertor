@@ -40,9 +40,26 @@
                     </button>
                 </div>
                 <div x-show="auth.token" x-cloak class="flex items-center gap-3 text-sm">
-                    <span class="text-slate-600">
-                        <span x-text="auth.username || 'вы вошли'"></span>
-                    </span>
+                    {# Чип профиля: аватар + имя. При profile_url — весь чип ссылка
+                       (:href на null отбрасывает атрибут → инертный текст). #}
+                    <a
+                        :href="user.profile_url"
+                        :target="user.profile_url ? '_blank' : null"
+                        rel="noopener"
+                        class="flex items-center gap-2 text-slate-600"
+                    >
+                        {# Аватар — data-URI из /me; при null — кружок с инициалом. #}
+                        <template x-if="user.avatar_url">
+                            <img :src="user.avatar_url" alt="" class="h-7 w-7 rounded-full object-cover">
+                        </template>
+                        <template x-if="!user.avatar_url">
+                            <span
+                                class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs font-medium text-slate-600"
+                                x-text="avatarInitial()"
+                            ></span>
+                        </template>
+                        <span x-text="user.name || auth.username || 'вы вошли'"></span>
+                    </a>
                     <button
                         @click="logout()"
                         class="rounded border border-slate-300 px-3 py-1 text-slate-600 hover:bg-slate-100"
@@ -214,9 +231,23 @@
                                     <span class="text-slate-400"> → </span>
                                     <span x-text="c.to_format"></span>
                                 </p>
-                                <p class="text-xs text-slate-400" x-text="formatDate(c.created_at)"></p>
+                                {# Исходник: имя + размер. Ссылка качается через
+                                   authFetch→blob (Bearer). 410 → «исходник удалён». #}
+                                <p class="truncate text-xs text-slate-500">
+                                    <span x-text="c.source_name"></span>
+                                    <span class="text-slate-400" x-text="'· ' + humanSize(c.source_size)"></span>
+                                    <template x-if="c.result_size != null">
+                                        <span class="text-slate-400" x-text="'→ ' + humanSize(c.result_size)"></span>
+                                    </template>
+                                </p>
+                                <p class="text-xs text-slate-400">
+                                    <span x-text="formatDate(c.created_at)"></span>
+                                    <template x-if="c.processing_ms != null">
+                                        <span x-text="'· за ' + formatDuration(c.processing_ms)"></span>
+                                    </template>
+                                </p>
                             </div>
-                            <div class="flex items-center gap-3">
+                            <div class="flex flex-wrap items-center justify-end gap-2">
                                 <span
                                     class="rounded-full px-3 py-1 text-xs font-medium"
                                     :class="{
@@ -226,6 +257,26 @@
                                     }"
                                     x-text="statusLabel(c.status)"
                                 ></span>
+                                {# Скачать исходник — прячется после 410 (исходник удалён). #}
+                                <template x-if="!sourceGone[c.id]">
+                                    <button
+                                        @click="downloadSource(c.id, c.source_name)"
+                                        :disabled="sourceLoadingId === c.id"
+                                        class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                                    >
+                                        <span x-show="sourceLoadingId !== c.id">Исходник</span>
+                                        <span x-show="sourceLoadingId === c.id" x-cloak>Загрузка…</span>
+                                    </button>
+                                </template>
+                                <template x-if="sourceGone[c.id]">
+                                    <span class="text-xs text-slate-400">исходник удалён</span>
+                                </template>
+                                <template x-if="c.previewable === true && c.status === 'completed'">
+                                    <button
+                                        @click="openPreview(c.id, c.to_format)"
+                                        class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+                                    >Просмотр</button>
+                                </template>
                                 <template x-if="c.status === 'completed'">
                                     <button
                                         @click="downloadConversion(c.id, c.to_format)"
@@ -243,6 +294,54 @@
             </section>
         </template>
     </main>
+
+    {# ── Модалка предпросмотра результата (одна на страницу) ──
+       Текст рендерится ТОЛЬКО через x-text (untrusted content, без x-html). #}
+    <div
+        x-show="preview.open"
+        x-cloak
+        @keydown.escape.window="closePreview()"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
+        {# Бэкдроп: клик мимо — закрыть #}
+        <div class="absolute inset-0 bg-slate-900/50" @click="closePreview()"></div>
+        <div class="relative flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                <h3 class="text-sm font-semibold text-slate-700">Предпросмотр результата</h3>
+                <button
+                    @click="closePreview()"
+                    class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                    aria-label="Закрыть"
+                >✕</button>
+            </div>
+
+            <template x-if="preview.truncated">
+                <div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+                    Показаны первые 64&nbsp;КБ — скачайте целиком.
+                </div>
+            </template>
+
+            <div class="min-h-0 flex-1 overflow-auto p-4">
+                <template x-if="preview.loading">
+                    <p class="text-sm text-slate-500">Загрузка…</p>
+                </template>
+                <template x-if="!preview.loading">
+                    <pre class="whitespace-pre-wrap break-words font-mono text-xs text-slate-700" x-text="preview.text"></pre>
+                </template>
+            </div>
+
+            <div class="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
+                <button
+                    @click="downloadPreview()"
+                    class="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+                >Скачать</button>
+                <button
+                    @click="closePreview()"
+                    class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+                >Закрыть</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -283,6 +382,10 @@
             job: { id: null, status: null, error: null },
             conversions: [],    // история конвертаций залогиненного пользователя
             downloadingId: null, // id строки истории, которая сейчас качается
+            sourceLoadingId: null, // id строки, чей исходник сейчас качается
+            sourceGone: {},     // id → true, когда исходник удалён (410 Gone)
+            user: { name: null, avatar_url: null, profile_url: null }, // профиль /api/v1/me
+            preview: { open: false, id: null, text: '', truncated: false, loading: false, toFormat: null },
             _pollTimer: null,
             _pollTries: 0,
             _pollGen: 0,        // токен поколения поллинга: отсекает устаревшие циклы
@@ -302,8 +405,9 @@
                 this.tryRefresh().then((ok) => {
                     if (ok) {
                         this.loginHint = false;
-                        // Токен восстановлен → история грузится с Bearer (иначе 401).
+                        // Токен восстановлен → история и профиль грузятся с Bearer (иначе 401).
                         this.loadHistory();
+                        this.loadMe();
                     }
                 });
 
@@ -598,17 +702,45 @@
                     const blob = await res.blob();
                     const name = this.filenameFrom(res.headers.get('Content-Disposition'))
                         || ('result.' + (toFormat || 'bin'));
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = name;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(url);
+                    this.downloadBlob(blob, name);
                 } catch (e) {
                     this.error = 'Сетевая ошибка при скачивании';
                 }
+            },
+
+            // Скачивание исходника строки истории. 410 Gone = исходник авто-удалён
+            // через 24ч → помечаем sourceGone[id] (кнопка прячется, показываем текст),
+            // а не общую ошибку. Свой per-row флаг sourceLoadingId для спиннера.
+            async downloadSource(id, sourceName) {
+                if (this.sourceLoadingId) return;
+                this.sourceLoadingId = id;
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/source');
+                    if (res.status === 401) return;
+                    if (res.status === 410) { this.sourceGone[id] = true; return; }
+                    if (!res.ok) { this.error = 'Не удалось скачать исходник'; return; }
+                    const blob = await res.blob();
+                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
+                        || (sourceName || 'source');
+                    this.downloadBlob(blob, name);
+                } catch (e) {
+                    this.error = 'Сетевая ошибка при скачивании исходника';
+                } finally {
+                    this.sourceLoadingId = null;
+                }
+            },
+
+            // Общий триггер скачивания blob через временный <a download> (плейн
+            // <a href> не несёт Bearer/credentials, потому качаем fetch→blob).
+            downloadBlob(blob, name) {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
             },
 
             // История залогиненного пользователя. Гость/аноним → 401, оставляем
@@ -623,11 +755,55 @@
                 } catch (e) { /* сеть моргнула — покажем при следующем обновлении */ }
             },
 
+            // Профиль залогиненного пользователя. Тихий фейл: шапка остаётся с
+            // фолбэком «вы вошли», гость (401) сюда не доходит.
+            async loadMe() {
+                try {
+                    const res = await this.authFetch('/api/v1/me');
+                    if (!res.ok) return;
+                    this.user = await res.json();
+                } catch (e) { /* /me не критичен для работы UI */ }
+            },
+
+            // Инициал для плейсхолдер-аватара, когда avatar_url === null.
+            avatarInitial() {
+                return (this.user.name || '?').trim().charAt(0).toUpperCase();
+            },
+
             // ISO-8601 → локальные дата+время (created_at из истории).
             formatDate(iso) {
                 if (!iso) return '';
                 const d = new Date(iso);
                 return isNaN(d) ? iso : d.toLocaleString();
+            },
+
+            // Длительность обработки: <1с — в мс, иначе в секундах с 1 знаком.
+            formatDuration(ms) {
+                if (ms == null) return '';
+                if (ms < 1000) return Math.round(ms) + ' мс';
+                return (ms / 1000).toFixed(1) + ' с';
+            },
+
+            // Предпросмотр результата: text/plain ≤64 КиБ. Заголовок
+            // X-Preview-Truncated:1 → показать примечание об усечении. Текст
+            // рендерим ТОЛЬКО через x-text (untrusted content, без x-html).
+            async openPreview(id, toFormat) {
+                this.preview = { open: true, id, text: '', truncated: false, loading: true, toFormat };
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/preview');
+                    if (res.status === 401) { this.preview.open = false; return; }
+                    if (!res.ok) { this.preview.text = 'Не удалось загрузить предпросмотр'; return; }
+                    this.preview.truncated = res.headers.get('X-Preview-Truncated') === '1';
+                    this.preview.text = await res.text();
+                } catch (e) {
+                    this.preview.text = 'Сетевая ошибка при загрузке предпросмотра';
+                } finally {
+                    this.preview.loading = false;
+                }
+            },
+            closePreview() { this.preview.open = false; },
+            downloadPreview() {
+                if (this.preview.id) this.downloadConversion(this.preview.id, this.preview.toFormat);
             },
 
             filenameFrom(disposition) {
@@ -640,6 +816,7 @@
 
             clearAuth() {
                 this.auth = { token: null, username: null };
+                this.user = { name: null, avatar_url: null, profile_url: null };
                 localStorage.removeItem('jwt');
             },
 
