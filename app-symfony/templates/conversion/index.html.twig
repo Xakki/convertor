@@ -200,6 +200,48 @@
                 </template>
             </div>
         </template>
+
+        {# ── История конвертаций (только для залогиненного, восстанавливается при F5) ── #}
+        <template x-if="conversions.length > 0">
+            <section class="mt-8">
+                <h2 class="mb-3 text-sm font-semibold text-slate-600">Мои конвертации</h2>
+                <div class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <template x-for="c in conversions" :key="c.id">
+                        <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                            <div class="min-w-0">
+                                <p class="text-sm font-medium text-slate-700">
+                                    <span x-text="c.from_format || '—'"></span>
+                                    <span class="text-slate-400"> → </span>
+                                    <span x-text="c.to_format"></span>
+                                </p>
+                                <p class="text-xs text-slate-400" x-text="formatDate(c.created_at)"></p>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span
+                                    class="rounded-full px-3 py-1 text-xs font-medium"
+                                    :class="{
+                                        'bg-slate-100 text-slate-600': isActive(c.status),
+                                        'bg-green-100 text-green-700': c.status === 'completed',
+                                        'bg-red-100 text-red-700': isFailed(c.status),
+                                    }"
+                                    x-text="statusLabel(c.status)"
+                                ></span>
+                                <template x-if="c.status === 'completed'">
+                                    <button
+                                        @click="downloadConversion(c.id, c.to_format)"
+                                        :disabled="downloadingId === c.id"
+                                        class="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:bg-slate-300"
+                                    >
+                                        <span x-show="downloadingId !== c.id">Скачать</span>
+                                        <span x-show="downloadingId === c.id" x-cloak>Загрузка…</span>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </section>
+        </template>
     </main>
 </div>
 
@@ -239,6 +281,8 @@
             error: '',
             dragging: false,
             job: { id: null, status: null, error: null },
+            conversions: [],    // история конвертаций залогиненного пользователя
+            downloadingId: null, // id строки истории, которая сейчас качается
             _pollTimer: null,
             _pollTries: 0,
             _pollGen: 0,        // токен поколения поллинга: отсекает устаревшие циклы
@@ -256,7 +300,11 @@
                 // Имя пользователя magic-link-флоу не отдаёт (/refresh → {token}),
                 // поэтому в шапке показываем фолбэк «вы вошли».
                 this.tryRefresh().then((ok) => {
-                    if (ok) this.loginHint = false;
+                    if (ok) {
+                        this.loginHint = false;
+                        // Токен восстановлен → история грузится с Bearer (иначе 401).
+                        this.loadHistory();
+                    }
                 });
 
                 // Загружаем матрицу форматов (публичный эндпоинт)
@@ -504,7 +552,11 @@
                         if (gen !== this._pollGen) return;
                         this.job.status = d.status;
                         this.job.error = d.error;
-                        if (this.isTerminal(d.status)) return;
+                        if (this.isTerminal(d.status)) {
+                            // Завершённая задача появляется в истории без ручного F5.
+                            this.loadHistory();
+                            return;
+                        }
                     }
                 } catch (e) { /* сеть моргнула — повторим */ }
                 this._pollTimer = setTimeout(() => this.poll(gen), 2000);
@@ -514,17 +566,38 @@
                 if (!this.job.id) return;
                 this.downloading = true;
                 try {
-                    // Скачиваем через fetch → blob (плейн <a href> не отправит ни
-                    // Bearer, ни нужные credentials): authFetch шлёт guest-cookie
-                    // (credentials) либо Bearer. Имя файла — из Content-Disposition.
-                    const res = await this.authFetch('/api/v1/convert/' + this.job.id + '/download');
+                    await this.saveResult(this.job.id, this.toFormat);
+                } finally {
+                    this.downloading = false;
+                }
+            },
+
+            // Скачивание строки истории: свой per-row флаг (downloadingId), чтобы
+            // спиннер горел только на нажатой кнопке. Fallback-имя — из to_format
+            // этой строки, а не из текущей формы.
+            async downloadConversion(id, toFormat) {
+                if (this.downloadingId) return;
+                this.downloadingId = id;
+                try {
+                    await this.saveResult(id, toFormat);
+                } finally {
+                    this.downloadingId = null;
+                }
+            },
+
+            // Общее ядро скачивания: fetch → blob (плейн <a href> не отправит ни
+            // Bearer, ни нужные credentials): authFetch шлёт guest-cookie
+            // (credentials) либо Bearer. Имя файла — из Content-Disposition.
+            async saveResult(id, toFormat) {
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/download');
                     // 401 после refresh-and-retry: если сессия истекла, sessionExpired()
                     // уже показал уведомление и сбросил токен; просто выходим.
                     if (res.status === 401) return;
                     if (!res.ok) { this.error = 'Не удалось скачать результат'; return; }
                     const blob = await res.blob();
                     const name = this.filenameFrom(res.headers.get('Content-Disposition'))
-                        || ('result.' + this.toFormat);
+                        || ('result.' + (toFormat || 'bin'));
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
@@ -535,9 +608,26 @@
                     URL.revokeObjectURL(url);
                 } catch (e) {
                     this.error = 'Сетевая ошибка при скачивании';
-                } finally {
-                    this.downloading = false;
                 }
+            },
+
+            // История залогиненного пользователя. Гость/аноним → 401, оставляем
+            // пусто (authFetch не делает refresh без токена). Тихий фейл: история —
+            // вспомогательный блок, не критична для конвертации.
+            async loadHistory() {
+                try {
+                    const res = await this.authFetch('/api/v1/convert/history');
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    this.conversions = d.items || [];
+                } catch (e) { /* сеть моргнула — покажем при следующем обновлении */ }
+            },
+
+            // ISO-8601 → локальные дата+время (created_at из истории).
+            formatDate(iso) {
+                if (!iso) return '';
+                const d = new Date(iso);
+                return isNaN(d) ? iso : d.toLocaleString();
             },
 
             filenameFrom(disposition) {
