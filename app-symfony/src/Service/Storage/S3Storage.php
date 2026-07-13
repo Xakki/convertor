@@ -110,12 +110,61 @@ final class S3Storage
         // (ResultStream is iterable) or `fpassthru($output->getBody()->getContentAsResource())`.
         $response = $this->streamBody($output);
         $response->headers->set('Content-Type', $mime);
-        $response->headers->set(
-            'Content-Disposition',
-            HeaderUtils::makeDisposition(HeaderUtils::DISPOSITION_ATTACHMENT, $filename),
-        );
+        $response->headers->set('Content-Disposition', self::contentDisposition($filename));
 
         return $response;
+    }
+
+    /**
+     * Строит заголовок Content-Disposition (attachment) для отдачи файла.
+     *
+     * makeDisposition требует ASCII-совместимый fallback: если его не передать, Symfony
+     * берёт fallback = само имя и падает InvalidArgumentException на любом не-ASCII имени
+     * (кириллица и т.п.) → неперехваченное исключение → HTTP 500 «Не удалось скачать».
+     * Поэтому явно передаём транслитерированный ASCII-fallback (для legacy-браузеров), а
+     * оригинальное UTF-8 имя уходит в `filename*` (RFC 5987) — современные браузеры видят
+     * настоящее (в т.ч. кириллическое) имя.
+     */
+    public static function contentDisposition(string $filename): string
+    {
+        return HeaderUtils::makeDisposition(
+            HeaderUtils::DISPOSITION_ATTACHMENT,
+            $filename,
+            self::asciiFallback($filename),
+        );
+    }
+
+    /**
+     * ASCII-safe fallback для `filename` в Content-Disposition. Транслитерирует
+     * не-ASCII (кириллицу → латиницу через intl, если доступен), затем оставляет только
+     * безопасный набор `[A-Za-z0-9._-]` (заодно выкидывает запрещённые в fallback `%`,
+     * `/`, `\` и пробелы). Если после чистки пусто — отдаём `download` с сохранённым
+     * ASCII-расширением, чтобы имя всё же осталось осмысленным.
+     */
+    private static function asciiFallback(string $name): string
+    {
+        $ascii = $name;
+
+        if (class_exists(\Transliterator::class)) {
+            $tr = \Transliterator::create('Any-Latin; Latin-ASCII');
+            if ($tr !== null) {
+                $ascii = $tr->transliterate($name);
+                if ($ascii === false) {
+                    $ascii = $name;
+                }
+            }
+        }
+
+        $ascii = preg_replace('/[^A-Za-z0-9._-]+/', '_', $ascii) ?? '';
+        $ascii = trim($ascii, '_-.');
+
+        if ($ascii === '' || $ascii === '.') {
+            $ext   = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+            $ext   = preg_replace('/[^a-z0-9]/', '', $ext) ?? '';
+            $ascii = $ext !== '' ? 'download.' . $ext : 'download';
+        }
+
+        return $ascii;
     }
 
     private function streamBody(GetObjectOutput $output): StreamedResponse
