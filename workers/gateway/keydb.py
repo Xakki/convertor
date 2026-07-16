@@ -62,8 +62,20 @@ def build_client(cfg: Config) -> redis.Redis:
     """Собрать async KeyDB-клиент из Config (см. config.py).
 
     decode_responses=True — как в синхронных воркерах: id/поля/значения приходят
-    как str, `parse_message` их принимает; block XREADGROUP держит соединение
-    без socket_timeout (default None у redis.asyncio).
+    как str, `parse_message` их принимает.
+
+    socket_timeout ЗАДАЁМ ЯВНО, производным от `ws_block_ms` (+ запас 5 c), а НЕ
+    полагаемся на дефолт redis-py. В контейнере redis-py 8.0.0 дефолтит
+    `socket_timeout=5s`, что почти равно серверному `XREADGROUP ... BLOCK
+    <ws_block_ms>` (тоже 5000 мс по умолчанию) — клиентский таймаут гонится с
+    серверным BLOCK почти на каждом пустом poll'е, клиент кидает
+    `redis.exceptions.TimeoutError` раньше/одновременно с ответом сервера →
+    сокет рвётся (disconnect_on_error=True) → reconnect-churn (WARNING "stream
+    read failed, retrying" в ws_server.py). Держа `socket_timeout` заметно выше
+    `ws_block_ms`, обычный пустой BLOCK успевает вернуться штатно, а
+    молча-мёртвый TCP-коннект всё ещё детектится и переоткрывается — просто не
+    гонится с сервером. `socket_timeout=None` НЕ используем: это вернёт другой
+    баг — мёртвое соединение будет вешать диспетч стрима навсегда.
     """
     return redis.Redis(
         host=cfg.redis_host,
@@ -71,6 +83,7 @@ def build_client(cfg: Config) -> redis.Redis:
         db=cfg.redis_db,
         password=cfg.redis_password,
         decode_responses=True,
+        socket_timeout=cfg.ws_block_ms / 1000 + 5,
     )
 
 

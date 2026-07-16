@@ -46,3 +46,54 @@ services:
                 limits:
                     cpus: "1"
                     memory: "256M"
+
+    keydb:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "0.5"
+                    memory: "128M"
+
+    # media-воркеры: cpu намеренно щедрый — 7d-пик снят в idle-окно (реальная
+    # конвертация ffmpeg/libreoffice/imagemagick cpu+mem-спайкова); mem не занижать (OOM убьёт задачу).
+    # worker-ai — лимиты в docker-compose.worker-ai.yml (сервис определён там, не в 3-файловом наборе).
+    worker-data:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "0.5"
+                    memory: "256M"
+
+    worker-ffmpeg-audio:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "256M"
+
+    worker-ffmpeg-video:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "4"
+                    memory: "512M"
+
+    worker-image:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "256M"
+
+    worker-libreoffice:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "2"
+                    memory: "768M"

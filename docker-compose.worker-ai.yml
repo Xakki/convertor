@@ -61,6 +61,15 @@ services:
         restart: unless-stopped
         stop_grace_period: 60s
         stop_signal: SIGTERM
+        # ВНИМАНИЕ: 1G снят в idle-окно (QW1b). AI-инференс грузит ML-модели
+        # (Whisper + embedding + llama.cpp GGUF) в RAM — при реальной нагрузке
+        # поднять память, иначе OOM убьёт задачу в полёте.
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "1"
+                    memory: "1G"
         volumes:
             # Named volume for HuggingFace model cache (Whisper, embedding weights).
             - worker-ai-models:/home/app/.cache/huggingface
