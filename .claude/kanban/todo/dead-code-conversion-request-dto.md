@@ -25,3 +25,6 @@ DTO — два других: `ConversionMessage` (очередь) и `Conversion
 - `app-symfony/src/Service/ConversionManager.php` (если идти по варианту B)
 
 **Verify:** `grep -r ConversionRequestDTO` пусто (если вариант A); PHPStan зелёный; тесты Manager зелёные.
+
+**Decisions:**
+Решение (grooming 2026-07-17): НЕ удалять. Отрефакторить ConversionRequestDTO и задействовать его как полезный DTO-слой между Controller и Manager (по образцу ExRate-паттерна из skill backend-architecture). Встроить в поток постановки задачи.

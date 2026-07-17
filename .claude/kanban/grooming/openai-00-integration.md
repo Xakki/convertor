@@ -118,9 +118,27 @@ Live-цифры: из 76 working-провайдеров только 19 реал
 
 **Decisions:**
 - Implement external/hosted AI as a **SEPARATE worker** ("external-ai" worker) whose ONLY job is calling an external AI API (Q7.1, Q7.3) — kept apart from the local-only inference AI worker, so the local-only design of the existing AI worker is NOT reversed.
-- OPEN (Q7.2, research subtask): study exactly what the external endpoint (OpenAI / g4f aip.xakki.ru) supports before scoping interfaces. The 4 interfaces are heterogeneous: STT/TTS = hosted alt-backend ; markitdown = new doc→md (overlaps OCR) ; text→image = NEW conversion category (absent from FileCategory). Scope per research.
+- **Q7.2 РАЗРЕШЁН ресёрчем (см. секцию ниже); остаются точечные scope-решения (a–f) перед переносом в todo**. The 4 interfaces are heterogeneous: STT/TTS = hosted alt-backend ; markitdown = new doc→md (overlaps OCR) ; text→image = NEW conversion category (absent from FileCategory).
 - Card endpoint nit: textToImage generation = POST /v1/images/generate (card's GET /images/{f} is retrieval).
 
 **Status:** grooming — blocked on Q7.2 research. Rename intent: external-ai-worker.
+
+## Ресёрч Q7.2 (2026-07-17) — возможности внешнего endpoint
+
+- Endpoint определён: `https://aip.xakki.ru` — self-hosted **gpt4free (g4f)** инстанс, НЕ публичный OpenAI. OpenAI-совместимый surface (`/v1/*`) + native g4f (`/api/markitdown`, `/images/{f}`). Auth: `G4F_API_KEY` (в репозитории пока нигде нет).
+- В репозитории проводки НЕТ: grep по `aip.xakki|g4f|G4F_API_KEY` пуст. Существующий `workers/ai/` — ЯВНО local-only (faster-whisper STT, espeak/pyttsx3 TTS, ollama/llama.cpp LLM). Стрим `conv.ai` уже существует и принадлежит локальному воркеру.
+- Статус по 4 возможностям:
+  - **STT** — частично (локальный Whisper есть, хостовый alt не подключён; `POST /v1/audio/transcriptions`).
+  - **TTS** — частично (локальный есть, хостовый alt не подключён; `POST /api/audio/speech`).
+  - **markitdown (doc→md)** — нет вовсе (`POST /api/markitdown`, пересекается с OCR/Document).
+  - **text→image** — нет вовсе, НОВАЯ категория (правильный путь `POST /v1/images/generate`, а не `GET /images/{f}`; ломает file→file модель, т.к. источник — текст).
+- Оставшиеся вопросы scope:
+  - (a) имя нового воркера external-ai и роутинг, чтобы не коллидировать с локальным `conv.ai`;
+  - (b) где живут `G4F_API_KEY` и base URL (`.env.local`);
+  - (c) markitdown как новый target внутри Document или отдельный флаг (нужно решение Registry);
+  - (d) text→image требует новый FileCategory case или спец-обработку не-файлового источника;
+  - (e) выбор моделей/провайдеров (у aip 787 моделей, ~19 проходят healthcheck — риск флаки, нужно пиннить);
+  - (f) слоёная авторизация Bearer vs Basic по путям.
+- Риск/допущение: отчёт опирается на OpenAPI-дамп из карточки, живого пробинга aip.xakki.ru не было.
                                                                                                                                      
 

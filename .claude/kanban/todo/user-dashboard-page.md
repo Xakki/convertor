@@ -43,7 +43,9 @@
 - Symfony отдаёт страницу кабинета аутентифицированному пользователю.
 - Отображаются: история (presign-ссылки), квоты/лимиты, данные аккаунта.
 - Доступны действия повтор/удаление конверсии.
-- Гейтинг доступа согласован с [[redesign-auth-access-contract]] (guest vs user).
+- Гейтинг доступа согласован с [[redesign-auth-access-contract]] (guest vs user) —
+  зависимость удовлетворена — redesign-auth-access-contract это skill
+  (auth-редизайн реализован), не карточка.
 - Tests/QA green: `make test`, `make phpstan`, `make cs-check`.
 
 **Decisions:**
