@@ -23,6 +23,8 @@ use Symfony\Component\Routing\Attribute\Route;
  *
  * Обработка:
  *  - message `/start <code>` → инлайн-кнопка «Войти» (callback_data несёт code).
+ *  - message `/help` → короткая справка о боте.
+ *  - message `/convert` → ссылка на веб-приложение для конвертации файла.
  *  - callback_query «Войти» → findOrCreateUser + пометить code authorized +
  *    отправить в чат magic-ссылку callback'а (завершить вход НА СВОЁМ устройстве).
  *
@@ -81,6 +83,28 @@ class TelegramWebhookController extends AbstractController
         $text   = is_string($message['text'] ?? null) ? $message['text'] : '';
         $chatId = $this->extractChatId($message);
         if ($chatId === null) {
+            return;
+        }
+
+        // "/help" (допускаем суффикс "@bot_username", как шлёт Telegram-клиент
+        // в группах) — короткая справка о боте.
+        if (preg_match('/^\/help(?:@\S+)?$/', $text) === 1) {
+            $this->botClient->sendMessage(
+                $chatId,
+                'Этот бот нужен для входа в Convertor и конвертации файлов. '
+                . 'Отправьте /start с сайта, чтобы войти, или /convert, чтобы перейти к конвертации.',
+            );
+
+            return;
+        }
+
+        // "/convert" (тот же допуск на "@bot_username") — ссылка на веб-приложение.
+        if (preg_match('/^\/convert(?:@\S+)?$/', $text) === 1) {
+            $this->botClient->sendMessage(
+                $chatId,
+                'Чтобы сконвертировать файл, откройте веб-приложение: ' . rtrim($this->appUrl, '/'),
+            );
+
             return;
         }
 

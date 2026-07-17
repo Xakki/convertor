@@ -138,6 +138,18 @@ class TelegramBotClient
     }
 
     /**
+     * Регистрирует список команд бота (меню «/» в клиенте Telegram).
+     *
+     * @param list<array{command: string, description: string}> $commands
+     *
+     * @return array<string, mixed>
+     */
+    public function setMyCommands(array $commands): array
+    {
+        return $this->call('setMyCommands', ['commands' => $commands]);
+    }
+
+    /**
      * @param array<string, mixed> $payload
      *
      * @return array<string, mixed>

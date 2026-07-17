@@ -68,6 +68,41 @@ final class TelegramWebhookControllerTest extends WebTestCase
         self::assertSame(200, $client->getResponse()->getStatusCode());
     }
 
+    public function testHelpCommandSendsShortInstructions(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $bot = $this->createMock(TelegramBotClient::class);
+        $bot->expects(self::once())
+            ->method('sendMessage')
+            ->with(999, self::stringContains('Convertor'));
+        $container->set(TelegramBotClient::class, $bot);
+
+        // Допускаем суффикс "@bot_username" — так шлёт клиент Telegram в группах.
+        $update = ['message' => ['chat' => ['id' => 999], 'text' => '/help@anyconvertor_bot']];
+        $client->request('POST', self::URL, [], [], $this->headers(), (string) json_encode($update));
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+    }
+
+    public function testConvertCommandSendsAppLink(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $bot = $this->createMock(TelegramBotClient::class);
+        $bot->expects(self::once())
+            ->method('sendMessage')
+            ->with(999, self::stringContains('http'));
+        $container->set(TelegramBotClient::class, $bot);
+
+        $update = ['message' => ['chat' => ['id' => 999], 'text' => '/convert']];
+        $client->request('POST', self::URL, [], [], $this->headers(), (string) json_encode($update));
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+    }
+
     public function testCallbackQueryAuthorizesCodeAndSendsMagicLink(): void
     {
         $client    = static::createClient();

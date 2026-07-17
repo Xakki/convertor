@@ -35,6 +35,10 @@ console: ## Run Symfony console command (make console CMD="debug:router")
 tg-set-webhook: ## Register Telegram bot webhook (URL from API_URL + TELEGRAM_WEBHOOK_SECRET)
 	$(CONSOLE) app:telegram:set-webhook $(API_URL)
 
+.PHONY: tg-set-commands
+tg-set-commands: ## Register Telegram bot command menu (/start, /help, /convert)
+	$(CONSOLE) app:telegram:set-commands
+
 .PHONY: composer
 composer: ## Run composer command (make composer CMD="require vendor/package")
 	$(PHP_EXEC) composer $(CMD)

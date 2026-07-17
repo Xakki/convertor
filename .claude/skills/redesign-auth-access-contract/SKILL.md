@@ -50,7 +50,7 @@ description: Единый контракт редизайна auth/доступ�
 1. **`POST /api/v1/auth/telegram/start`** → инициировать вход.
    - Генерит `code` (публичный, для deep-link, высокая энтропия) + серверный `nonce`.
    - **Ставит httpOnly cookie `tg_login_nonce`** (Secure, SameSite=Lax, TTL 5 мин) в браузер-инициатор; связывает `code ↔ hash(nonce)` в Redis (атомарно, паттерн `RefreshTokenService`), статус `pending`.
-   - Ответ: `{ "code": "<opaque>", "deep_link": "https://t.me/YouFileConvertBot?start=<code>", "expires_in": 300 }`.
+   - Ответ: `{ "code": "<opaque>", "deep_link": "https://t.me/anyconvertor_bot?start=<code>", "expires_in": 300 }`.
    - username бота — из `%env(TELEGRAM_BOT_USERNAME)%`.
 
 2. **`GET /api/v1/auth/telegram/callback?code=<code>&s=<linkSecret>`** → завершение (браузер открывает magic-ссылку из бота).

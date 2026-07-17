@@ -35,7 +35,7 @@ final class TelegramLoginControllerTest extends WebTestCase
         $body = json_decode((string) $client->getResponse()->getContent(), true);
         self::assertSame('CODE123', $body['code']);
         self::assertSame(300, $body['expires_in']);
-        self::assertSame('https://t.me/YouFileConvertBot?start=CODE123', $body['deep_link']);
+        self::assertSame('https://t.me/anyconvertor_bot?start=CODE123', $body['deep_link']);
 
         // Nonce уходит только в httpOnly-cookie — не в теле ответа.
         self::assertArrayNotHasKey('nonce', $body);

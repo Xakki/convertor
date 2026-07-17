@@ -61,7 +61,7 @@ class TelegramLoginController extends AbstractController
         description: 'Публичный код + deep-link в бота (+ httpOnly-cookie tg_login_nonce)',
         content: new OA\JsonContent(properties: [
             new OA\Property(property: 'code', type: 'string'),
-            new OA\Property(property: 'deep_link', type: 'string', example: 'https://t.me/YouFileConvertBot?start=<code>'),
+            new OA\Property(property: 'deep_link', type: 'string', example: 'https://t.me/anyconvertor_bot?start=<code>'),
             new OA\Property(property: 'expires_in', type: 'integer', example: 300),
         ]),
     )]

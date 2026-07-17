@@ -77,6 +77,29 @@ final class TelegramBotClientTest extends TestCase
         self::assertSame('s3cr3t', $body['secret_token']);
     }
 
+    public function testSetMyCommandsSendsCommandList(): void
+    {
+        $captured = null;
+        $http     = new MockHttpClient(function (string $method, string $url, array $options) use (&$captured): MockResponse {
+            $captured = ['url' => $url, 'body' => $options['body'] ?? ''];
+
+            return new MockResponse((string) json_encode(['ok' => true]));
+        });
+
+        $client = new TelegramBotClient($http, self::TOKEN, new NullLogger());
+        $client->setMyCommands([
+            ['command' => 'start', 'description' => 'Начать / войти'],
+            ['command' => 'help', 'description' => 'Помощь'],
+        ]);
+
+        self::assertSame('https://api.telegram.org/bot123:ABCDEF/setMyCommands', $captured['url']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode((string) $captured['body'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('start', $body['commands'][0]['command']);
+        self::assertSame('Начать / войти', $body['commands'][0]['description']);
+        self::assertSame('help', $body['commands'][1]['command']);
+    }
+
     public function testGetUserProfilePhotosHitsCorrectMethod(): void
     {
         $captured = null;
