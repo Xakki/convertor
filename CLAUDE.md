@@ -38,7 +38,7 @@ REST под префиксом `/api/v1/` (версионирование), JSON
 - Регистрация webhook: `make tg-set-webhook` из корня (нужны `TELEGRAM_WEBHOOK_SECRET` в `app-symfony/.env.local` + публичный `API_URL` в `.env`).
 
 ## Payments
-MVP = только **Telegram Stars** (Bot API: invoice → `successful_payment` webhook). Stripe/Cryptomus — вне MVP. Фича **FROZEN** (в коде только DB-скелет `Payment`/`Plan`, платежи не персистятся) → детали и разморозка: `.claude/kanban/freeze/docs-payments-integration.md`.
+MVP = оплата **только через Telegram** (Bot API: invoice → `successful_payment` webhook): **Telegram Stars + ЮMoney + прочие провайдеры, доступные через BotFather/Telegram Payments**. Отдельные Stripe/Cryptomus — вне MVP. Pay-per-use сверх лимита плана — **prepaid-баланс** (атомарное списание $0.05 обычная / $0.15 AI за конвертацию), пополнение тем же Telegram-флоу → карточка `.claude/kanban/todo/pay-per-use-credits.md`. DB-скелет `Payment`/`Plan` уже есть; интеграция платежей ещё не реализована → детали: `.claude/kanban/freeze/docs-payments-integration.md`.
 
 ## File Handling
 - Загружаемые файлы: валидация MIME + расширения

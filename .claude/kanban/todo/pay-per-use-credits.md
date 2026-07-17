@@ -41,10 +41,9 @@
    Payments. Отдельные Stripe/Cryptomus вне scope. Все платежи идут через
    Telegram-бота.
 
-**Примечание (drift):** CLAUDE.md сейчас гласит «MVP = только Telegram Stars,
-фича FROZEN». Данное решение расширяет до «оплата через Telegram с несколькими
-провайдерами (BotFather)» и размораживает грумминг. Team-lead должен обновить
-строку про платежи в CLAUDE.md отдельным изменением.
+**Примечание (drift, РАЗРЕШЕНО 2026-07-17):** секция Payments в CLAUDE.md
+обновлена под это решение — «оплата через Telegram с несколькими провайдерами
+(Stars + ЮMoney + BotFather)», pay-per-use = prepaid-баланс.
 
 **Ссылки:**
 - ROADMAP тарифы (строка Pay-per-use — $0.05/конв, AI $0.15).
