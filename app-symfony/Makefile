@@ -22,11 +22,6 @@ migrate: ## Run Doctrine migrations (no interaction)
 migrate-diff: ## Generate a new Doctrine migration diff
 	$(CONSOLE) doctrine:migrations:diff
 
-.PHONY: seed-plans
-seed-plans: ## Seed subscription plans
-	$(CONSOLE) doctrine:fixtures:load --group=plans --no-interaction || \
-	    $(CONSOLE) app:seed:plans || true
-
 .PHONY: console
 console: ## Run Symfony console command (make console CMD="debug:router")
 	$(CONSOLE) $(CMD)

@@ -20,4 +20,15 @@
 
 **Контекст:** выявлено при ре-ревью magic-link rework эпика auth-redesign (2026-07-10).
 
-**Status:** grooming.
+**Итог реализации (2026-07-17, commit `09bbf7c`):** `login()` переписан —
+`KernelTestCase`, персист тест-`User` в тест-БД + `JWTTokenManagerInterface::create()`
+(тот же сервис, что в `AuthController`), без HTTP. Удалены `botToken()`/
+`signedTelegramPayload()` и заглушка `markTestSkipped`. Ссылок на
+`POST /api/v1/auth/telegram` не осталось. phpstan/cs-check зелёные.
+**QA-статус: ПРОЙДЕНО (2026-07-18).** После снятия блокера hardening-10
+(worker-ai compose-fix) прогнан `make test-api-integration` → `OK (10 tests,
+89 assertions)`; `ConversionApiIntegrationTest` 4/4 (csv→json, jpg→png, mp3→wav,
+docx→pdf) — новый JWT-`login()` аутентифицирует end-to-end через реальный
+HTTP-стек, воркеры подхватывают задачи из KeyDB, никаких 401.
+
+**Status:** done.

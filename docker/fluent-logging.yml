@@ -27,22 +27,11 @@ x-logging: &_logging
             labels: "com.docker.compose.service,com.docker.compose.project,com.docker.compose.image,tier,log_format"
 
 
-# Phase B straggler → SHARED shipper (127.0.0.1:24224 в host-netns, dockerd),
-# НЕ per-project sidecar (${EXT_FLUENT_PORT}=10094). Per-project fluent-bit'ы
-# выводятся из эксплуатации; новые/забытые сервисы шлём прямо в shared-fluent-bit.
-# Опции/labels идентичны &_logging, отличается только fluentd-address.
-x-logging-shared: &_logging_shared
-    logging:
-        driver: fluentd
-        options:
-            fluentd-address: "127.0.0.1:24224"
-            fluentd-async: "true"
-            fluentd-async-reconnect-interval: "1000ms"
-            fluentd-buffer-limit: 8388608
-            fluentd-write-timeout: "100s"
-            tag: "service.{{.Name}}"
-            labels: "com.docker.compose.service,com.docker.compose.project,com.docker.compose.image,tier,log_format"
-
+# NOTE: the shared-shipper variant (127.0.0.1:24224 host-netns dockerd, НЕ per-project
+# sidecar ${EXT_FLUENT_PORT}) used to live here as x-logging-shared for worker-ai. Moved
+# 2026-07-18 (inlined, not shared via anchor — anchors don't cross compose files) into
+# docker-compose.worker-ai.yml itself; see the comment above the removed worker-ai: block
+# further down. No other service in this file uses the shared-shipper variant currently.
 
 services:
     php:
@@ -133,10 +122,7 @@ services:
         depends_on:
             fluent-bit:
                 condition: service_started
-    # Phase B straggler (defined in docker-compose.worker-ai.yml). Laravel/Python AI
-    # queue worker → shared-fluent-bit (24224); log_format: php.
-    worker-ai:
-        <<: *_logging_shared
-        labels:
-            tier: "worker"
-            log_format: "php"
+    # worker-ai logging overlay lives in docker-compose.worker-ai.yml itself (not here) —
+    # that file is intentionally excluded from the default/test COMPOSE_FILE (remote stack),
+    # and an overlay-only fragment here (no image/build) breaks `docker compose config`
+    # whenever fluent-logging.yml is present without worker-ai.yml.

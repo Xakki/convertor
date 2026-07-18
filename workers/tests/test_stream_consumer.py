@@ -164,6 +164,9 @@ async def test_process_job_value_error_is_permanent():
     assert result.permanent is True
     assert "ValueError" in result.error
     assert "unsupported" in result.error
+    # hardening-06: даже упавшая конверсия несёт время до сбоя.
+    assert result.processing_ms is not None
+    assert result.processing_ms >= 0
 
 
 async def test_process_job_file_not_found_is_transient():
@@ -180,6 +183,8 @@ async def test_process_job_file_not_found_is_transient():
     assert result.ok is False
     assert result.permanent is False
     assert "FileNotFoundError" in result.error
+    assert result.processing_ms is not None
+    assert result.processing_ms >= 0
 
 
 async def test_process_job_generic_exception_is_transient():
@@ -196,6 +201,8 @@ async def test_process_job_generic_exception_is_transient():
     assert result.ok is False
     assert result.permanent is False
     assert "RuntimeError" in result.error
+    assert result.processing_ms is not None
+    assert result.processing_ms >= 0
 
 
 async def test_process_job_passes_local_input_to_convert(tmp_path):

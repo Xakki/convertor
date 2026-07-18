@@ -47,4 +47,4 @@
 
 **Контекст:** разбор `make init`/`make seed-plans` (2026-07-12).
 
-**Status:** grooming.
+**Status:** done.

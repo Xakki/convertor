@@ -599,6 +599,9 @@ async def test_handle_job_invalid_pair_permanent_fail(tmp_path):
     assert result.ok is False
     assert result.permanent is True
     assert "cannot derive" in result.error.lower() or "ValueError" in result.error
+    # hardening-06: даже упавшая конверсия несёт время до сбоя.
+    assert result.processing_ms is not None
+    assert result.processing_ms >= 0
 
 
 async def test_handle_job_missing_input_retryable(tmp_path):
@@ -619,6 +622,8 @@ async def test_handle_job_missing_input_retryable(tmp_path):
 
     assert result.ok is False
     assert result.permanent is False  # не дефект задачи, а ресурсная проблема
+    assert result.processing_ms is not None
+    assert result.processing_ms >= 0
 
 
 async def test_handle_job_runtime_error_retryable(tmp_path):
@@ -647,6 +652,8 @@ async def test_handle_job_runtime_error_retryable(tmp_path):
     assert result.ok is False
     assert result.permanent is False
     assert "gpu out of memory" in result.error
+    assert result.processing_ms is not None
+    assert result.processing_ms >= 0
 
 
 async def test_handle_job_reports_progress(tmp_path):

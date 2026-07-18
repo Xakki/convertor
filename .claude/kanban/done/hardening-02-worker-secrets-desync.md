@@ -61,4 +61,4 @@ env-anchor php/cron — это и есть поверхность рассинх
 **Контекст:** инцидент «#6 stuck» (2026-07-12). Поверхность — `docker-compose.yml`
 строки 15–17.
 
-**Status:** grooming.
+**Status:** done.

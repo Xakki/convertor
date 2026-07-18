@@ -434,15 +434,24 @@ class ConversionController extends AbstractController
             'source_size'   => $input->getSizeBytes(),
             'result_size'   => $output?->getSizeBytes(),
             'result_mime'   => $output?->getMimeType(),
-            'previewable'   => self::isPreviewable($output, $c->getToFormat()),
+            // previewable требует ЕЩЁ и status===completed: preview() отдаёт 409 для
+            // незавершённой конвертации, даже если формат текстовый — флаг в истории
+            // должен отражать это (hardening-09/nit-3), а не только format-критерий
+            // isPreviewable() (тот же критерий используется для 415-гейта в preview(),
+            // где completed уже проверен раньше отдельным условием — см. выше).
+            'previewable' => $c->getStatus() === ConversionStatus::Completed
+                && self::isPreviewable($output, $c->getToFormat()),
         ];
     }
 
     /**
-     * Результат пригоден к текстовому превью, когда он ЕСТЬ и его mime/формат
-     * текстовый: любой `text/*`, либо application/json, либо целевой формат из
-     * {md,txt,json,csv,html}. Единый критерий для флага `previewable` в истории и
-     * для 415-гейта в preview().
+     * Результат ФОРМАТОМ пригоден к текстовому превью: любой `text/*`, либо
+     * application/json, либо целевой формат из {md,txt,json,csv,html}. Это
+     * только format-критерий — НЕ включает статус конвертации. Используется:
+     *  - в 415-гейте preview() (там completed уже проверен отдельным условием
+     *    ДО вызова этого метода);
+     *  - в serializeHistoryItem() для флага `previewable`, но там результат
+     *    дополнительно AND'ится с `status === Completed` на вызывающей стороне.
      */
     private static function isPreviewable(?FileStorage $output, string $toFormat): bool
     {

@@ -15,6 +15,13 @@ x-app-env: &_app_env
     # JWT keys are file paths defined in app-symfony/.env (config/jwt/*.pem).
     # REDIS_DSN/SESSIONS_DSN, REFRESH_*, TELEGRAM_BOT_TOKEN: Symfony-only — read from
     # app-symfony/.env* by Dotenv; not injected here to avoid process-env override issue.
+    # WORKER_API_TOKEN/GATEWAY_INTERNAL_TOKEN: unlike the vars above, the
+    # process-env override here is INTENTIONAL — single source of truth is
+    # root .env.local (same as worker/ws-gateway services below), injected
+    # here too so it wins over whatever app-symfony/.env* has and Symfony
+    # never drifts from workers/gateway again (incident "#6 stuck").
+    WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+    GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN}
     STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
     STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
     CRYPTOMUS_MERCHANT_ID: ${CRYPTOMUS_MERCHANT_ID}

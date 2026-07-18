@@ -9,6 +9,7 @@ use App\Entity\User;
 use App\Service\Storage\S3Storage;
 use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\Core\Test\SimpleResultStream;
+use AsyncAws\S3\Input\GetObjectRequest;
 use AsyncAws\S3\Result\GetObjectOutput;
 use AsyncAws\S3\S3Client;
 use PHPUnit\Framework\TestCase;
@@ -124,8 +125,42 @@ final class MeControllerTest extends TestCase
         $user->setPhotoUrl('avatars/11.jpg');
 
         $s3Client = $this->createStub(S3Client::class);
-        // Объекта нет / ошибка чтения — getObjectContents глотает и отдаёт null.
+        // Объекта нет / ошибка чтения — avatarDataUri() ловит Throwable и отдаёт null.
         $s3Client->method('getObject')->willThrowException(new \RuntimeException('NoSuchKey'));
+
+        $res  = $this->controller($s3Client)->me($user);
+        $data = $this->payload($res);
+
+        self::assertNull($data['avatar_url']);
+    }
+
+    /**
+     * Ключевой тест hardening-09/nit-1: объект крупнее лимита не должен читаться
+     * целиком в память. readCapped() делает НАСТОЯЩИЙ Range-запрос на
+     * AVATAR_MAX_BYTES+1 байт — проверяем сам Range-параметр в GetObjectRequest
+     * (не просто финальный avatar_url === null, который прошёл бы и при
+     * read-then-truncate).
+     */
+    public function testAvatarNullAndRangeCappedWhenS3ObjectOversized(): void
+    {
+        $user = $this->user(77);
+        $user->setPhotoUrl('avatars/77.jpg');
+
+        // AVATAR_MAX_BYTES = 512 * 1024 → readCapped запрашивает maxBytes+1 =
+        // 512*1024+1 байт, т.е. Range bytes=0-524288. Мок отдаёт ровно
+        // 524289 байт (как будто S3 честно закрыл Range на границе) — этого
+        // достаточно, чтобы strlen($bytes) > AVATAR_MAX_BYTES сработал.
+        $oversized = str_repeat('x', 512 * 1024 + 1);
+
+        $s3Client = $this->createMock(S3Client::class);
+        $s3Client->expects(self::once())
+            ->method('getObject')
+            ->with(self::callback(static function (GetObjectRequest $req): bool {
+                return $req->getBucket() === 'test_-results'
+                    && $req->getKey()    === 'avatars/77.jpg'
+                    && $req->getRange()  === 'bytes=0-524288';
+            }))
+            ->willReturn(ResultMockFactory::create(GetObjectOutput::class, ['Body' => new SimpleResultStream($oversized)]));
 
         $res  = $this->controller($s3Client)->me($user);
         $data = $this->payload($res);

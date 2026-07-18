@@ -306,6 +306,31 @@ async def test_fail_max_retries_exceeded_goes_to_dlq():
 
 
 # --------------------------------------------------------------------------
+# RelayClient.post_fail — payload shape (processingMs), тестируется напрямую:
+# сегодня ws_server НЕ вызывает post_fail ни в одной ветке (см. тесты выше —
+# rec.requests == [] на всех fail-сценариях; conv.dead read consumer ещё не
+# написан, hardening-06/conv-dead-no-consumer). Контракт формы тела фиксируем
+# здесь заранее — тот же null-shape, что и у post_result (mime/processingMs).
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_post_fail_includes_processing_ms():
+    rec = RelayRecorder(status=200)
+    relay = _relay(rec)
+    ok = await relay.post_fail("1-0", "boom", processing_ms=789)
+    assert ok is True
+    assert rec.requests[0]["body"] == {"jobId": "1-0", "error": "boom", "processingMs": 789}
+
+
+@pytest.mark.asyncio
+async def test_post_fail_processing_ms_null_when_absent():
+    rec = RelayRecorder(status=200)
+    relay = _relay(rec)
+    await relay.post_fail("1-0", "boom")
+    assert rec.requests[0]["body"] == {"jobId": "1-0", "error": "boom", "processingMs": None}
+
+
+# --------------------------------------------------------------------------
 # inline свыше порога → rejected, no ack, no relay
 # --------------------------------------------------------------------------
 

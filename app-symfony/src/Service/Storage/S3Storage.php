@@ -60,25 +60,6 @@ final class S3Storage
     }
 
     /**
-     * Читает объект целиком в строку (байты). Для мелких объектов — аватары
-     * профиля, отдаваемые как data-URI в /me. Возвращает null, если объекта нет
-     * (NoSuchKey) или чтение не удалось — вызывающий трактует это как «нет фото».
-     */
-    public function getObjectContents(string $bucket, string $key): ?string
-    {
-        try {
-            $output = $this->client->getObject(new GetObjectRequest([
-                'Bucket' => $bucket,
-                'Key'    => $key,
-            ]));
-
-            return $output->getBody()->getContentAsString();
-        } catch (\Throwable) {
-            return null;
-        }
-    }
-
-    /**
      * DELETE an object из указанного бакета. Форсирует resolve() — как putObject —
      * чтобы ошибки (auth, недоступность S3) всплывали синхронно здесь. Удаление
      * несуществующего ключа для S3/MinIO идемпотентно (success, без NoSuchKey), так

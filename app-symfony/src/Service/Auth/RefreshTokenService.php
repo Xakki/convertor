@@ -6,6 +6,8 @@ namespace App\Service\Auth;
 
 use App\Entity\User;
 use App\Service\Queue\RedisConnectionFactory;
+use Psr\Clock\ClockInterface;
+use Symfony\Component\Clock\NativeClock;
 
 /**
  * Opaque refresh-token families stored in KeyDB (db 1, sessions).
@@ -61,6 +63,7 @@ final class RefreshTokenService
         private readonly string $appSecret,
         private readonly int $ttl = 2592000,
         private readonly int $grace = 60,
+        private readonly ClockInterface $clock = new NativeClock(),
     ) {
         // Fail fast: an empty pepper silently neuters the HMAC.
         if (trim($appSecret) === '') {
@@ -73,7 +76,7 @@ final class RefreshTokenService
     {
         $familyId = $this->uuidV4();
         $secret   = $this->newSecret();
-        $now      = time();
+        $now      = $this->clock->now()->getTimestamp();
 
         $payload = json_encode([
             'userId'         => $user->getId(),
@@ -102,7 +105,7 @@ final class RefreshTokenService
                 self::KEY_PREFIX . $familyId,
                 $this->hash($secret),
                 $this->hash($newSecret),
-                (string) time(),
+                (string) $this->clock->now()->getTimestamp(),
                 (string) $this->grace,
             ],
             1,

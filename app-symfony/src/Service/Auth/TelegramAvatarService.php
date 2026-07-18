@@ -16,7 +16,10 @@ use Psr\Log\LoggerInterface;
  *
  * Best-effort: любой сбой (нет фото, ошибка TG API/S3) — не фатален, логируется
  * и НЕ роняет логин. Стратегия обновления v1: рефетч на каждом bot-логине
- * (логин редкий, вебхук серверный — не блокирует UI пользователя).
+ * (логин редкий). Вызывается АСИНХРОННО через {@see \App\Message\TelegramAvatarRefreshMessage}
+ * / {@see \App\MessageHandler\TelegramAvatarRefreshMessageHandler} (hardening-09/nit-2)
+ * — не из hot-path webhook'а, чтобы 3 HTTP-запроса к Telegram + S3 put не
+ * тормозили ответ на webhook.
  *
  * Не final — функциональные тесты подменяют его в контейнере через createMock.
  */

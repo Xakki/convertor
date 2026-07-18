@@ -123,7 +123,8 @@ final class WorkerController extends AbstractController
 
     /**
      * POST /api/v1/worker/jobs/{jobId}/result
-     * Multipart: field `file` = result file (large-result path, payload минует gateway).
+     * Multipart: field `file` = result file (large-result path, payload минует gateway);
+     * опциональное form-поле `processingMs` (int) — тот же ключ, что и на inline-пути.
      * Загружает в S3 results и помечает Conversion completed. НЕ ацкает — XACK
      * делает gateway на доверии к WS-сообщению {type:"result", jobId, resultKey}.
      */
@@ -145,6 +146,10 @@ final class WorkerController extends AbstractController
         $mimeType     = $file->getMimeType() ?? 'application/octet-stream';
         $rawSize      = $file->getSize();
         $size         = is_int($rawSize) ? $rawSize : 0;
+        // Доп. form-поле (не файл) рядом с `file` — тот же ключ processingMs, что и
+        // на inline-пути (InternalWorkerController::result), контракт единый.
+        $rawProcessingMs = $request->request->get('processingMs');
+        $processingMs    = $rawProcessingMs !== null ? (int) $rawProcessingMs : null;
 
         $stream = fopen($file->getPathname(), 'r');
         if ($stream === false) {
@@ -166,7 +171,7 @@ final class WorkerController extends AbstractController
             'outputKey'    => $resultKey,
             'outputMime'   => $mimeType,
             'outputSize'   => $size,
-            'processingMs' => null,
+            'processingMs' => $processingMs,
         ]);
 
         return $this->json(['ok' => true]);

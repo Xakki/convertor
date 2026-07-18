@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\Api;
 
+use App\Entity\User;
+use Doctrine\ORM\EntityManagerInterface;
+use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
-use PHPUnit\Framework\TestCase;
+use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\HttpClient\HttpClient;
 use Symfony\Component\Mime\Part\DataPart;
 use Symfony\Component\Mime\Part\Multipart\FormDataPart;
-use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
  * Реальный end-to-end по ПУБЛИЧНОМУ API: гоняет живой стек e2e (php+nginx+ws-gateway
@@ -24,16 +26,20 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  *     процесса. Только внешний HTTP-клиент это корректно упражняет.
  *
  * Для каждой категории (image / data / ffmpeg / document) — свой Telegram-юзер
- * (free-план = 2 конвертации/сутки), поэтому квота не мешает. Токен подписи пустой
- * (в APP_ENV=test Symfony Dotenv НЕ грузит .env.local → TELEGRAM_BOT_TOKEN=''),
- * ровно как и у обслуживающего php-fpm, так что hash совпадает.
+ * (free-план = 2 конвертации/сутки), поэтому квота не мешает. Логин — БЕЗ HTTP:
+ * auth теперь magic-link (реальный Telegram round-trip в e2e не воспроизвести),
+ * поэтому {@see self::login()} персистит User напрямую через EntityManager (в
+ * ТОЙ ЖЕ test-БД, что обслуживающий php-fpm — общий DATABASE_URL) и минтит JWT
+ * через тот же JWTTokenManagerInterface, что и прод-логин — HMAC-виджет
+ * (`POST /api/v1/auth/telegram`, удалён вместе с картой upload-ui-bot-auth-rework)
+ * тут больше не участвует.
  *
  * Тайминги (submit→first-processing, submit→download) логируются в STDERR;
  * жёстких верхних границ нет (флаки под нагрузкой) — проверяется корректность:
  * терминальный статус = completed, тело результата непустое и правдоподобное.
  */
 #[Group('integration')]
-final class ConversionApiIntegrationTest extends TestCase
+final class ConversionApiIntegrationTest extends KernelTestCase
 {
     private const POLL_INTERVAL_US = 500_000; // 0.5s
 
@@ -42,16 +48,6 @@ final class ConversionApiIntegrationTest extends TestCase
         $url = getenv('API_BASE_URL');
 
         return \is_string($url) && $url !== '' ? rtrim($url, '/') : 'http://nginx';
-    }
-
-    private static function botToken(): string
-    {
-        $token = getenv('TELEGRAM_BOT_TOKEN');
-        if ($token === false) {
-            $token = $_SERVER['TELEGRAM_BOT_TOKEN'] ?? $_ENV['TELEGRAM_BOT_TOKEN'] ?? '';
-        }
-
-        return (string) $token;
     }
 
     /**
@@ -75,8 +71,6 @@ final class ConversionApiIntegrationTest extends TestCase
         int $timeoutSec,
         string $tgIdBase,
     ): void {
-        self::markTestSkipped('login via obsolete widget removed — see kanban e2e-login-helper-magic-link');
-
         $path = \dirname(__DIR__, 2) . '/Fixtures/' . $fixture;
         self::assertFileExists($path, "fixture missing: {$fixture}");
 
@@ -84,7 +78,7 @@ final class ConversionApiIntegrationTest extends TestCase
 
         // Fresh user per run (suffix by time) → квота free-плана всегда свежая.
         $tgId  = $tgIdBase . str_pad((string) (time() % 100000), 5, '0', STR_PAD_LEFT);
-        $token = $this->login($client, $tgId);
+        $token = $this->login($tgId);
 
         $t0 = microtime(true);
 
@@ -176,55 +170,27 @@ final class ConversionApiIntegrationTest extends TestCase
         ));
     }
 
-    private function login(HttpClientInterface $client, string $tgId): string
-    {
-        $payload = $this->signedTelegramPayload(self::botToken(), $tgId, time() - 30);
-
-        $res = $client->request('POST', self::baseUrl() . '/api/v1/auth/telegram', [
-            'headers' => ['Content-Type: application/json'],
-            'body'    => json_encode($payload, JSON_THROW_ON_ERROR),
-        ]);
-
-        $code = $res->getStatusCode();
-        $body = $res->getContent(false);
-        self::assertSame(200, $code, "auth/telegram expected 200, got {$code}: {$body}");
-
-        $json = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-        self::assertArrayHasKey('token', $json, 'login must return an access JWT');
-        self::assertNotSame('', (string) $json['token'], 'empty JWT');
-
-        return (string) $json['token'];
-    }
-
     /**
-     * Mirrors TelegramAuthService::buildCheckString: filter nulls, ksort,
-     * "k=v"\n join, HMAC-SHA256 keyed by sha256(botToken).
-     *
-     * @return array<string, int|string>
+     * Mint a JWT directly for a fresh test User — no HTTP round-trip. Auth is
+     * magic-link now (real Telegram round-trip, not reproducible in e2e); this
+     * boots the kernel just to persist a User in the SAME test DB the serving
+     * php-fpm process uses (shared DATABASE_URL) and issues a token via the
+     * SAME JWTTokenManagerInterface the app's own login controllers use, so it
+     * validates cross-process exactly like a real login would.
      */
-    private function signedTelegramPayload(string $botToken, string $tgId, int $authDate): array
+    private function login(string $tgId): string
     {
-        $fields = [
-            'auth_date'  => (string) $authDate,
-            'first_name' => 'QaIntegration',
-            'id'         => $tgId,
-        ];
-        ksort($fields);
+        self::bootKernel();
+        $container = self::getContainer();
 
-        $checkString = implode("\n", array_map(
-            static fn (string $k, string $v) => "{$k}={$v}",
-            array_keys($fields),
-            array_values($fields),
-        ));
-        $secretKey = hash('sha256', $botToken, true);
-        $hash      = hash_hmac('sha256', $checkString, $secretKey);
+        $user = (new User())
+            ->setTelegramId($tgId)
+            ->setFirstName('QaIntegration');
+        $em = $container->get(EntityManagerInterface::class);
+        $em->persist($user);
+        $em->flush();
 
-        return [
-            'id'         => $tgId,
-            'first_name' => 'QaIntegration',
-            'auth_date'  => $authDate,
-            'hash'       => $hash,
-        ];
+        return $container->get(JWTTokenManagerInterface::class)->create($user);
     }
 
     private function assertPlausible(string $category, string $toFormat, string $body): void

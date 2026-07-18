@@ -32,4 +32,15 @@ Inline-путь результата теперь измеряет и перед
 - PHP: читать его в `WorkerController` (large-путь) и в
   `InternalWorkerController::fail` (failure-путь) вместо хардкода `null`.
 
-**Status:** grooming.
+**Итог реализации (2026-07-17, commit `f048480`):** wire-field = `processingMs`
+(camelCase, как весь существующий контракт; `processing_ms` в карточке — Python-attr).
+- LARGE-путь заведён end-to-end (`ws_client._upload_large` шлёт `processingMs` в
+  multipart, `WorkerController::result` читает) + тест `testResultUploadsAndPersistsProcessingMs`.
+- FAILURE-путь: проводка полная (`ResultSignal.failed(processing_ms=)` → WS fail
+  frame → `RelayClient.post_fail` → `InternalWorkerController::fail` читает) + тест
+  `testFailPersistsProcessingMs`. НО dormant: `ws_server._handle_fail` сегодня не
+  зовёт `post_fail` (permanent→DLQ, retryable→pending), `conv.dead` без консьюмера.
+  Зависимость передана в [[conv-dead-no-consumer]] (DLQ-payload расширить `processingMs`).
+- Проверка: phpstan [OK], cs-check green, PHP 245 tests OK, Python data 98/ai 111/gateway 104.
+
+**Status:** done.

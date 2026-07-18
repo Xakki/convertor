@@ -158,6 +158,45 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
         self::assertSame(100, $item['source_size']);
     }
 
+    /**
+     * hardening-09/nit-3: previewable требует ЕЩЁ и status===completed, не только
+     * text-формат результата. Отличие от testHistoryPendingConversionHasNullResultFieldsAndNotPreviewable
+     * (там output=null, previewable=false и без гейта по статусу) — здесь output
+     * ЕСТЬ и format-previewable (text/markdown), но статус processing.
+     */
+    public function testHistoryPreviewableFalseWhenTextResultButNotCompleted(): void
+    {
+        $client = static::createClient();
+        $owner  = $this->persistUser();
+        $token  = $this->jwtFor($owner);
+
+        $conv = $this->seedConversion(
+            $owner,
+            'docx',
+            'md',
+            ConversionStatus::Processing,
+            input: ['name' => 'draft.docx', 'size' => 100],
+            output: ['name' => 'draft.md', 'mime' => 'text/markdown', 'size' => 50],
+            processingMs: null,
+        );
+        static::getContainer()->get(EntityManagerInterface::class)->flush();
+
+        $client->request('GET', '/api/v1/convert/history', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        $item = null;
+        foreach ($data['items'] as $row) {
+            if ($row['id'] === $conv->getId()) {
+                $item = $row;
+            }
+        }
+        self::assertNotNull($item);
+        self::assertSame('processing', $item['status']);
+        self::assertSame('text/markdown', $item['result_mime']);
+        self::assertFalse($item['previewable'], 'text-формат, но status!==completed → previewable должен быть false');
+    }
+
     // -------------------------------------------------------------------------
     // source
     // -------------------------------------------------------------------------

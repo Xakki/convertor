@@ -25,4 +25,4 @@
 - 2026-06-22: находка ревью/тестов в `auth-refresh-token`; не баг (логика корректна против живого KeyDB), а улучшение тестируемости — вынесено отдельно.
 - inject `Psr\Clock\ClockInterface`, MockClock in tests ; BOTH time() sites use the clock — RefreshTokenService.php:76 ($now) and :105 ((string)time() into Lua ARGV). Pure testability refactor, no behavior change.
 
-**Status:** ready (todo).
+**Status:** done.

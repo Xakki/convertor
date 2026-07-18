@@ -90,7 +90,7 @@ final class InternalWorkerController extends AbstractController
 
     /**
      * POST /api/v1/internal/worker/fail
-     * Body: {"jobId":"<streamId>","error":"<msg>"}
+     * Body: {"jobId":"<streamId>","error":"<msg>","processingMs":<opt int|null>}
      */
     #[Route('/fail', methods: ['POST'])]
     public function fail(Request $request): JsonResponse
@@ -103,13 +103,16 @@ final class InternalWorkerController extends AbstractController
             return $this->json(['error' => 'Job not found or already completed'], Response::HTTP_NOT_FOUND);
         }
 
-        $error = is_array($body) && isset($body['error']) ? (string) $body['error'] : 'Worker reported failure';
+        $error        = is_array($body)        && isset($body['error']) ? (string) $body['error'] : 'Worker reported failure';
+        $processingMs = is_array($body) && isset($body['processingMs']) && $body['processingMs'] !== null
+            ? (int) $body['processingMs']
+            : null;
 
         $this->persister->persist([
             'conversionId' => $meta['conversionId'],
             'state'        => 'failed',
             'error'        => mb_substr($error, 0, 500),
-            'processingMs' => null,
+            'processingMs' => $processingMs,
         ]);
 
         return $this->json(['ok' => true]);

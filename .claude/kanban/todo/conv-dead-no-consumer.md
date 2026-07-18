@@ -52,4 +52,11 @@ gateway читает DLQ и шлёт Symfony через internal relay кома�
 **Контекст:** инцидент «#6 stuck» / разбор DLQ (2026-07-12). Смежные:
 [[dlq-xadd-xack-nonatomic]], [[s1-06-reclaim-poison-dlq]].
 
+**Зависимость от hardening-06-processing-ms (2026-07-17):** failure-путь уже
+проводит `processingMs` (`ResultSignal.failed → WS fail frame → RelayClient.post_fail
+→ InternalWorkerController::fail`), но он dormant, пока нет этого консьюмера. При
+реализации: `ws_server._handle_fail`/`add_to_dlq` сейчас РОНЯЮТ `processingMs` из
+fail-frame перед записью в DLQ — расширить DLQ-payload этим полем и протянуть его
+до финализации `Conversion.failed`, иначе тайминг фейла так и не запишется.
+
 **Status:** grooming.

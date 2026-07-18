@@ -52,7 +52,7 @@ help: ## Show this help
 ##@ Project lifecycle
 
 .PHONY: init
-init: build up migrate seed-plans ## First-time setup: build + up + migrate + seed-plans
+init: build up migrate ## First-time setup: build + up + migrate (plans are seeded by migrations)
 	@echo -e "$(GREEN)Project initialised!$(RESET)"
 
 .PHONY: up
@@ -85,6 +85,10 @@ ps: ## Show running containers
 docker-check:  ## Check docker config
 	@$(DC) config -q
 
+.PHONY: docker-check-worker-ai
+docker-check-worker-ai:  ## Print resolved config with docker-compose.worker-ai.yml in the set (verify worker-ai still gets shared fluent-bit logging)
+	$(DC) -f docker-compose.yml -f docker/fluent-logging.yml -f docker/limits.yml -f docker-compose.worker-ai.yml config
+
 ##@ Logs
 
 .PHONY: logs
@@ -104,7 +108,16 @@ login: ## Login to Docker registry
 ##@ Testing
 
 .PHONY: test
-test: test-php test-python ## Run all tests (PHPUnit + pytest)
+# NB: `test-php` here is the SAME full PHPUnit suite as in `test-php-live` below
+# (no separate fast/unit-only PHP target exists) — this target just does NOT
+# provision `convertor-test` first. Most Functional/Admin controller tests need a
+# live DB connection with no guard, so on an unprovisioned DB they ERROR LOUDLY
+# (Doctrine "Access denied" / missing-table), not a silent skip — this is NOT a
+# false-green risk in practice, but it IS a spurious, confusing wall of DB errors on
+# a fresh checkout. CI/full-suite runs MUST use `test-php-live` (below) instead,
+# which provisions `convertor-test` first so the same suite actually exercises the
+# DB-backed code paths cleanly.
+test: test-php test-python ## Run PHPUnit + pytest WITHOUT provisioning convertor-test first — DB-backed PHPUnit tests error if it's missing; use `test-php-live` for the canonical run
 
 # Провижининг тест-БД `convertor-test` + грант тест-юзеру + миграции под APP_ENV=test.
 # Идемпотентно, безопасно к повторному запуску (IF NOT EXISTS + --allow-no-migration).
@@ -116,14 +129,35 @@ test: test-php test-python ## Run all tests (PHPUnit + pytest)
 # поднятые dev-контейнеры mariadb/keydb/php в test-режим и сломал бы dev-стек — как и
 # test-e2e, shared-инфру не трогаем. Миграция таргетит `convertor-test` строго из-за
 # `-e APP_ENV=test` на exec (composer-скрипт test-db-migrate → app-symfony/.env.test).
+#
+# Пароль тест-юзера НЕ прокидываем через env: create-test-db.sh хардкодит `123456`
+# (единый источник с app-symfony/.env.test's DATABASE_URL — см. комментарий в
+# самом скрипте). $(DB_TEST_PASS) остаётся только для workers/Makefile's test-e2e
+# (python pytest-раннер подключается к convertor-test напрямую, без Symfony).
 .PHONY: test-db-setup
 test-db-setup: ## Провижининг тест-БД convertor-test + KeyDB + миграции (идемпотентно)
 	$(DC) up -d --wait mariadb keydb php
-	$(DC) exec -T -e DB_TEST_PASS='$(DB_TEST_PASS)' mariadb bash /docker-entrypoint-initdb.d/create-test-db.sh
+	$(DC) exec -T mariadb bash /docker-entrypoint-initdb.d/create-test-db.sh
 	docker exec -e APP_ENV=test $(PHP_CONT) composer test-db-migrate
 
 .PHONY: test-php-live
-test-php-live: test-db-setup test-php ## Провижининг тест-БД, затем PHPUnit (live-DB/KeyDB тесты реально выполняются)
+# CANONICAL CI target for the full PHPUnit suite. `test-db-setup` is a NORMAL
+# prerequisite (not order-only `|`) with the actual `test-php` run moved into this
+# target's OWN recipe via a $(MAKE) sub-invocation — that's what makes the barrier
+# hold under `make -j`. An order-only prereq only blocks a target's OWN recipe from
+# starting before it's satisfied; it does NOT block that target's other, normal
+# prerequisites from being built in parallel with it. Since a plain
+# `test-php-live: test-db-setup test-php` (or even `test-php-live: | test-db-setup`
+# `test-php-live: test-php`) has no recipe of its own on the aggregator, make is free
+# to build the `test-php` branch concurrently with `test-db-setup` under -j — verified
+# empirically: `make -j4 test-php-live` against a freshly-dropped test DB raced and
+# phpunit hit "Access denied" (test-db-setup's ALTER USER hadn't run yet). Recursing
+# via $(MAKE) is the reliable pattern (GNU Make guarantees normal prereqs of a target
+# complete before that target's recipe runs, even under -j). Plain `make test` runs
+# the SAME PHPUnit suite WITHOUT provisioning first (see comment on `test` above) —
+# use THIS target in CI for a reliable run.
+test-php-live: test-db-setup ## CANONICAL CI target: провижининг тест-БД, ЗАТЕМ PHPUnit (гарантированный порядок под make -j) — live-DB/KeyDB тесты реально выполняются
+	$(MAKE) test-php
 
 # ---------------------------------------------------------------------------
 # Per-component fragments (variables above must be defined before these are

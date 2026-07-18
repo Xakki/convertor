@@ -74,6 +74,21 @@ framework:
                 options:
                     stream: conversions_failed
 
-        # No routing map: ConversionManager::dispatch() targets the transport
-        # explicitly via TransportNamesStamp(['conv_'.$key]).
+            # Generic PHP-to-PHP async transport (hardening-09/nit-2: first user is
+            # TelegramAvatarRefreshMessage, moved off the webhook hot-path). Stock
+            # redis-messenger factory (bare `redis://`, same as `failed` above) — a
+            # DIFFERENT stream from conv.*/conversions_failed, own consumer group.
+            # Default PHP serializer is fine here: only PHP (bin/console
+            # messenger:consume async, supervisor `app-queue`) reads this stream,
+            # unlike conv_* which Python workers decode.
+            async:
+                dsn: '%env(REDIS_DSN)%'
+                options:
+                    stream: messenger.async
+                    group: async
+
+        # ConversionManager::dispatch() targets its transport explicitly via
+        # TransportNamesStamp(['conv_'.$key]) — no routing entry needed for it.
         # PHP MUST NOT run messenger:consume conv_* — gateway owns XREADGROUP/XACK.
+        routing:
+            App\Message\TelegramAvatarRefreshMessage: async

@@ -70,6 +70,24 @@ services:
                 limits:
                     cpus: "1"
                     memory: "1G"
+        # Fluent-bit logging (formerly an overlay fragment in docker/fluent-logging.yml —
+        # moved here 2026-07-18 so the default/test COMPOSE_FILE, which never includes this
+        # file, stays valid; see fluent-logging.yml comment above worker-libreoffice).
+        # Same shared-shipper options as x-logging-shared in docker/fluent-logging.yml
+        # (127.0.0.1:24224 — per-host local fluent-bit shipper, not the per-project sidecar).
+        logging:
+            driver: fluentd
+            options:
+                fluentd-address: "127.0.0.1:24224"
+                fluentd-async: "true"
+                fluentd-async-reconnect-interval: "1000ms"
+                fluentd-buffer-limit: 8388608
+                fluentd-write-timeout: "100s"
+                tag: "service.{{.Name}}"
+                labels: "com.docker.compose.service,com.docker.compose.project,com.docker.compose.image,tier,log_format"
+        labels:
+            tier: "worker"
+            log_format: "php"
         volumes:
             # Named volume for HuggingFace model cache (Whisper, embedding weights).
             - worker-ai-models:/home/app/.cache/huggingface

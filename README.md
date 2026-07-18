@@ -47,11 +47,9 @@ AI-воркер (GPU) — **remote, вне основного стека**: за
 cp .env.local_example .env.local
 #    заполнить .env.local (БД, S3/MinIO, токены воркеров/gateway, Telegram-бот)
 
-# 2. Первичная инициализация: build + up + migrate + seed-plans
+# 2. Первичная инициализация: build + up + migrate (тарифные планы сидит миграция Version20260419000001)
 make init
 ```
-
-> ⚠️ **Caveat по `seed-plans`.** Таргет `make init` вызывает `seed-plans`, но сейчас это фактически no-op: под ним нет реализованных фикстур/команды (`doctrine:fixtures:load --group=plans` → `app:seed:plans` → `|| true`), любая ошибка молча проглатывается. Тарифные планы этой командой пока не сидятся.
 
 Последующие запуски:
 
@@ -75,7 +73,7 @@ make console CMD="app:user:make-admin <email|id>"
 
 | Таргет | Назначение |
 |--------|-----------|
-| `make init` | Первичная инициализация (build + up + migrate + seed-plans) |
+| `make init` | Первичная инициализация (build + up + migrate) |
 | `make up` / `make down` / `make restart` | Старт / стоп / рестарт стека |
 | `make build` / `make rebuild` | Сборка образов (`rebuild` — без кэша) |
 | `make pull` | Подтянуть базовые образы из Harbor |
@@ -87,7 +85,8 @@ make console CMD="app:user:make-admin <email|id>"
 | `make tg-set-webhook` | Регистрация Telegram webhook |
 | `make restart-php` / `make shell-php` | Рестарт / shell php-контейнера |
 | `make composer CMD="…"` | Composer внутри контейнера |
-| `make test` | Все тесты (PHPUnit + pytest) |
+| `make test` | PHPUnit + pytest БЕЗ провижининга `convertor-test`; та же PHPUnit-сюита, что и в `test-php-live` — DB-зависимые тесты падают с ошибкой доступа, если БД не поднята |
+| `make test-php-live` | **Канонический CI-таргет**: провижинит `convertor-test` (БД + миграции), затем гоняет ту же PHPUnit-сюиту чисто, без DB-ошибок |
 | `make phpstan` / `make cs` / `make cs-check` | Статанализ и code style |
 
 `make help` — полный список.

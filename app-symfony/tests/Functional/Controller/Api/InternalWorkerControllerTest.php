@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace App\Tests\Functional\Controller\Api;
 
+use App\Entity\Conversion;
+use App\Entity\FileStorage;
+use App\Entity\User;
+use App\Enum\ConversionStatus;
+use App\Enum\FileCategory;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
@@ -27,6 +32,26 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  */
 final class InternalWorkerControllerTest extends WebTestCase
 {
+    /** @var list<object> */
+    private array $toRemove = [];
+
+    protected function tearDown(): void
+    {
+        if ($this->toRemove !== []) {
+            $em = static::getContainer()->get(EntityManagerInterface::class);
+            foreach (array_reverse($this->toRemove) as $entity) {
+                $managed = $em->contains($entity) ? $entity : $em->find($entity::class, $entity->getId());
+                if ($managed !== null) {
+                    $em->remove($managed);
+                }
+            }
+            $em->flush();
+        }
+
+        parent::tearDown();
+        $this->toRemove = [];
+    }
+
     private const META = [
         'conversionId' => 99999,
         'inputBucket'  => 'test_-inputs',
@@ -260,5 +285,73 @@ final class InternalWorkerControllerTest extends WebTestCase
         self::assertSame(200, $client->getResponse()->getStatusCode());
         $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
         self::assertTrue($body['ok']);
+    }
+
+    /**
+     * hardening-06: fail-путь читает `processingMs` из тела и персистит его — раньше
+     * контроллер хардкодил `processingMs => null`, даже когда воркер его прислал.
+     */
+    public function testFailPersistsProcessingMs(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+        $em        = $container->get(EntityManagerInterface::class);
+
+        $owner = new User();
+        $em->persist($owner);
+        $em->flush();
+        $this->toRemove[] = $owner;
+
+        $inputFile = (new FileStorage())
+            ->setOriginalName('audio.mp3')
+            ->setStoragePath('inputs/test/' . bin2hex(random_bytes(8)) . '.mp3')
+            ->setMimeType('application/octet-stream')
+            ->setSizeBytes(100);
+        $em->persist($inputFile);
+        $this->toRemove[] = $inputFile;
+
+        $conversion = (new Conversion())
+            ->setUser($owner)
+            ->setInputFile($inputFile)
+            ->setFromFormat('mp3')
+            ->setToFormat('txt')
+            ->setCategory(FileCategory::Audio)
+            ->setStatus(ConversionStatus::Processing)
+            ->setIsAi(true)
+            ->setIsOcr(false);
+        $em->persist($conversion);
+        $em->flush();
+        $this->toRemove[] = $conversion;
+
+        $gateway = $this->createStub(WorkerStreamGateway::class);
+        $gateway->method('getJobMeta')->willReturn([
+            'conversionId' => $conversion->getId(),
+            'inputBucket'  => 'test_-inputs',
+            'inputKey'     => $inputFile->getStoragePath(),
+            'stream'       => 'conv.ai',
+            'targetFormat' => 'txt',
+        ]);
+        $container->set(WorkerStreamGateway::class, $gateway);
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/fail',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode([
+                'jobId'        => $conversion->getId() . '-0',
+                'error'        => 'GPU out of memory',
+                'processingMs' => 789,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+
+        $em->clear();
+        $reloaded = $em->find(Conversion::class, $conversion->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame(ConversionStatus::Failed, $reloaded->getStatus());
+        self::assertSame(789, $reloaded->getProcessingMs());
     }
 }

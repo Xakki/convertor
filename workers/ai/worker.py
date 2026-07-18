@@ -107,16 +107,25 @@ def build_handle_job(cfg: Config):
             # Неверная пара форматов — постоянная ошибка (не зависит от ресурсов воркера)
             err = _safe_err(exc)
             logger.error("conversion permanent error for job %s: %s", job_id, err)
-            return ResultSignal.failed(error=err, permanent=True)
+            return ResultSignal.failed(
+                error=err, permanent=True,
+                processing_ms=int((time.monotonic() - started) * 1000),
+            )
         except FileNotFoundError as exc:
             # Пропавший бинарник/модель — ресурсная проблема воркера, не дефект задачи
             err = _safe_err(exc)
             logger.error("conversion resource error for job %s: %s", job_id, err)
-            return ResultSignal.failed(error=err, permanent=False)
+            return ResultSignal.failed(
+                error=err, permanent=False,
+                processing_ms=int((time.monotonic() - started) * 1000),
+            )
         except Exception as exc:
             err = _safe_err(exc)
             logger.error("conversion failed for job %s: %s", job_id, err)
-            return ResultSignal.failed(error=err, permanent=False)
+            return ResultSignal.failed(
+                error=err, permanent=False,
+                processing_ms=int((time.monotonic() - started) * 1000),
+            )
 
         processing_ms = int((time.monotonic() - started) * 1000)
         progress.report(95, "done")

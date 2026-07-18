@@ -45,4 +45,20 @@ TG API. 3 — косметическое расхождение контракт
 - Async-аватар: перенести `refreshAvatar` из webhook-пути в Messenger-хендлер.
 - `previewable`: в `serializeHistoryItem` добавить условие completed-статуса к флагу.
 
-**Status:** grooming.
+**Итог реализации (2026-07-18, commit `fa078c0`):**
+- Nit1: `avatarDataUri()` → `S3Storage::readCapped()` (реальный `Range: bytes=0-N`,
+  ≤ `AVATAR_MAX_BYTES+1`); `getObjectContents()` удалён. Тест проверяет сам Range-хедер.
+- Nit2: `TelegramAvatarRefreshMessage`(userId) + `TelegramAvatarRefreshMessageHandler`;
+  `TelegramUserProvisioner` принимает `MessageBusInterface`, диспатчит после flush.
+  Новый транспорт `async` в `messenger.yaml` (redis, stream `messenger.async`,
+  отдельно от conv.*), раскомментирован supervisor `app-queue`
+  (`messenger:consume async`). Тесты переписаны на assert dispatch, не inline.
+- Nit3: `previewable = status===Completed && isPreviewable(...)` в `serializeHistoryItem`
+  (call-site; helper остаётся format-only для 415-гейта в `preview()`). Новый тест.
+- Верификация: phpstan [OK], cs green, `make test-php-live` 250 tests 0 failures,
+  `lint:container`/`debug:messenger` OK.
+- **Опер.заметка:** `supervisor.app.ini` смонтирован в 2 сервиса → `app-queue`
+  консьюмер может подняться дважды; безопасно (consumer-group), но лишний процесс —
+  при желании сузить запуск до одного сервиса (не блокер).
+
+**Status:** done.

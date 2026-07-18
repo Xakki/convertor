@@ -68,9 +68,15 @@ class RelayClient:
         }
         return await self._post(RESULT_PATH, payload, job_id)
 
-    async def post_fail(self, job_id: str, error: str) -> bool:
-        """fail → Symfony (пометить failed + вернуть квоту). Публичного fail нет."""
-        return await self._post(FAIL_PATH, {"jobId": job_id, "error": error}, job_id)
+    async def post_fail(
+        self, job_id: str, error: str, processing_ms: int | None = None
+    ) -> bool:
+        """fail → Symfony (пометить failed + вернуть квоту). Публичного fail нет.
+
+        `processingMs` = null при отсутствии — тот же null-shape контракт, что и
+        `post_result` (mime/processingMs)."""
+        payload = {"jobId": job_id, "error": error, "processingMs": processing_ms}
+        return await self._post(FAIL_PATH, payload, job_id)
 
     async def _post(self, path: str, payload: dict, job_id: str) -> bool:
         """POST JSON; True ⇢ 2xx (можно ack'ать), False ⇢ сеть/не-2xx (НЕ ack)."""

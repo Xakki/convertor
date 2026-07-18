@@ -319,6 +319,28 @@ async def test_large_result_from_file_path_streams(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_large_result_multipart_carries_processing_ms(tmp_path):
+    """hardening-06: large-путь кладёт processingMs доп. form-полем в multipart-POST
+    (то же имя ключа, что и на inline-пути)."""
+    gw = FakeGateway(jobs=[_job(job_id="12-0")])
+    sym = FakeSymfony()
+
+    async def handler(job, progress):
+        return ResultSignal.completed(
+            data=b"X" * 50, mime="video/mp4", ext="mp4", processing_ms=321
+        )
+
+    async with _running(gw, tmp_path, handler, sym, ws_result_inline_max=8):
+        await _wait_for(lambda: len(gw.results) >= 1)
+
+    posts = sym.posts()
+    assert len(posts) == 1
+    body = posts[0].content
+    assert b'name="processingMs"' in body
+    assert b"\r\n321\r\n" in body
+
+
+@pytest.mark.asyncio
 async def test_large_result_prefers_output_key_from_response(tmp_path):
     gw = FakeGateway(jobs=[_job(job_id="9-0")])
     sym = FakeSymfony(result_response={"ok": True, "outputKey": "results/2026/07-06/42.mp4"})
@@ -352,6 +374,25 @@ async def test_fail_branch_permanent(tmp_path):
     assert fail == {"type": "fail", "jobId": "3-0", "error": "boom", "permanent": True}
     assert gw.results == []
     assert list(tmp_path.iterdir()) == []  # job_dir удалён → work_dir пуст
+
+
+@pytest.mark.asyncio
+async def test_fail_branch_carries_processing_ms(tmp_path):
+    """hardening-06: ResultSignal.failed(processing_ms=...) → fail-фрейм несёт processingMs
+    (то же имя ключа, что и на inline/large success-путях)."""
+    gw = FakeGateway(jobs=[_job(job_id="13-0")])
+    sym = FakeSymfony()
+
+    async def handler(job, progress):
+        return ResultSignal.failed(error="disk full", permanent=False, processing_ms=456)
+
+    async with _running(gw, tmp_path, handler, sym):
+        await _wait_for(lambda: len(gw.fails) >= 1)
+
+    fail = gw.fails[0]
+    assert fail == {
+        "type": "fail", "jobId": "13-0", "error": "disk full", "processingMs": 456,
+    }
 
 
 @pytest.mark.asyncio
@@ -536,7 +577,9 @@ def test_result_signal_constructors():
     ok = ResultSignal.completed(data=b"x", mime="text/plain", ext="txt", processing_ms=5)
     assert ok.ok and ok.read_bytes() == b"x" and ok.processing_ms == 5
     bad = ResultSignal.failed(error="e", permanent=True)
-    assert not bad.ok and bad.error == "e" and bad.permanent is True
+    assert not bad.ok and bad.error == "e" and bad.permanent is True and bad.processing_ms is None
+    bad_timed = ResultSignal.failed(error="e", permanent=False, processing_ms=42)
+    assert bad_timed.processing_ms == 42
     with pytest.raises(ValueError):
         ResultSignal.completed()  # ни path, ни data
 

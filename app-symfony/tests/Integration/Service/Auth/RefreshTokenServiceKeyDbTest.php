@@ -8,6 +8,9 @@ use App\Entity\User;
 use App\Service\Auth\RefreshTokenService;
 use App\Service\Queue\RedisConnectionFactory;
 use PHPUnit\Framework\TestCase;
+use Psr\Clock\ClockInterface;
+use Symfony\Component\Clock\MockClock;
+use Symfony\Component\Clock\NativeClock;
 
 /**
  * Exercises the ACTUAL server-side ROTATE_LUA against a real KeyDB (db 1),
@@ -88,17 +91,16 @@ final class RefreshTokenServiceKeyDbTest extends TestCase
 
     public function testPreviousSecretAfterGraceIsReuse(): void
     {
-        $service    = $this->makeService(grace: 60);
+        // Elapsed time is driven through an injected MockClock (real Lua still
+        // runs server-side against real KeyDB) instead of rewriting the stored
+        // graceUntil directly.
+        $clock      = new MockClock('2026-01-01T00:00:00+00:00');
+        $service    = $this->makeService(grace: 60, clock: $clock);
         $cookie1    = $this->issue($service);
         [$familyId] = explode('.', $cookie1, 2);
 
         $service->rotate($cookie1); // cookie1 becomes prev, within grace
-
-        // Age graceUntil into the past directly in the store to simulate elapsed time.
-        $raw             = (string) $this->redis->get('rt:' . $familyId);
-        $d               = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-        $d['graceUntil'] = 1;
-        $this->redis->set('rt:' . $familyId, json_encode($d, JSON_THROW_ON_ERROR));
+        $clock->modify('+61 seconds'); // advance past the grace window
 
         $reuse = $service->rotate($cookie1);
         self::assertFalse($reuse->valid);
@@ -119,9 +121,9 @@ final class RefreshTokenServiceKeyDbTest extends TestCase
         self::assertFalse($service->rotate('11111111-1111-4111-8111-111111111111.nope')->valid);
     }
 
-    private function makeService(int $grace = 60): RefreshTokenService
+    private function makeService(int $grace = 60, ?ClockInterface $clock = null): RefreshTokenService
     {
-        return new RefreshTokenService($this->factory, self::SECRET, 2592000, $grace);
+        return new RefreshTokenService($this->factory, self::SECRET, 2592000, $grace, $clock ?? new NativeClock());
     }
 
     private function issue(RefreshTokenService $service): string

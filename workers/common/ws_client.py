@@ -246,8 +246,12 @@ class ResultSignal:
         )
 
     @classmethod
-    def failed(cls, *, error: str, permanent: bool = False) -> ResultSignal:
-        return cls(ok=False, error=str(error), permanent=bool(permanent))
+    def failed(
+        cls, *, error: str, permanent: bool = False, processing_ms: int | None = None
+    ) -> ResultSignal:
+        return cls(
+            ok=False, error=str(error), permanent=bool(permanent), processing_ms=processing_ms
+        )
 
     def raw_size(self) -> int:
         """Размер сырого выхода в байтах БЕЗ чтения файла в память (для выбора ветки
@@ -638,7 +642,7 @@ class WsClient:
         """Отправить терминал. Ветку inline-vs-large решаем по СЫРОМУ размеру (до base64)
         против inline_max (порог gateway, принятый из ready-ack; до ack — env-дефолт)."""
         if not signal.ok:
-            await self._send_fail(ws, job_id, signal.error, signal.permanent)
+            await self._send_fail(ws, job_id, signal.error, signal.permanent, signal.processing_ms)
             return
 
         # Размер выхода (stat, без чтения в RAM). Нечитаемый/пропавший произведённый выход —
@@ -679,11 +683,13 @@ class WsClient:
             )
 
     async def _send_fail(
-        self, ws, job_id: str, error: str, permanent: bool
+        self, ws, job_id: str, error: str, permanent: bool, processing_ms: int | None = None
     ) -> None:
         frame = {"type": "fail", "jobId": job_id, "error": error}
         if permanent:
             frame["permanent"] = True
+        if processing_ms is not None:
+            frame["processingMs"] = processing_ms
         await ws.send(json.dumps(frame))
         logger.info(
             "fail sent", extra={"jobId": job_id, "permanent": permanent, "error": error}
@@ -727,7 +733,10 @@ class WsClient:
         возвращает {'ok': true} БЕЗ ключа → мы не можем воспроизвести реальный S3-ключ.
         Предпочитаем `outputKey` из ответа (появится — станем forward-compatible), иначе —
         truthy-референс на джобу: gateway на large-пути только truthy-чекает resultKey и
-        делает trust-ack (§5), значение он не потребляет. См. отчёт-блокер s1-08."""
+        делает trust-ack (§5), значение он не потребляет. См. отчёт-блокер s1-08.
+
+        `processingMs` едет доп. form-полем (не файлом) — то же имя ключа, что и на
+        inline-пути (`_deliver`/`_send_fail`), чтобы контракт с PHP-зоной был единым."""
         http = await self._get_http()
         url = f"{self._cfg.api_base}/api/v1/worker/jobs/{job_id}/result"
         # ext авторитетно на стороне сервера (выводится из targetFormat); имя файла здесь —
@@ -736,16 +745,17 @@ class WsClient:
         filename = f"{job_id}.{signal.ext or 'bin'}"
         mime = signal.mime or "application/octet-stream"
         timeout = httpx.Timeout(30.0, read=300.0, write=None)
+        data = {"processingMs": str(signal.processing_ms)} if signal.processing_ms is not None else None
         if signal.path is not None:
             with open(signal.path, "rb") as fh:  # стрим с диска, без слёрпа в память
                 resp = await http.post(
                     url, headers=self._auth_headers(),
-                    files={"file": (filename, fh, mime)}, timeout=timeout,
+                    files={"file": (filename, fh, mime)}, data=data, timeout=timeout,
                 )
         else:
             resp = await http.post(
                 url, headers=self._auth_headers(),
-                files={"file": (filename, signal.data, mime)}, timeout=timeout,
+                files={"file": (filename, signal.data, mime)}, data=data, timeout=timeout,
             )
         resp.raise_for_status()
         key: str | None = None

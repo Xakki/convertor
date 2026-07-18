@@ -15,6 +15,10 @@
         <ini name="error_reporting" value="-1" />
         <server name="APP_ENV" value="test" force="true" />
         <server name="SHELL_VERBOSITY" value="-1" />
+        <!-- hardening-11: форс тест-токенов — иначе Symfony Dotenv не
+             перекрывает уже установленные OS-env dev-контейнера (см. карту) -->
+        <env name="WORKER_API_TOKEN" value="test-worker-token" force="true" />
+        <env name="GATEWAY_INTERNAL_TOKEN" value="test-internal-token" force="true" />
     </php>
 
     <testsuites>

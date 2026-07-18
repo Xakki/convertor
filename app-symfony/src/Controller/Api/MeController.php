@@ -78,8 +78,17 @@ class MeController extends AbstractController
             return null;
         }
 
-        $bytes = $this->s3->getObjectContents($this->s3->resultsBucket(), $key);
-        if ($bytes === null || $bytes === '' || \strlen($bytes) > self::AVATAR_MAX_BYTES) {
+        try {
+            // Настоящий Range-запрос на AVATAR_MAX_BYTES+1 байт: объект крупнее
+            // лимита не тянется в память целиком (readCapped ограничивает сам GET,
+            // а не пост-фактум strlen после полного чтения — см. hardening-09).
+            $bytes = $this->s3->readCapped($this->s3->resultsBucket(), $key, self::AVATAR_MAX_BYTES + 1);
+        } catch (\Throwable) {
+            // Объекта нет (NoSuchKey) или сбой чтения — трактуем как «нет фото».
+            return null;
+        }
+
+        if ($bytes === '' || \strlen($bytes) > self::AVATAR_MAX_BYTES) {
             return null;
         }
 

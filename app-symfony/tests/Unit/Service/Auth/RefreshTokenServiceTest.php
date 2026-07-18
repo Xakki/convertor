@@ -9,6 +9,9 @@ use App\Service\Auth\RefreshTokenService;
 use App\Service\Queue\RedisConnectionFactory;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Psr\Clock\ClockInterface;
+use Symfony\Component\Clock\MockClock;
+use Symfony\Component\Clock\NativeClock;
 
 /**
  * Drives the full refresh-family state machine against an in-memory \Redis
@@ -126,19 +129,38 @@ final class RefreshTokenServiceTest extends TestCase
 
     public function testReuseOfPreviousSecretAfterGraceExpiryRevokesFamily(): void
     {
-        // Simulate elapsed time: the service has no injectable clock, so we age
-        // the stored graceUntil into the past after a rotation.
+        // Drive elapsed time via an injected MockClock instead of poking the store.
         $redis      = $this->makeRedis();
-        $service    = $this->makeService($redis, grace: 60);
+        $clock      = new MockClock('2026-01-01T00:00:00+00:00');
+        $service    = $this->makeService($redis, grace: 60, clock: $clock);
         $cookie1    = $service->issueFamily($this->makeUser());
         [$familyId] = explode('.', $cookie1, 2);
 
         $service->rotate($cookie1); // cookie1 → cookie2 (cookie1 is prev, within grace)
-        $redis->poke($familyId, 'graceUntil', 1); // pretend the grace window has passed
+        $clock->modify('+61 seconds'); // advance past the grace window
 
         $reuse = $service->rotate($cookie1); // prev secret, but grace expired
         self::assertFalse($reuse->valid);
         self::assertNull($redis->peek($familyId), 'prev-after-grace must be treated as reuse and revoke the family');
+    }
+
+    public function testReplayOneSecondBeforeGraceExpiryStillValid(): void
+    {
+        // Boundary check on the other side: MockClock lets us land exactly one
+        // second inside the grace window, still a benign replay.
+        $redis      = $this->makeRedis();
+        $clock      = new MockClock('2026-01-01T00:00:00+00:00');
+        $service    = $this->makeService($redis, grace: 60, clock: $clock);
+        $cookie1    = $service->issueFamily($this->makeUser());
+        [$familyId] = explode('.', $cookie1, 2);
+
+        $service->rotate($cookie1); // cookie1 → cookie2 (cookie1 is prev, grace = now+60)
+        $clock->modify('+59 seconds'); // still inside the grace window
+
+        $replay = $service->rotate($cookie1);
+        self::assertTrue($replay->valid);
+        self::assertNull($replay->cookieValue, 'benign replay must leave the incoming cookie unchanged');
+        self::assertNotNull($redis->peek($familyId), 'family must survive a replay within grace');
     }
 
     public function testUnknownFamilyIsInvalid(): void
@@ -197,7 +219,7 @@ final class RefreshTokenServiceTest extends TestCase
         return $user;
     }
 
-    private function makeService(object $redis, int $grace = 60): RefreshTokenService
+    private function makeService(object $redis, int $grace = 60, ?ClockInterface $clock = null): RefreshTokenService
     {
         $factory = new class ($redis) extends RedisConnectionFactory {
             public function __construct(private \Redis $fake)
@@ -211,12 +233,13 @@ final class RefreshTokenServiceTest extends TestCase
             }
         };
 
-        return new RefreshTokenService($factory, self::SECRET, self::TTL, $grace);
+        return new RefreshTokenService($factory, self::SECRET, self::TTL, $grace, $clock ?? new NativeClock());
     }
 
     /**
-     * In-memory \Redis double that re-implements ROTATE_LUA in PHP. peek()/poke()
-     * let tests inspect and age the stored family JSON without a live server.
+     * In-memory \Redis double that re-implements ROTATE_LUA in PHP. peek() lets
+     * tests inspect the stored family JSON without a live server; elapsed time
+     * is driven through the service's injected MockClock, not by aging the store.
      */
     private function makeRedis()
     {
@@ -294,13 +317,6 @@ final class RefreshTokenServiceTest extends TestCase
                 $raw = $this->store['rt:' . $familyId] ?? null;
 
                 return $raw === null ? null : json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-            }
-
-            public function poke(string $familyId, string $field, mixed $value): void
-            {
-                $d                              = json_decode($this->store['rt:' . $familyId], true, 512, JSON_THROW_ON_ERROR);
-                $d[$field]                      = $value;
-                $this->store['rt:' . $familyId] = json_encode($d, JSON_THROW_ON_ERROR);
             }
         };
     }

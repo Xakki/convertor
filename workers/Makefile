@@ -246,12 +246,17 @@ test-python-ai: build-ffmpeg-test ## AI-worker + dev-server unit tests (runs in 
 test-drift: ## Routing-contract: PHP registry routing keys vs Python worker CAPABILITIES (may fail on known gaps — see .claude/kanban/grooming/)
 	PYTHONPATH=. pytest workers/tests/test_routing_drift.py -v
 
+# REDIS_DB=3 — та же изоляция, что test-e2e (.env.test: db3 отделяет
+# тест-стримы/ключи от прод-db2). Без этого gateway-тесты, использующие
+# load_config() напрямую (test_gateway_keydb / _reclaim_dlq / _progress_status),
+# писали XADD'ы (в т.ч. в canonical conv.dead) прямиком в dev-db2 (hardening-04).
 .PHONY: test-gateway
 test-gateway: build-data-test ## WS-Gateway KeyDB-слой на РЕАЛЬНОМ keydb (async, pytest-asyncio)
 	$(COMPOSE_TEST) up -d --wait keydb
 	docker run --rm -u root \
 	    --network $(COMPOSE_PROJECT_NAME)-network \
 	    -e REDIS_HOST=$(KEYDB_CONT) \
+	    -e REDIS_DB=3 \
 	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
 	    $(COMPOSE_PROJECT_NAME)/worker-data:test \
 	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
