@@ -211,6 +211,7 @@ class ConversionManager
                 category: $conversion->getCategory()->value,
                 isAi: $conversion->isAi(),
                 options: [],
+                attempt: (string) $conversion->getAttempt(),
             ),
             [new TransportNamesStamp(['conv_' . $key])],
         );

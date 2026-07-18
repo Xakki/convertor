@@ -66,6 +66,22 @@ class Config:
     # База URL Symfony для internal-relay (внутренний сервис в docker-сети).
     symfony_internal_url: str = "http://nginx"
 
+    # --- DLQ-consumer (conv.dead, hardening: conv-dead-no-consumer) ---
+    # Block-таймаут (мс) для XREADGROUP ... STREAMS conv.dead BLOCK <ms>. Держим
+    # тем же порядком, что ws_block_ms — не критично к точному значению, влияет
+    # только на задержку graceful shutdown (следующая проверка stop_event) И на
+    # период, с которым крутится XAUTOCLAIM-retry (см. dlq_consumer_retry_idle_ms).
+    dlq_consumer_block_ms: int = 5000
+    # Idle-порог (мс) для retry unacked-записей `conv.dead` (`reclaim_dlq_idle`,
+    # XAUTOCLAIM) — записи, на которых `post_dlq_fail` вернул False (5xx/сеть),
+    # остаются в PEL consumer'а и `>`-чтение их больше НЕ вернёт; без этого
+    # переклейма они осели бы в PEL навсегда. Держим заметно ниже job-стримовых
+    # RECLAIM_IDLE_MS_* (минуты) — DLQ-финализация лёгкая (один POST), частый
+    # retry не создаёт нагрузки сравнимой с job-обработкой.
+    dlq_consumer_retry_idle_ms: int = 30_000
+    # Число записей за один XAUTOCLAIM-вызов retry-прохода.
+    dlq_consumer_reclaim_batch: int = 10
+
     # --- Idle-reclaim (s1-06, §6.3) ---
     # Интервал между прогонами reclaim-цикла (секунды).
     reclaim_interval_s: float = 60.0
@@ -122,6 +138,9 @@ def load_config() -> Config:
         ws_reconnect_backoff_base_s=_getenv_float("WS_RECONNECT_BACKOFF_BASE_S", 1.0),
         ws_reconnect_backoff_max_s=_getenv_float("WS_RECONNECT_BACKOFF_MAX_S", 30.0),
         ws_reconnect_backoff_factor=_getenv_float("WS_RECONNECT_BACKOFF_FACTOR", 2.0),
+        dlq_consumer_block_ms=_getenv_int("DLQ_CONSUMER_BLOCK_MS", 5000),
+        dlq_consumer_retry_idle_ms=_getenv_int("DLQ_CONSUMER_RETRY_IDLE_MS", 30_000),
+        dlq_consumer_reclaim_batch=_getenv_int("DLQ_CONSUMER_RECLAIM_BATCH", 10),
         reclaim_interval_s=_getenv_float("RECLAIM_INTERVAL_S", 60.0),
         reclaim_batch=_getenv_int("RECLAIM_BATCH", 10),
         reclaim_idle_ms_document=_getenv_int("RECLAIM_IDLE_MS_DOCUMENT", 300_000),

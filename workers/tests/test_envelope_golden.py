@@ -33,6 +33,7 @@ _EXPECTED_JOB = {
     "category": "document",
     "isAi": False,
     "options": [],
+    "attempt": "0",
 }
 
 

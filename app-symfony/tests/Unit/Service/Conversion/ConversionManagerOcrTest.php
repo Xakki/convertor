@@ -162,6 +162,20 @@ final class ConversionManagerOcrTest extends TestCase
         self::assertSame('image', $r['message']->category);
     }
 
+    /**
+     * requeue-attempt-generation-marker: the INITIAL submit path (first ever
+     * dispatch, before any operator requeue) must carry `attempt` too — same
+     * dispatch() code path as requeue, so `Conversion::$attempt` default (0)
+     * flows through for free. Cross-zone contract: stringified int on the wire.
+     */
+    public function testInitialSubmitThreadsAttemptZero(): void
+    {
+        $r = $this->runConversion('jpg', 'txt', ['expectAi' => false]);
+
+        self::assertSame('0', $r['message']->attempt);
+        self::assertSame(0, $r['conversion']->getAttempt());
+    }
+
     public function testPdfToTxtWithoutFlagRoutesToDocument(): void
     {
         $r = $this->runConversion('pdf', 'txt', ['expectAi' => false]);

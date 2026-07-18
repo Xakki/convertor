@@ -121,3 +121,9 @@ firewall `GatewayInternalAuthenticator`, только для gateway, НЕ в Ne
   `#[OA\RequestBody(...)]` и т.д. — см. `ConversionController::convert()` или
   `AuthController::refresh()` как образцы. Новый публичный эндпоинт ДОЛЖЕН нести
   такие же атрибуты, иначе выпадет из `/api/doc`.
+- **Фактическая конвенция для `Admin/Api`:** несмотря на то что `^/api/v1/admin`
+  попадает в область Nelmio, все существующие admin-контроллеры OA-атрибутов
+  **НЕ несут** (admin — не публичный контракт, `ROLE_ADMIN`). Новый admin-эндпоинт
+  следует этой sibling-конвенции (без OA). Требование «ДОЛЖЕН нести OA» относится
+  к публичным user-facing эндпоинтам, не к admin. (Зафиксировано 2026-07-18 при
+  добавлении `POST /api/v1/admin/dead-letter/requeue`.)

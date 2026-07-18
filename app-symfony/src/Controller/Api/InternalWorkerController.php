@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
+use App\Repository\ConversionRepository;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Storage\S3Storage;
 use App\Service\Worker\ResultKeyBuilder;
@@ -23,6 +24,11 @@ use Symfony\Component\Routing\Attribute\Route;
  * - result: малый результат (≤256 KB) приходит inline (base64) по WS →
  *   gateway → сюда → Symfony пишет S3 + БД. Успешный 200 = сигнал gateway ацкать.
  * - fail: воркер сдался → gateway ретранслирует сюда → пометить failed + refund.
+ * - dlq-fail: job исчерпал ретраи и осел в DLQ-стриме `conv.dead` → отдельный
+ *   consumer gateway ретранслирует сюда → пометить failed + refund. В отличие от
+ *   fail() ключуется НАПРЯМУЮ по conversionId (не jobId→getJobMeta): запись
+ *   `worker:job:{jobId}` к моменту DLQ-записи уже удалена, поэтому getJobMeta()
+ *   дал бы гарантированный 404.
  */
 #[Route('/api/v1/internal/worker')]
 final class InternalWorkerController extends AbstractController
@@ -32,6 +38,7 @@ final class InternalWorkerController extends AbstractController
         private readonly ConversionResultPersister $persister,
         private readonly S3Storage $s3,
         private readonly ResultKeyBuilder $keyBuilder,
+        private readonly ConversionRepository $conversions,
     ) {
     }
 
@@ -103,7 +110,7 @@ final class InternalWorkerController extends AbstractController
             return $this->json(['error' => 'Job not found or already completed'], Response::HTTP_NOT_FOUND);
         }
 
-        $error        = is_array($body)        && isset($body['error']) ? (string) $body['error'] : 'Worker reported failure';
+        $error        = is_array($body) && isset($body['error']) ? (string) $body['error'] : 'Worker reported failure';
         $processingMs = is_array($body) && isset($body['processingMs']) && $body['processingMs'] !== null
             ? (int) $body['processingMs']
             : null;
@@ -113,6 +120,57 @@ final class InternalWorkerController extends AbstractController
             'state'        => 'failed',
             'error'        => mb_substr($error, 0, 500),
             'processingMs' => $processingMs,
+        ]);
+
+        return $this->json(['ok' => true]);
+    }
+
+    /**
+     * POST /api/v1/internal/worker/dlq-fail
+     * Body: {"conversionId":<int>,"reason":"<msg>","processingMs":<opt int|null>,"attempt":<opt int|null>}
+     *
+     * Keyed directly on conversionId (DLQ entry carries it), NOT jobId: the
+     * `worker:job:{jobId}` meta is already gone by the time the DLQ-consumer
+     * relays here, so getJobMeta() is not usable for this path. persist() is
+     * idempotent (status-guard skips Completed/Failed) and does the quota
+     * refund — the only thing this action adds is the 404 for an unknown
+     * conversionId (persist() itself only logs+no-ops on a miss).
+     *
+     * `attempt` (requeue-attempt-generation-marker, cross-zone contract with the
+     * gateway DLQ-consumer) — int|null, echoed from the job's `attempt` field.
+     * `null`/absent for DLQ entries written before this field existed (legacy,
+     * drained on first deploy) — persist() treats that as "no stale-guard",
+     * identical to today. Passed through untouched; the actual stale-vs-current
+     * comparison lives in {@see ConversionResultPersister::persist()}.
+     */
+    #[Route('/dlq-fail', methods: ['POST'])]
+    public function dlqFail(Request $request): JsonResponse
+    {
+        $body         = json_decode((string) $request->getContent(), true, 512, 0);
+        $conversionId = is_array($body) && isset($body['conversionId']) ? (int) $body['conversionId'] : 0;
+
+        if ($conversionId <= 0) {
+            return $this->json(['error' => '"conversionId" field is required'], Response::HTTP_BAD_REQUEST);
+        }
+
+        if ($this->conversions->find($conversionId) === null) {
+            return $this->json(['error' => 'Conversion not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $reason       = is_array($body) && isset($body['reason']) ? (string) $body['reason'] : 'Job exhausted retries (DLQ)';
+        $processingMs = is_array($body) && isset($body['processingMs']) && $body['processingMs'] !== null
+            ? (int) $body['processingMs']
+            : null;
+        $attempt = is_array($body) && isset($body['attempt']) && $body['attempt'] !== null
+            ? (int) $body['attempt']
+            : null;
+
+        $this->persister->persist([
+            'conversionId' => $conversionId,
+            'state'        => 'failed',
+            'error'        => mb_substr($reason, 0, 500),
+            'processingMs' => $processingMs,
+            'attempt'      => $attempt,
         ]);
 
         return $this->json(['ok' => true]);

@@ -14,6 +14,12 @@ class ConversionMessage
 {
     /**
      * @param array<string, mixed> $options
+     * @param string               $attempt requeue-attempt-generation-marker (cross-zone
+     *                                       contract) — Conversion.attempt at dispatch time,
+     *                                       stringified int (gateway/worker side already
+     *                                       treats it as a numeric string, see
+     *                                       workers/gateway/keydb.py `write_job_meta`).
+     *                                       "0" on the initial submit.
      */
     public function __construct(
         public readonly int $conversionId,
@@ -25,6 +31,7 @@ class ConversionMessage
         public readonly string $category,
         public readonly bool $isAi = false,
         public readonly array $options = [],
+        public readonly string $attempt = '0',
     ) {
     }
 }

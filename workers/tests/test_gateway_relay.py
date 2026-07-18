@@ -34,10 +34,12 @@ BASE_URL = "http://symfony-test"
 class FakeKeyDb:
     """Дак-тайп замена KeyDbGateway: скриптованные записи + журнал вызовов/ack."""
 
-    def __init__(self, *, new_entries=None, pending_entries=None, times_delivered=1):
+    def __init__(self, *, new_entries=None, pending_entries=None, times_delivered=1,
+                 job_meta_attempt=0):
         self._new = list(new_entries or [])
         self._pending = list(pending_entries or [])
         self._times_delivered = times_delivered
+        self._job_meta_attempt = job_meta_attempt
         self.read_new_calls: list[tuple] = []
         self.meta_writes: list[tuple] = []
         self.acks: list[tuple] = []
@@ -71,13 +73,17 @@ class FakeKeyDb:
         self.status_clears.append(conv_id)
 
     async def get_job_meta(self, job_id):
-        return {"conversionId": 1, "inputBucket": "", "inputKey": "", "stream": "", "targetFormat": ""}
+        return {"conversionId": 1, "inputBucket": "", "inputKey": "", "stream": "",
+                "targetFormat": "", "attempt": self._job_meta_attempt}
 
     async def get_times_delivered(self, stream, job_id):
         return self._times_delivered
 
-    async def add_to_dlq(self, stream, job_id, conv_id, reason):
-        self.dlq_writes.append({"stream": stream, "jobId": job_id, "convId": conv_id, "reason": reason})
+    async def add_to_dlq(self, stream, job_id, conv_id, reason, processing_ms=None, attempt=0):
+        self.dlq_writes.append({
+            "stream": stream, "jobId": job_id, "convId": conv_id, "reason": reason,
+            "processingMs": processing_ms, "attempt": attempt,
+        })
 
     async def ack(self, stream, job_id):
         # Зеркалит реальный ack: XACK + DEL. Идемпотентность проверяем на уровне
@@ -281,6 +287,67 @@ async def test_fail_permanent_goes_to_dlq():
     dlq = fake.dlq_writes[0]
     assert dlq["jobId"] == "1-0"
     assert "unsupported format" in dlq["reason"]
+    # requeue-attempt-generation-marker: job-мета без attempt (legacy) → дефолт 0
+    assert dlq["attempt"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fail_permanent_dlq_carries_attempt_from_job_meta():
+    """attempt из job-меты (записанной write_job_meta при диспетче) протянут в
+    add_to_dlq тем же путём, что и conv_id — через get_job_meta на fail-пути."""
+    job1 = {"conversionId": 1, "targetFormat": "txt", "attempt": "2"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1)], times_delivered=1, job_meta_attempt=2)
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="d-1", worker_type="data", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({
+                "type": "fail", "jobId": "1-0", "error": "boom", "permanent": True,
+            }))
+            await asyncio.sleep(0.1)
+
+    assert len(fake.dlq_writes) == 1
+    assert fake.dlq_writes[0]["attempt"] == 2
+
+
+@pytest.mark.asyncio
+async def test_fail_permanent_dlq_carries_processing_ms():
+    """hardening-06: processingMs из fail-фрейма протянут в add_to_dlq (не дропается)."""
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1)], times_delivered=1)
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="d-1", worker_type="data", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({
+                "type": "fail", "jobId": "1-0", "error": "boom",
+                "permanent": True, "processingMs": 555,
+            }))
+            await asyncio.sleep(0.1)
+
+    assert len(fake.dlq_writes) == 1
+    assert fake.dlq_writes[0]["processingMs"] == 555
+
+
+@pytest.mark.asyncio
+async def test_fail_dlq_processing_ms_null_when_absent():
+    """Без processingMs в fail-фрейме add_to_dlq получает None (null-shape)."""
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1)], times_delivered=1)
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="d-1", worker_type="data", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({
+                "type": "fail", "jobId": "1-0", "error": "boom", "permanent": True,
+            }))
+            await asyncio.sleep(0.1)
+
+    assert len(fake.dlq_writes) == 1
+    assert fake.dlq_writes[0]["processingMs"] is None
 
 
 @pytest.mark.asyncio
@@ -307,10 +374,12 @@ async def test_fail_max_retries_exceeded_goes_to_dlq():
 
 # --------------------------------------------------------------------------
 # RelayClient.post_fail — payload shape (processingMs), тестируется напрямую:
-# сегодня ws_server НЕ вызывает post_fail ни в одной ветке (см. тесты выше —
-# rec.requests == [] на всех fail-сценариях; conv.dead read consumer ещё не
-# написан, hardening-06/conv-dead-no-consumer). Контракт формы тела фиксируем
-# здесь заранее — тот же null-shape, что и у post_result (mime/processingMs).
+# ws_server НЕ вызывает post_fail ни в одной ветке (см. тесты выше — rec.requests
+# == [] на всех fail-сценариях; fail всегда идёт либо retryable-pending, либо
+# в DLQ — post_fail остаётся невостребованным путём gateway, отдельным от DLQ-
+# consumer'а, который зовёт post_dlq_fail, см. test_gateway_dlq_consumer.py).
+# Контракт формы тела фиксируем здесь напрямую — тот же null-shape, что и у
+# post_result (mime/processingMs).
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -328,6 +397,83 @@ async def test_post_fail_processing_ms_null_when_absent():
     relay = _relay(rec)
     await relay.post_fail("1-0", "boom")
     assert rec.requests[0]["body"] == {"jobId": "1-0", "error": "boom", "processingMs": None}
+
+
+# --------------------------------------------------------------------------
+# RelayClient.post_dlq_fail — DLQ-финализация (conv-dead-no-consumer): body
+# shape + 2xx/4xx/5xx dispositions (dlq_consumer.py relies on this to decide
+# ack vs leave-unacked-for-retry).
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_post_dlq_fail_body_shape_and_path():
+    rec = RelayRecorder(status=200)
+    relay = _relay(rec)
+    ok = await relay.post_dlq_fail(42, "worker exploded", processing_ms=999, attempt=3)
+    assert ok is True
+    assert rec.requests[0]["path"] == "/api/v1/internal/worker/dlq-fail"
+    assert rec.requests[0]["auth"] == f"Bearer {INTERNAL_TOKEN}"
+    assert rec.requests[0]["body"] == {
+        "conversionId": 42, "reason": "worker exploded", "processingMs": 999,
+        "attempt": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_dlq_fail_processing_ms_null_when_absent():
+    rec = RelayRecorder(status=200)
+    relay = _relay(rec)
+    await relay.post_dlq_fail(42, "worker exploded")
+    assert rec.requests[0]["body"] == {
+        "conversionId": 42, "reason": "worker exploded", "processingMs": None,
+        "attempt": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_dlq_fail_400_and_404_are_terminal_true():
+    """400 (bad conversionId) / 404 (Conversion not found) от InternalWorkerController::
+    dlqFail — retry не поможет (тот же запрос даст тот же ответ навсегда) → ack (True)."""
+    for status in (400, 404):
+        rec = RelayRecorder(status=status)
+        relay = _relay(rec)
+        ok = await relay.post_dlq_fail(42, "boom")
+        assert ok is True, f"status={status} should be treated as terminal (ack)"
+
+
+@pytest.mark.asyncio
+async def test_post_dlq_fail_auth_and_other_4xx_are_retryable_false():
+    """401/403 (GATEWAY_INTERNAL_TOKEN мисконфиг на firewall internal_api) и
+    408/429 — ВСЁ ЕЩЁ retryable, НЕ terminal. Узкий whitelist {400,404} — намеренно:
+    трактовать произвольный 4xx как terminal значило бы тихо ack'ать (терять) DLQ-
+    записи при протухшем/неверном токене — хуже исходного бага (conv.dead без
+    потребителя вообще не терял записи, только не финализировал их)."""
+    for status in (401, 403, 408, 429):
+        rec = RelayRecorder(status=status)
+        relay = _relay(rec)
+        ok = await relay.post_dlq_fail(42, "boom")
+        assert ok is False, f"status={status} must stay retryable (not ack)"
+
+
+@pytest.mark.asyncio
+async def test_post_dlq_fail_5xx_is_retryable_false():
+    """5xx (Symfony down/erroring) — transient → НЕ ack, dlq_consumer оставит unacked."""
+    rec = RelayRecorder(status=503)
+    relay = _relay(rec)
+    ok = await relay.post_dlq_fail(42, "boom")
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_post_dlq_fail_network_error_is_retryable_false():
+    """Сетевая ошибка (нет ответа вообще) — тоже retryable, не terminal."""
+    def _raise(request):
+        raise httpx.ConnectError("boom", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_raise))
+    relay = RelayClient(BASE_URL, INTERNAL_TOKEN, client=client)
+    ok = await relay.post_dlq_fail(42, "boom")
+    assert ok is False
 
 
 # --------------------------------------------------------------------------

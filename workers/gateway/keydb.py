@@ -203,6 +203,13 @@ class KeyDbGateway:
         Набор/порядок полей идентичен `WorkerStreamGateway::claim()` (строки 70-78);
         `stream` = `conv.<type>` из контекста чтения (в payload задачи его нет),
         отсутствующие поля дефолтятся в 0/"". Зеркалит перенос владения из §5 спеки.
+
+        `attempt` (requeue-generation-маркер, `requeue-attempt-generation-marker`)
+        читается из job-дословно так же, как `conversionId`: строка-int от PHP
+        (`"0"`, `"1"`, ...), отсутствует на legacy-задачах (до раскатки этого
+        изменения) → дефолт 0. Сохраняем в мете, чтобы на fail-пути (только
+        `job_id`, самого job-dict уже нет) достать его тем же путём, что и
+        `conversionId` — через `get_job_meta`.
         """
         meta = json.dumps({
             "conversionId": int(job.get("conversionId", 0) or 0),
@@ -210,12 +217,17 @@ class KeyDbGateway:
             "inputKey": str(job.get("inputKey", "") or ""),
             "stream": stream,
             "targetFormat": str(job.get("targetFormat", "") or ""),
+            "attempt": int(job.get("attempt", 0) or 0),
         })
         # SET ... EX <ttl> == SETEX (одна атомарная запись value+TTL).
         await self._redis.set(_job_key(job_id), meta, ex=JOB_META_TTL)
 
     async def get_job_meta(self, job_id: str) -> dict | None:
-        """`GET worker:job:{jobId}` → разобранный dict или `None` (зеркалит getJobMeta)."""
+        """`GET worker:job:{jobId}` → разобранный dict или `None` (зеркалит getJobMeta).
+
+        `attempt` — см. `write_job_meta`; мета, записанная ДО этого изменения
+        (legacy), не несёт ключа → дефолт 0 тем же `or 0`, что и `conversionId`.
+        """
         raw = await self._redis.get(_job_key(job_id))
         if not raw:
             return None
@@ -230,6 +242,7 @@ class KeyDbGateway:
             "inputKey": str(data.get("inputKey", "") or ""),
             "stream": str(data.get("stream", "") or ""),
             "targetFormat": str(data.get("targetFormat", "") or ""),
+            "attempt": int(data.get("attempt", 0) or 0),
         }
 
     # ------------------------------------------------------------------
@@ -268,22 +281,29 @@ class KeyDbGateway:
         return 1
 
     async def add_to_dlq(
-        self, stream: str, job_id: str, conv_id: int, reason: str
+        self,
+        stream: str,
+        job_id: str,
+        conv_id: int,
+        reason: str,
+        processing_ms: int | None = None,
+        attempt: int = 0,
     ) -> None:
         """`XADD conv.dead` + `XACK` оригинала + `DEL` меты (DLQ, s1-06 §6.4).
 
         Форма поля `data` зеркалит `stream_consumer._send_to_dlq` (единственный
         исторический producer `conv.dead`): JSON с ключами conversionId / state /
-        reason / originalStream / originalEntryId. Реальная причина (reason) — не
-        хардкод; для permanent-фейла это строка worker'а, для max-retries —
-        строка worker'а с суффиксом `(times_delivered=N)`.
-
-        Семантика записи в `conv.dead` — at-least-once: `XADD conv.dead` и `XACK`
-        оригинала — две отдельные операции. Если `XACK` упадёт после успешного
-        `XADD`, запись останется и в `conv.dead`, и в PEL `gw-reclaim`, поэтому
-        idle-reclaim передиспетчеризует её и падающий worker может произвести
-        ДУБЛЬ записи `conv.dead` с тем же conversionId. Дедупликация (по
-        conversionId) — ответственность consumer'а DLQ.
+        reason / originalStream / originalEntryId / processingMs / attempt.
+        Реальная причина (reason) — не хардкод; для permanent-фейла это строка
+        worker'а, для max-retries — строка worker'а с суффиксом
+        `(times_delivered=N)`.
+        `processingMs` (int|null) — из WS fail-фрейма воркера (`hardening-06`);
+        `None`, если воркер его не прислал — поле в JSON всё равно присутствует
+        как `null` (предсказуемый shape для consumer'а `conv.dead`).
+        `attempt` (int, requeue-generation-маркер, `requeue-attempt-generation-marker`) —
+        В ОТЛИЧИЕ от `processingMs` ВСЕГДА int, никогда `null`: вызывающий код
+        (`ws_server._to_dlq_and_release`) уже дефолтит его в 0 для legacy-задач
+        до передачи сюда — здесь просто прокидываем дословно.
         """
         dlq_payload = json.dumps({
             "conversionId": conv_id,
@@ -291,10 +311,122 @@ class KeyDbGateway:
             "reason": reason,
             "originalStream": stream,
             "originalEntryId": job_id,
+            "processingMs": processing_ms,
+            "attempt": int(attempt or 0),
         })
         await self._redis.xadd(DLQ_STREAM, {"data": dlq_payload})
         await self._redis.xack(stream, GROUP, job_id)
         await self._redis.delete(_job_key(job_id))
+
+    # ------------------------------------------------------------------
+    # DLQ-consumer (conv.dead читатель, hardening: conv-dead-no-consumer)
+    # ------------------------------------------------------------------
+
+    async def read_dlq(
+        self, consumer: str, block_ms: int
+    ) -> tuple[str, dict] | None:
+        """`XREADGROUP GROUP convertor <consumer> COUNT 1 BLOCK <ms> STREAMS conv.dead >`.
+
+        Зеркалит `read_new`, но: (1) фиксированный стрим `conv.dead`, (2) разбирает
+        поле `data` (форма `add_to_dlq`), НЕ `message` (`parse_message` сюда не
+        подходит — контракт DLQ-записи иной), (3) БЕЗ `DEL worker:job` в `ack_dlq` —
+        у DLQ-записей нет job-меты. Возвращает `(entryId, payload)` или `None`
+        (нет записи / poison-дроп искажённой/нечитаемой `data`).
+        """
+        await self.ensure_group(DLQ_STREAM)
+
+        messages = await self._redis.xreadgroup(
+            GROUP, consumer, {DLQ_STREAM: ">"}, count=1, block=block_ms
+        )
+        entry = _first_entry(messages)
+        if entry is None:
+            return None
+
+        entry_id, fields = entry
+        return await self._decode_dlq_or_ack(entry_id, fields)
+
+    async def ack_dlq(self, entry_id: str) -> None:
+        """`XACK conv.dead convertor <entryId>` — БЕЗ `DEL` (DLQ-записи без job-меты)."""
+        await self._redis.xack(DLQ_STREAM, GROUP, entry_id)
+
+    async def reclaim_dlq_idle(
+        self, consumer: str, min_idle_ms: int, count: int = 10
+    ) -> list[tuple[str, dict]]:
+        """`XAUTOCLAIM conv.dead convertor <consumer> <min_idle_ms> 0-0 COUNT <count>`.
+
+        `read_dlq` читает ТОЛЬКО новые записи (`>`) — раз запись уже доставлена
+        consumer'у, `>` её больше НЕ вернёт, даже если она осталась unacked
+        (транзиентный фейл relay). Без этого метода "оставить unacked → retry на
+        следующем sweep'е" (контракт `dlq_consumer.py`) было бы ложью: запись
+        осела бы в PEL `consumer`'а НАВСЕГДА. Этот метод — retry-механизм:
+        переклеймивает свои же (или чужие) простаивающие >min_idle_ms записи для
+        повторной обработки. Зеркалит `reclaim_idle`, но decode через
+        `_decode_dlq_or_ack` (поле `data`, контракт DLQ, не job-стримов).
+        """
+        await self.ensure_group(DLQ_STREAM)
+
+        try:
+            result = await self._redis.xautoclaim(
+                DLQ_STREAM, GROUP, consumer, min_idle_time=min_idle_ms,
+                start_id="0-0", count=count,
+            )
+        except Exception as exc:
+            logger.warning(
+                "reclaim_dlq_idle XAUTOCLAIM failed",
+                extra={"consumer": consumer, "error": str(exc)},
+            )
+            return []
+
+        entries = result[1] if result and len(result) > 1 else []
+        out: list[tuple[str, dict]] = []
+        for entry in entries:
+            entry_id, fields = entry
+            decoded = await self._decode_dlq_or_ack(_to_str(entry_id), fields)
+            if decoded is not None:
+                out.append(decoded)
+        return out
+
+    async def _decode_dlq_or_ack(
+        self, entry_id: str, fields: dict
+    ) -> tuple[str, dict] | None:
+        """Разобрать поле `data` DLQ-записи; при провале — `XACK` (дроп) + `None`.
+
+        Poison-safe как `_decode_or_ack` для job-стримов: искажённая/отсутствующая
+        `data` ИЛИ `conversionId<=0` не должна крутиться в consumer'е вечно (без
+        этого guard'а retry через `reclaim_dlq_idle` превратил бы poison-запись в
+        бесконечный цикл: relay/PHP отдаёт 400 на `conversionId<=0`, `post_dlq_fail`
+        не смог бы её ни зафиналить, ни отбросить).
+        """
+        raw = fields.get("data")
+        if raw is None:
+            await self._redis.xack(DLQ_STREAM, GROUP, entry_id)
+            logger.error(
+                "Poisoned DLQ entry (missing 'data') — dropped",
+                extra={"entryId": entry_id},
+            )
+            return None
+
+        try:
+            payload = json.loads(_to_str(raw))
+            if not isinstance(payload, dict):
+                raise TypeError("DLQ 'data' is not a JSON object")
+        except Exception as exc:
+            await self._redis.xack(DLQ_STREAM, GROUP, entry_id)
+            logger.error(
+                "Poisoned DLQ entry (invalid 'data') — dropped",
+                extra={"entryId": entry_id, "error": str(exc)},
+            )
+            return None
+
+        if int(payload.get("conversionId", 0) or 0) <= 0:
+            await self._redis.xack(DLQ_STREAM, GROUP, entry_id)
+            logger.error(
+                "DLQ entry has no positive conversionId — dropped",
+                extra={"entryId": entry_id, "conversionId": payload.get("conversionId")},
+            )
+            return None
+
+        return (entry_id, payload)
 
     async def reclaim_idle(
         self,

@@ -517,14 +517,16 @@ class WsGateway:
         permanent:true → немедленный DLQ (детерминированная неретраябельная ошибка).
         times_delivered > MAX_RETRIES → DLQ (poison-job по счётчику PEL).
         Иначе: кредит освобождается, запись остаётся unacked — idle-reclaim подберёт
-        и передиспетчеризует (retry). Relay НЕ вызывается ни в одной ветке:
-        PHP читает DLQ из conv.dead; retryable-fail → pending (результат через retry).
+        и передиспетчеризует (retry). Relay (post_fail/post_result) НЕ вызывается ни
+        в одной ветке: DLQ-consumer (`dlq_consumer.py`) читает `conv.dead` отдельно
+        и сам зовёт relay (`post_dlq_fail`); retryable-fail → pending (результат
+        через retry).
 
-        ТРЕБОВАНИЕ к будущему consumer'у `conv.dead`: он ОБЯЗАН быть идемпотентным
-        по `conversionId` — записи DLQ пишутся at-least-once (см. docstring
-        `KeyDB.add_to_dlq`), возможны дубли на один conversionId. Переиспользовать
-        status-guard из ConversionResultPersister.php:56-59 (skip, если статус уже
-        Completed/Failed).
+        ТРЕБОВАНИЕ к consumer'у `conv.dead` (`dlq_consumer.py`): он ОБЯЗАН быть
+        идемпотентным по `conversionId` — записи DLQ пишутся at-least-once (см.
+        docstring `KeyDB.add_to_dlq`), возможны дубли на один conversionId.
+        Выполняется на стороне Symfony через status-guard
+        `ConversionResultPersister` (skip, если статус уже Completed/Failed).
         """
         job_id = frame.get("jobId")
         if not isinstance(job_id, str) or not job_id:
@@ -538,9 +540,12 @@ class WsGateway:
         error = frame.get("error")
         error = str(error) if error is not None else ""
         permanent = bool(frame.get("permanent"))
+        processing_ms = frame.get("processingMs")
 
         if permanent:
-            await self._to_dlq_and_release(session, credits, job_id, error)
+            await self._to_dlq_and_release(
+                session, credits, job_id, error, processing_ms
+            )
             return
 
         times_delivered = await self._keydb.get_times_delivered(session.stream, job_id)
@@ -551,7 +556,9 @@ class WsGateway:
                 extra={"jobId": job_id, "timesDelivered": times_delivered,
                        "maxRetries": MAX_RETRIES},
             )
-            await self._to_dlq_and_release(session, credits, job_id, reason)
+            await self._to_dlq_and_release(
+                session, credits, job_id, reason, processing_ms
+            )
             return
 
         # Retryable: оставить unacked (idle-reclaim переклеймит), кредит освободить.
@@ -562,24 +569,44 @@ class WsGateway:
         )
 
     async def _to_dlq_and_release(
-        self, session: WorkerSession, credits: Credits, job_id: str, reason: str
+        self,
+        session: WorkerSession,
+        credits: Credits,
+        job_id: str,
+        reason: str,
+        processing_ms: int | None = None,
     ) -> None:
-        """DLQ: XADD conv.dead + XACK + DEL меты + кредит освобождён. Идемпотентно."""
+        """DLQ: XADD conv.dead + XACK + DEL меты + кредит освобождён. Идемпотентно.
+
+        `processing_ms` — из fail-фрейма воркера (может отсутствовать/быть None);
+        прокидывается в DLQ-payload дословно (см. `KeyDbGateway.add_to_dlq`), чтобы
+        DLQ-consumer мог передать его в финализацию `Conversion.failed`.
+
+        `attempt` (requeue-generation-маркер, `requeue-attempt-generation-marker`)
+        читается из `job_id`-меты ТЕМ ЖЕ путём, что и `conv_id` — самого job-dict
+        здесь уже нет (fail-фрейм несёт только jobId), только то, что `_dispatch`
+        сохранил в `write_job_meta`. Сбой `get_job_meta` или отсутствие ключа
+        (legacy-мета до раскатки этого изменения) → дефолт 0, как у `conv_id`.
+        """
         if job_id not in credits.inflight:
             logger.info("duplicate DLQ call — ignored", extra={"jobId": job_id})
             return
         conv_id = 0
+        attempt = 0
         try:
             meta = await self._keydb.get_job_meta(job_id)
             if meta:
                 conv_id = meta.get("conversionId", 0) or 0
+                attempt = meta.get("attempt", 0) or 0
         except Exception as exc:
             logger.warning(
                 "get_job_meta failed in DLQ path — conv_id=0",
                 extra={"jobId": job_id, "error": str(exc)},
             )
         try:
-            await self._keydb.add_to_dlq(session.stream, job_id, conv_id, reason)
+            await self._keydb.add_to_dlq(
+                session.stream, job_id, conv_id, reason, processing_ms, attempt
+            )
         except Exception as exc:
             # DLQ-запись НЕ прошла → это НЕ терминал: запись остаётся полностью
             # pending (без XACK), idle-reclaim переклеймит и повторит. conv:status

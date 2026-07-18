@@ -55,6 +55,17 @@ class Conversion
     #[ORM\Column(type: 'boolean')]
     private bool $isOcr = false;
 
+    /**
+     * Attempt/generation-маркер (requeue-attempt-generation-marker). 0 = первичный
+     * сабмит, инкрементится оператором на каждый {@see \App\Controller\Admin\Api\DlqController::requeue()}.
+     * Протягивается в job (см. {@see \App\Service\Conversion\ConversionManager::dispatch()})
+     * и обратно в dlq-fail — {@see \App\Service\Queue\ConversionResultPersister::persist()}
+     * сверяет его со свежим значением на строке, чтобы stale-финализация устаревшей
+     * попытки не убила свежий requeue (double-refund / потерянный результат).
+     */
+    #[ORM\Column(type: 'integer', options: ['default' => 0])]
+    private int $attempt = 0;
+
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
 
@@ -206,6 +217,29 @@ class Conversion
     public function setIsOcr(bool $isOcr): self
     {
         $this->isOcr = $isOcr;
+
+        return $this;
+    }
+
+    public function getAttempt(): int
+    {
+        return $this->attempt;
+    }
+
+    public function setAttempt(int $attempt): self
+    {
+        $this->attempt = $attempt;
+
+        return $this;
+    }
+
+    /**
+     * Бампает generation-маркер на новую попытку (см. класс-докблок поля).
+     * Единственный вызывающий сейчас — оператор-requeue.
+     */
+    public function incrementAttempt(): self
+    {
+        ++$this->attempt;
 
         return $this;
     }

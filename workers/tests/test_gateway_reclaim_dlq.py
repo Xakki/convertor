@@ -199,7 +199,10 @@ async def test_add_to_dlq_shape_and_acks():
         job_id, decoded = result
 
         dlq_len_before = await client.xlen(DLQ_STREAM)
-        await gw.add_to_dlq(stream, job_id, decoded["conversionId"], "unit test reason")
+        await gw.add_to_dlq(
+            stream, job_id, decoded["conversionId"], "unit test reason",
+            processing_ms=1234, attempt=2,
+        )
         dlq_len_after = await client.xlen(DLQ_STREAM)
 
         # Одна запись добавлена в conv.dead
@@ -215,6 +218,65 @@ async def test_add_to_dlq_shape_and_acks():
         assert data["originalStream"] == stream
         assert data["originalEntryId"] == job_id
         assert data["state"] == "failed"
+        # hardening-06: processingMs протянут в DLQ-payload дословно из fail-фрейма
+        assert data["processingMs"] == 1234
+        # requeue-attempt-generation-marker: attempt протянут дословно, всегда int
+        assert data["attempt"] == 2
+    finally:
+        await _cleanup(client, stream)
+        await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# [F3] add_to_dlq: attempt отсутствует у вызывающего → дефолт 0 (legacy job)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_add_to_dlq_attempt_defaults_to_zero_when_omitted():
+    """Legacy-задача без attempt на job-стриме → вызывающий код не передаёт
+    attempt → add_to_dlq дефолтит его в 0 (int, НЕ null — в отличие от
+    processingMs), см. KeyDbGateway.add_to_dlq docstring."""
+    client, gw = await _new_real_kv()
+    stream = stream_for(_unique_type())
+    consumer = "rtest-dlq-attempt-default"
+    try:
+        await client.xadd(stream, {"message": json.dumps(GOLDEN_JOB)})
+        result = await gw.read_new(stream, consumer, block_ms=2000)
+        assert result is not None
+        job_id, decoded = result
+
+        await gw.add_to_dlq(stream, job_id, decoded["conversionId"], "unit test reason")
+
+        recent = await client.xrevrange(DLQ_STREAM, count=1)
+        data = json.loads(recent[0][1]["data"])
+        assert data["attempt"] == 0
+    finally:
+        await _cleanup(client, stream)
+        await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# [F2] add_to_dlq: processingMs=None по умолчанию → null-shape в payload
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_add_to_dlq_processing_ms_null_when_absent():
+    """Без явного processing_ms в payload пишется `processingMs: null` (не пропущено)."""
+    client, gw = await _new_real_kv()
+    stream = stream_for(_unique_type())
+    consumer = "rtest-dlq-null"
+    try:
+        await client.xadd(stream, {"message": json.dumps(GOLDEN_JOB)})
+        result = await gw.read_new(stream, consumer, block_ms=2000)
+        assert result is not None
+        job_id, decoded = result
+
+        await gw.add_to_dlq(stream, job_id, decoded["conversionId"], "unit test reason")
+
+        recent = await client.xrevrange(DLQ_STREAM, count=1)
+        data = json.loads(recent[0][1]["data"])
+        assert "processingMs" in data
+        assert data["processingMs"] is None
     finally:
         await _cleanup(client, stream)
         await client.aclose()
@@ -279,14 +341,15 @@ class FakeKeyDbDlq:
 
     async def get_job_meta(self, job_id):
         return {"conversionId": 9999, "inputBucket": "", "inputKey": "",
-                "stream": "", "targetFormat": ""}
+                "stream": "", "targetFormat": "", "attempt": 0}
 
     async def get_times_delivered(self, stream, job_id):
         return self._times_delivered
 
-    async def add_to_dlq(self, stream, job_id, conv_id, reason):
+    async def add_to_dlq(self, stream, job_id, conv_id, reason, processing_ms=None, attempt=0):
         self.dlq_writes.append({
             "stream": stream, "jobId": job_id, "convId": conv_id, "reason": reason,
+            "processingMs": processing_ms, "attempt": attempt,
         })
 
     async def ack(self, stream, job_id):

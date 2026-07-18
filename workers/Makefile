@@ -259,7 +259,7 @@ test-gateway: build-data-test ## WS-Gateway KeyDB-слой на РЕАЛЬНОМ
 	    -e REDIS_DB=3 \
 	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
 	    $(COMPOSE_PROJECT_NAME)/worker-data:test \
-	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
+	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_dlq_consumer.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
 
 .PHONY: test-e2e
 test-e2e: build-workers build-ffmpeg-test ## Real S3 in/out e2e for ffmpeg + data workers (run `make up` first)

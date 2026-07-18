@@ -59,4 +59,38 @@ gateway читает DLQ и шлёт Symfony через internal relay кома�
 fail-frame перед записью в DLQ — расширить DLQ-payload этим полем и протянуть его
 до финализации `Conversion.failed`, иначе тайминг фейла так и не запишется.
 
-**Status:** grooming.
+**Scope-подтверждение (2026-07-18):** пользователь выбрал ПОЛНЫЙ объём —
+финализация + operator-requeue. Дизайн requeue: оператор работает от БД
+(строки `Conversion` со `status=failed`), НЕ от сырого `conv.dead` (его читает
+только gateway). Requeue = взять failed-конверсию по `conversionId` → сброс в
+`pending` → пере-постановка в `conv.<category>` штатным путём продюсера
+(Symfony API). `conv.dead` не трогаем (консьюмер её уже заакал).
+
+**Контракт internal-эндпоинта финализации** (gateway→Symfony):
+`POST /api/v1/internal/worker/dlq-fail`, firewall `internal_api` (bearer
+`GATEWAY_INTERNAL_TOKEN`), body `{"conversionId":int,"reason":str,"processingMs":int|null}`
+→ `ConversionResultPersister::persist(state=failed)` (идемпотентно), 200 `{"ok":true}`.
+
+**Ревью #1 (2026-07-18) → CHANGES REQUESTED → фикс в этой же ветке:**
+Core-финализация чистая. В requeue-пути найдено 2 MAJOR + 1 MINOR. Решение
+пользователя — фиксить сейчас (grooming-карта `requeue-attempt-generation-marker`
+заведена и ретайрнута — фикс приземлён в этой же ветке).
+Механизм: поле `Conversion.attempt` (migration, default 0), протянуть
+`attempt` через `dispatch → job → gateway → DLQ-payload → dlq-fail`, персистер
+игнорирует stale (`payload.attempt < current`). Requeue: bump attempt +
+forced re-charge квоты (симметрия charge/refund, без лимит-гейта = оператор-
+override) + rollback статуса в Failed при падении dispatch.
+
+**Ревью #2 (2026-07-18, generation-marker) → APPROVE.** Обе round-1 MAJOR + MINOR
+закрыты, новых блокеров нет. Проверено: stale-guard строго `<` + null-bypass,
+квотная симметрия submit→fail→requeue→{fail,success}, гонка dup после requeue
+(attempt из per-jobId meta старой джобы, guard гасит `0<1`), rollback dispatch
+до/после flush. Некритичные находки: `dlq-requeue-charge-not-atomic` (Minor, введён фиксом) —
+**устранён здесь же** (charge+статус в одной `wrapInTransaction`, карта ретайрнута);
+[[dlq-requeue-no-concurrency-lock]] (Nit, пред-существующий) — оставлен в grooming.
+
+**QA green:** PHP 270 passed / phpstan [OK] / cs 0; gateway 122; python-data 98.
+**AC:** все выполнены (Conversion детерминированно → failed с реальной причиной;
+нет вечного pending; conv.dead читается консьюмером) + operator-requeue (полный объём).
+
+**Status:** test — ревью APPROVE, QA green. Ждёт финального ready→done пользователя.

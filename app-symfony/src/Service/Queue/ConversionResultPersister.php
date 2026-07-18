@@ -53,6 +53,30 @@ final class ConversionResultPersister
         }
         assert($conversion instanceof Conversion);
 
+        // Stale-attempt guard (requeue-attempt-generation-marker): a result/fail
+        // event carrying an `attempt` older than the row's CURRENT attempt targets
+        // an attempt that an operator requeue already superseded — e.g. a delayed
+        // duplicate dlq-fail for the previous, now-replaced generation. Must run
+        // BEFORE the terminal-status guard below: after requeue the row is back to
+        // Pending (non-terminal), so without this check the guard would fall
+        // through and a stale dlq-fail would refund/fail the FRESH attempt (double
+        // refund, or clobbering a result that already completed). `attempt` absent
+        // or null (legacy DLQ entries drained before this field existed, and the
+        // jobId-keyed result()/fail() path which never sends it) → no-op here,
+        // behave exactly as before.
+        $attempt = array_key_exists('attempt', $body) && $body['attempt'] !== null
+            ? (int) $body['attempt']
+            : null;
+        if ($attempt !== null && $attempt < $conversion->getAttempt()) {
+            $this->logger->info('Result event for superseded attempt ignored', [
+                'id'             => $conversionId,
+                'eventAttempt'   => $attempt,
+                'currentAttempt' => $conversion->getAttempt(),
+            ]);
+
+            return;
+        }
+
         // Idempotency guard: skip if already finalized.
         if (in_array($conversion->getStatus(), [ConversionStatus::Completed, ConversionStatus::Failed], true)) {
             return;

@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Service\Storage;
 
+use AsyncAws\S3\Exception\NoSuchKeyException;
 use AsyncAws\S3\Input\DeleteObjectRequest;
 use AsyncAws\S3\Input\GetObjectRequest;
+use AsyncAws\S3\Input\HeadObjectRequest;
 use AsyncAws\S3\Input\PutObjectRequest;
 use AsyncAws\S3\Result\GetObjectOutput;
 use AsyncAws\S3\S3Client;
@@ -71,6 +73,26 @@ final class S3Storage
             'Bucket' => $bucket,
             'Key'    => $key,
         ]))->resolve();
+    }
+
+    /**
+     * Существует ли объект в бакете. HEAD, а не GET — метаданные без тела, дёшево
+     * для gate-проверок перед side-effecting операцией (напр. admin DLQ-requeue:
+     * не ставить job в очередь, если исходник уже вычищен FileCleanupService).
+     * NoSuchKeyException (404) → false; форсируем resolve(), как остальные методы.
+     */
+    public function objectExists(string $bucket, string $key): bool
+    {
+        try {
+            $this->client->headObject(new HeadObjectRequest([
+                'Bucket' => $bucket,
+                'Key'    => $key,
+            ]))->resolve();
+
+            return true;
+        } catch (NoSuchKeyException) {
+            return false;
+        }
     }
 
     /**

@@ -205,15 +205,18 @@ class FakeKeyDbStatus:
 
     async def get_job_meta(self, job_id):
         return {"conversionId": 777, "inputBucket": "", "inputKey": "",
-                "stream": "", "targetFormat": ""}
+                "stream": "", "targetFormat": "", "attempt": 0}
 
     async def get_times_delivered(self, stream, job_id):
         return self._times_delivered
 
-    async def add_to_dlq(self, stream, job_id, conv_id, reason):
+    async def add_to_dlq(self, stream, job_id, conv_id, reason, processing_ms=None, attempt=0):
         if self._dlq_raises:
             raise RuntimeError("simulated DLQ write failure")
-        self.dlq_writes.append({"jobId": job_id, "convId": conv_id, "reason": reason})
+        self.dlq_writes.append({
+            "jobId": job_id, "convId": conv_id, "reason": reason,
+            "processingMs": processing_ms, "attempt": attempt,
+        })
 
     async def ack(self, stream, job_id):
         self.acks.append((stream, job_id))

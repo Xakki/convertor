@@ -109,6 +109,93 @@ final class ConversionResultPersisterTest extends TestCase
         $persister->persist(['conversionId' => 2, 'state' => 'completed', 'outputKey' => 'y.pdf']);
     }
 
+    /**
+     * requeue-attempt-generation-marker MAJOR #2: a result/fail event carrying an
+     * `attempt` OLDER than the row's current attempt targets an attempt an
+     * operator requeue already superseded (e.g. a delayed duplicate dlq-fail) —
+     * must be a complete no-op: no status change, no refund, no flush. The row
+     * is left exactly as the requeue set it (here: Processing, simulating a
+     * fresh in-flight attempt).
+     */
+    public function testStaleAttemptIsIgnoredEntirely(): void
+    {
+        $conversion = $this->createStub(Conversion::class);
+        $conversion->method('getStatus')->willReturn(ConversionStatus::Processing);
+        $conversion->method('getAttempt')->willReturn(1);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('find')->willReturn($conversion);
+        $em->expects($this->never())->method('flush');
+
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->never())->method('refund');
+
+        $persister = $this->makePersister($this->makeRegistry($em), $quota);
+        $persister->persist([
+            'conversionId' => 1,
+            'state'        => 'failed',
+            'error'        => 'stale duplicate DLQ entry',
+            'attempt'      => 0,
+        ]);
+
+        $this->addToAssertionCount(1);
+    }
+
+    /**
+     * Boundary: `attempt` equal to (not older than) the row's current attempt is
+     * NOT stale — normal finalization (including refund) proceeds as before.
+     */
+    public function testAttemptMatchingCurrentIsNotStale(): void
+    {
+        $user = new User();
+
+        $conversion = $this->createStub(Conversion::class);
+        $conversion->method('getStatus')->willReturn(ConversionStatus::Processing);
+        $conversion->method('getAttempt')->willReturn(1);
+        $conversion->method('getUser')->willReturn($user);
+        $conversion->method('isAi')->willReturn(false);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('find')->willReturn($conversion);
+        $em->method('wrapInTransaction')->willReturnCallback(static fn (callable $fn): mixed => $fn($em));
+        $em->expects($this->once())->method('flush');
+
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->once())->method('refund')->with($user, false);
+
+        $persister = $this->makePersister($this->makeRegistry($em), $quota);
+        $persister->persist(['conversionId' => 1, 'state' => 'failed', 'error' => 'boom', 'attempt' => 1]);
+    }
+
+    /**
+     * Backward-compat: `attempt` absent/null (legacy DLQ entries drained before
+     * this field existed, and the jobId-keyed result()/fail() path which never
+     * sends it) → the stale-guard is skipped entirely, behaving exactly as
+     * before this change.
+     */
+    public function testNullAttemptBypassesStaleGuard(): void
+    {
+        $user = new User();
+
+        $conversion = $this->createStub(Conversion::class);
+        $conversion->method('getStatus')->willReturn(ConversionStatus::Processing);
+        $conversion->method('getAttempt')->willReturn(3);
+        $conversion->method('getUser')->willReturn($user);
+        $conversion->method('isAi')->willReturn(false);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('find')->willReturn($conversion);
+        $em->method('wrapInTransaction')->willReturnCallback(static fn (callable $fn): mixed => $fn($em));
+        $em->expects($this->once())->method('flush');
+
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->once())->method('refund')->with($user, false);
+
+        $persister = $this->makePersister($this->makeRegistry($em), $quota);
+        // No 'attempt' key at all — mirrors fail()/result() (jobId-keyed path).
+        $persister->persist(['conversionId' => 1, 'state' => 'failed', 'error' => 'boom']);
+    }
+
     public function testFailedStateRefundsQuotaAndFlushesOnce(): void
     {
         $user = new User();

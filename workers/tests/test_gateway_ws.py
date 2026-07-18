@@ -73,12 +73,13 @@ class FakeKeyDb:
         self.status_clears.append(conv_id)
 
     async def get_job_meta(self, job_id):
-        return {"conversionId": 0, "inputBucket": "", "inputKey": "", "stream": "", "targetFormat": ""}
+        return {"conversionId": 0, "inputBucket": "", "inputKey": "", "stream": "",
+                "targetFormat": "", "attempt": 0}
 
     async def get_times_delivered(self, stream, job_id):
         return 1  # дефолт для тестов ws-сервера (fail-путь не тестируется здесь)
 
-    async def add_to_dlq(self, stream, job_id, conv_id, reason):
+    async def add_to_dlq(self, stream, job_id, conv_id, reason, processing_ms=None, attempt=0):
         pass  # DLQ-тесты — в test_gateway_relay.py и test_gateway_reclaim_dlq.py
 
     async def ack(self, stream, job_id):

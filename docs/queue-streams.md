@@ -31,7 +31,7 @@ The Symfony Messenger transport name is `conv_<key>`; the stream name is `conv.<
 
 | Stream       | Direction              | Purpose |
 |--------------|------------------------|---------|
-| `conv.dead`  | gateway (DLQ)          | Permanently failed entries; not consumed automatically |
+| `conv.dead`  | gateway (DLQ)          | Permanently failed entries; consumed by the gateway `dlq-consumer` → relay `POST /api/v1/internal/worker/dlq-fail` → `Conversion.status=failed` (idempotent). Operator-requeue: `POST /api/v1/admin/dead-letter/requeue` |
 
 ### Status hash
 

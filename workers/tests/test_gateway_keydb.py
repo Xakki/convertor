@@ -93,6 +93,9 @@ async def test_claim_write_meta_ack_roundtrip():
         assert meta["inputKey"] == job["inputKey"]
         assert meta["stream"] == stream
         assert meta["targetFormat"] == job["targetFormat"]
+        # requeue-attempt-generation-marker: golden-фикстура (legacy, до этого
+        # изменения) не несёт `attempt` → дефолт 0, как у остальных числовых полей.
+        assert meta["attempt"] == 0
 
         ttl = await client.ttl(f"worker:job:{job_id}")
         assert 0 < ttl <= JOB_META_TTL, f"TTL меты вне (0, 24h]: {ttl}"
@@ -101,6 +104,30 @@ async def test_claim_write_meta_ack_roundtrip():
 
         assert await _pending_count(client, stream) == 0, "PEL должен быть пуст"
         assert await client.exists(f"worker:job:{job_id}") == 0, "мета удалена при ack"
+    finally:
+        await _cleanup(client, stream)
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_write_job_meta_attempt_roundtrips_as_int():
+    """requeue-attempt-generation-marker: job несёт `attempt` как строку-int
+    (PHP-контракт, напр. `"2"`) → write_job_meta/get_job_meta round-trip даёт int."""
+    client, gw = await _new_gateway()
+    stream = stream_for(_unique_type())
+    try:
+        job = _golden_job()
+        job["attempt"] = "2"
+        await client.xadd(stream, {"message": json.dumps(job)})
+
+        result = await gw.read_new(stream, "worker-test-1", block_ms=2000)
+        assert result is not None
+        job_id, decoded = result
+
+        await gw.write_job_meta(job_id, decoded, stream)
+        meta = await gw.get_job_meta(job_id)
+        assert meta is not None
+        assert meta["attempt"] == 2
     finally:
         await _cleanup(client, stream)
         await client.aclose()
