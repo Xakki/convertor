@@ -104,9 +104,11 @@ swagger полон; unit зелёные; интеграционные с зам�
   OCR-тоггл, статус через HTMX, ссылка на скачивание).
 - [ ] **P1 — Лендинг** (публичная страница над формой загрузки). *(карточки нет — завести)*
 - [ ] **P2 — История конвертаций** со ссылками на файлы (S3 presign). *(карточки нет — завести)*
-- [ ] ❄️ **P2 — [[backlog-auth-providers]]** — Google / GitHub OAuth (заморожено; Telegram + SMS уже есть).
+- [x] **P2 — [[backlog-auth-providers]]** — Google / GitHub / Yandex / VK OAuth — реализовано эпиком
+  `oauth-00-epic` (`.claude/kanban/progress/oauth-00-epic.md`); Yandex и VK добавлены сверх исходного
+  scope карточки (Google+GitHub). Разморозка/перенос карточки бэклога — при закрытии эпика (тимлид).
 
-**Exit:** пользователь логинится (google/github/бот), грузит файл, видит результат и историю.
+**Exit:** пользователь логинится (google/github/yandex/vk/бот), грузит файл, видит результат и историю.
 
 ---
 
@@ -252,7 +254,10 @@ GET    /api/admin/stats            # [ADMIN] статистика
 ## Аутентификация
 - **Telegram Login Widget** (основной): hash → HMAC-SHA256 с bot token → User по telegram_id → JWT.
 - **SMS OTP** (резерв): SMSC.ru, phone → OTP (6 цифр, 5 мин) → JWT.
-- **Google / GitHub OAuth** — Стадия 5, см. [[backlog-auth-providers]].
+- **Google / GitHub / Yandex / VK OAuth** — реализовано (эпик `oauth-00-epic`), см. skill
+  `redesign-auth-access-contract` (раздел «OAuth-провайдеры») и [[backlog-auth-providers]] (карточка
+  бэклога переносится/разрешается тимлидом при закрытии эпика). `GET /api/v1/auth/oauth/{provider}/start`
+  и `/callback`, provider ∈ {google, github, yandex, vk}.
 
 ## Платежи (шлюзы)
 - **MVP — только Telegram Stars** (XTR, через Bot API: invoice → `successful_payment` webhook).

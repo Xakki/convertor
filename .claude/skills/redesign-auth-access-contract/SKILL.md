@@ -1,6 +1,6 @@
 ---
 name: redesign-auth-access-contract
-description: Единый контракт редизайна auth/доступа convertor — анонимная конвертация (guest-User по cookie), гейтинг ai/video, Telegram-логин через бота (Symfony webhook, magic-link на своём устройстве, nonce-bound). ОБЯЗАТЕЛЕН к прочтению для карт anon-conversion-guest-model (backend-A), telegram-bot-login-flow (backend-B), upload-ui-bot-auth-rework (frontend-C). Триггеры: guest-User, ROLE_GUEST, anon convert, гейт ai/video, telegram webhook, /auth/telegram/start, /auth/telegram/callback, magic-link login, tg_login_nonce, deep-link t.me start=CODE, merge guest history.
+description: Единый контракт редизайна auth/доступа convertor — анонимная конвертация (guest-User по cookie), гейтинг ai/video, Telegram-логин через бота (Symfony webhook, magic-link на своём устройстве, nonce-bound), мультипровайдерный OAuth-логин (Google/GitHub/Yandex/VK, эпик oauth-00). ОБЯЗАТЕЛЕН к прочтению для карт anon-conversion-guest-model (backend-A), telegram-bot-login-flow (backend-B), upload-ui-bot-auth-rework (frontend-C), и подзадач oauth-01…06. Триггеры: guest-User, ROLE_GUEST, anon convert, гейт ai/video, telegram webhook, /auth/telegram/start, /auth/telegram/callback, magic-link login, tg_login_nonce, deep-link t.me start=CODE, merge guest history, OAuth, SocialIdentity, /auth/oauth/{provider}/start, /auth/oauth/{provider}/callback, findOrCreateUser, PKCE, VK ID, emailVerified.
 ---
 
 # Контракт: редизайн auth + доступа (convertor)
@@ -10,6 +10,7 @@ description: Единый контракт редизайна auth/доступ�
 ## Решения (вшиты, не переоткрывать)
 - **Бот** — Symfony webhook-контроллер (НЕ отдельный сервис).
 - **Логин** — pairing + poll (cross-device): сайт генерит CODE → deep-link в бота → «Войти» в боте → backend помечает CODE authorized + биндит ТГ → исходный браузер поллит и получает JWT.
+  (эта строка описывает НЕ то, что реально поставлено — см. карту `auth-docs-drift-pairing-poll`; актуальная модель — magic-link, раздел «Telegram bot login API» ниже)
 - **Аноним** — guest-User по httpOnly-cookie. `Conversion.user` остаётся **NOT NULL** (владеет guest). При логине история guest'а перепривязывается к реальному User.
 
 ## Роли и firewall
@@ -69,6 +70,80 @@ description: Единый контракт редизайна auth/доступ�
 
 - **Bot-API клиент** (зона B): сервис `TelegramBotClient` — `sendMessage`, `answerCallbackQuery`, `editMessageReplyMarkup`, `setWebhook`; base `https://api.telegram.org/bot<TOKEN>/`, токен `%env(TELEGRAM_BOT_TOKEN)%` (уже забинжен в services.yaml как `$telegramBotToken`).
 - **make-таргет** `tg-set-webhook` — регистрирует webhook-URL + секрет (через console-команду или curl-таргет; docker-only паттерн проекта).
+
+## OAuth-провайдеры (эпик `oauth-00`, отдельно от Telegram)
+
+Мультипровайдерный OAuth-логин (Google/GitHub/Yandex/VK) — параллельный Telegram-логину механизм входа,
+НЕ его замена. `User.telegramId` не трогается; связь с внешним провайдером хранится отдельной сущностью
+`SocialIdentity` (many-to-one → `User`). Источники — `App\Controller\Api\OauthController`,
+`App\Service\Oauth\SocialIdentityResolver`, `App\Service\Oauth\Provider\*`, `App\Entity\SocialIdentity`.
+
+- **Провайдеры** — `google`, `github`, `yandex`, `vk` (`OauthProviderRegistry`, ключ = `key()` адаптера).
+  Google/GitHub — обёртки над `league/oauth2-*`; Yandex/VK — кастомные `AbstractProvider` (готовых
+  league-пакетов нет). Расширяемо: новый провайдер = новый класс `App\Service\Oauth\Provider\*`,
+  реализующий `OauthProviderInterface`, регистр/контроллер не меняются.
+- **Эндпоинты** (`App\Controller\Api\OauthController`, под firewall `auth`, `^/api/v1/auth`, security:false,
+  публичны как и `/auth/telegram/*`):
+  - `GET /api/v1/auth/oauth/{provider}/start` — минтит одноразовый `state` (CSRF, `OauthStateStore`),
+    для PKCE-провайдера (VK) генерит `code_verifier` и кладёт его в state-store вместе со `state`,
+    редиректит на authorize-URL провайдера.
+  - `GET /api/v1/auth/oauth/{provider}/callback?code=&state=` — гасит `state` атомарно (invalid/повтор →
+    редирект `/login?oauth_error=state`), обменивает `code` на профиль (`fetchUserInfo`, любая ошибка →
+    `/login?oauth_error=exchange`), резолвит/создаёт `User` (`SocialIdentityResolver::findOrCreateUser`,
+    ошибка → `/login?oauth_error=internal`), мержит guest-историю, выдаёт сессию, редиректит на `/`.
+  - Неизвестный/несконфигурированный `provider` → 404.
+- **`SocialIdentity`** (`social_identities`, `App\Entity\SocialIdentity`): `user` (ManyToOne → `User`,
+  CASCADE), `provider` (string(32)), `providerUid` (string(255)), `email` (string(180), NOT NULL —
+  verified-адрес на момент линковки ИЛИ синтетический плейсхолдер `{provider}:{uid}@{provider}.oauth.local`),
+  `username`, `displayName`, `createdAt`. **UNIQUE(provider, provider_uid)** — одна учётка провайдера не
+  привязывается дважды; на этот индекс опирается race-обработка в резолвере.
+- **`SocialIdentityResolver::findOrCreateUser`** (ядро корректности, порядок строго такой):
+  1. Есть `SocialIdentity` по `(provider, provider_uid)` → логиним её `User`.
+  2. Иначе, если `email` провайдера **VERIFIED** и не зарезервирован/не синтетический → найден `User` по
+     `email` → линкуем к нему новую `SocialIdentity` (кросс-провайдерная привязка, напр. Google + GitHub
+     на одном аккаунте).
+  3. Иначе → создаём passwordless-`User` (НЕ гость: `isGuest=false`, `isActive=true`) + `SocialIdentity`.
+  - **Anti-takeover инвариант:** линковка к существующему `User` по email происходит ТОЛЬКО если email
+    verified у провайдера — иначе чужой аккаунт можно угнать, зарегистрировав у провайдера
+    неподтверждённый адрес жертвы. `User.email` заполняется исключительно verified-адресом.
+  - **Гонки:** два параллельных callback'а могут вставлять одну и ту же связь — проигравший ловит
+    `UniqueConstraintViolationException` на `UNIQUE(provider, provider_uid)`, сбрасывает EM
+    (`ManagerRegistry::resetManager()`, паттерн `ConversionResultPersister`) и повторно резолвит на
+    свежем EM (`resolveAfterRace`).
+- **Per-provider правила `emailVerified`** (маппятся в `OAuthUserInfo` каждым адаптером — это единственное,
+  чем провайдеры отличаются друг от друга для резолвера):
+  - **Google** (`GoogleProvider`) — userinfo (OpenID Connect) отдаёт `email` + булев `email_verified`
+    напрямую. **Fail-closed:** отсутствие claim `email_verified` ⇒ считаем НЕ verified (Workspace-аккаунты,
+    провизированные админом, могут иметь `email_verified=false`; отсутствие claim не равно подтверждению).
+  - **GitHub** (`GithubProvider`) — `/user` не отдаёт verified-флаг вовсе (и email там может быть `null`,
+    если непубличный). Адаптер делает отдельный `GET /user/emails` (scope `user:email`) и берёт
+    primary+verified адрес оттуда (НЕ через встроенный league-fallback, который берёт первый email без
+    проверки). `providerUid` — числовой GitHub id (стабилен), не login.
+  - **Yandex** (`YandexProvider`) — userinfo без top-level `email`: только `default_email` (string|null) и
+    `emails[]`. `default_email` присутствует → `emailVerified=true` (Yandex отдаёт его как подтверждённый
+    primary). Только `emails[]` без `default_email` → берём первый адрес, но `emailVerified=false`
+    (Yandex не подтверждает явным флагом, что это тот же адрес). Email отсутствует → `null`/`false`.
+  - **VK ID** (`VkProvider`) — verified-флага для email в userinfo НЕТ вовсе ⇒ `emailVerified` **всегда
+    `false`**, даже если email присутствует — email годится только для отображения/create, никогда для
+    линковки к существующему `User`.
+- **PKCE для VK ID** (`usesPkce() === true`, RFC 7636) — единственный провайдер без `client_secret`;
+  `code_verifier` генерит `OauthController` (`base64url(random_bytes(32))`), хранит в `OauthStateStore`
+  между `/start` и `/callback`. VK также возвращает `device_id` на callback (не известен на `/start`,
+  читается прямо из query и прокидывается в token-обмен).
+- **Переиспользование сессионного механизма** — идентично Telegram-callback, тот же код:
+  `RefreshTokenService::issueFamily()` + `RefreshCookieFactory` (JWT в URL НЕ уходит, ставится
+  refresh-cookie, SPA берёт access-токен через `POST /auth/refresh`) + `GuestUserService::mergeInto()`
+  (валидный `guest_id` cookie → перепривязка истории + гашение cookie).
+- **Env-конвенция** (`app-symfony/.env`, Symfony-only Dotenv, НЕ через compose environment, как
+  `TELEGRAM_*`/`REFRESH_*`): base для `redirect_uri` — `APP_URL` (уже абсолютный,
+  публичный origin приложения), конкатенируется как
+  `{APP_URL}/api/v1/auth/oauth/{provider}/callback`), `<PROVIDER>_OAUTH_CLIENT_ID` /
+  `_SECRET` на провайдера (Google/GitHub/Yandex). **VK — исключение: только `VK_OAUTH_CLIENT_ID`, секрета
+  нет** (PKCE его заменяет). Реальные значения — `app-symfony/.env.local`; в трекаемом `.env` — пустые
+  плейсхолдеры.
+- **`/login`** (`GET /login`, `App\Controller\Web\LoginController`, route name `app_login`,
+  `templates/auth/login.html.twig`) — страница с кнопками провайдеров; читает `?oauth_error=` для показа
+  ошибки после неудачного callback (`state`/`exchange`/`internal`).
 
 ## Frontend (зона C, читает A и B)
 - Снести из `templates/conversion/index.html.twig`: `<script src=telegram-widget.js>`, `window.onTelegramAuth`.

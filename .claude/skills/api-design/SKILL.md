@@ -74,6 +74,11 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
 **`src/Controller/Api/TelegramLoginController.php`** (`/api/v1/auth/telegram`):
 `POST /start`, `GET /callback`.
 
+**`src/Controller/Api/OauthController.php`** (`/api/v1/auth/oauth`, под firewall `auth`
+`security: false`, доп. явный `access_control` на `^/api/v1/auth/oauth` → `PUBLIC_ACCESS`;
+мультипровайдерный OAuth-логин google/github/yandex/vk, эпик `oauth-00`, детали флоу —
+скилл `redesign-auth-access-contract`): `GET /{provider}/start`, `GET /{provider}/callback`.
+
 **`src/Controller/Api/TelegramWebhookController.php`** (`/api/v1/telegram/webhook`):
 `POST ''` (webhook-приёмник от Telegram Bot API).
 

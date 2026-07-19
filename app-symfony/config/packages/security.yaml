@@ -59,6 +59,10 @@ security:
         ROLE_ADMIN: [ROLE_USER]
 
     access_control:
+        # OAuth start/callback — публичны (нет JWT/гостя). Явная запись ДО общего
+        # ^/api/v1/auth; функционально её уже покрывает префикс ^/api/v1/auth ниже
+        # (и firewall `auth` тем же префиксом), но фиксируем контракт эпика явно.
+        - { path: ^/api/v1/auth/oauth, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/auth, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/telegram/webhook, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/formats, roles: PUBLIC_ACCESS }

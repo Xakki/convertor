@@ -56,12 +56,30 @@ services:
         autowire: true
         autoconfigure: true
 
+    _instanceof:
+        # Любой адаптер OAuth-провайдера (oauth-02…04) автоматически попадает в
+        # tagged-итератор реестра — новый провайдер = новый сервис с этим интерфейсом,
+        # ни services.yaml реестра, ни контроллер трогать не нужно.
+        App\Service\Oauth\OauthProviderInterface:
+            tags: ['app.oauth_provider']
+
     App\:
         resource: '../src/'
         exclude:
             - '../src/DependencyInjection/'
             - '../src/Entity/'
             - '../src/Kernel.php'
+            # Кастомные AbstractProvider-транспорты (Yandex/VK) — НЕ сервисы, только
+            # $client-seam для тестов у YandexProvider/VkProvider (см. их конструкторы).
+            # Без exclude блочный ресурс App\: регистрирует их как autowireable, и
+            # Symfony инжектит СВЕЖИЙ new YandexOauth2Provider()/new VkIdOauth2Provider()
+            # (БЕЗ clientId/redirectUri) в nullable $client-параметр ВМЕСТО null —
+            # это молча ломало ?? new ...([...]) fallback, из-за чего client_id и
+            # redirect_uri пропадали из authorize-URL целиком (инцидент 2026-07-19).
+            # У Google/GitHub та же проблема невозможна — их $client типизирован
+            # vendor-классом League\..., для которого сервиса вообще нет).
+            - '../src/Service/Oauth/Provider/Yandex/YandexOauth2Provider.php'
+            - '../src/Service/Oauth/Provider/Vk/VkIdOauth2Provider.php'
 
     App\Service\Auth\GuestTokenService:
         arguments:
@@ -108,6 +126,52 @@ services:
     App\Service\Auth\TelegramLoginNonceCookieFactory:
         arguments:
             $secure: '%env(bool:REFRESH_COOKIE_SECURE)%'
+
+    # OAuth CSRF-state (+ PKCE code_verifier) в KeyDB db 1 (sessions), TTL 10 мин.
+    App\Service\Oauth\OauthStateStore:
+        arguments:
+            $redisFactory: '@app.redis.sessions'
+            $ttl: 600
+
+    # Реестр OAuth-провайдеров: tagged-итератор адаптеров (пуст в oauth-01 —
+    # провайдеры приходят в oauth-02…04 через тег app.oauth_provider).
+    App\Service\Oauth\OauthProviderRegistry:
+        arguments:
+            $providers: !tagged_iterator app.oauth_provider
+
+    # Google/GitHub-адаптеры (oauth-02): попадают в реестр автоматически через
+    # тег app.oauth_provider (см. _instanceof выше). Пустой client_id/secret в
+    # окружении (провайдер не сконфигурирован) — сервис создаётся без ошибки,
+    # league-провайдер не валидирует опции при конструировании; сломается только
+    # реальный запрос к провайдеру (ожидаемо для незаполненного .env.local).
+    App\Service\Oauth\Provider\GoogleProvider:
+        arguments:
+            $clientId: '%env(GOOGLE_OAUTH_CLIENT_ID)%'
+            $clientSecret: '%env(GOOGLE_OAUTH_CLIENT_SECRET)%'
+            $redirectBaseUrl: '%env(APP_URL)%'
+
+    App\Service\Oauth\Provider\GithubProvider:
+        arguments:
+            $clientId: '%env(GITHUB_OAUTH_CLIENT_ID)%'
+            $clientSecret: '%env(GITHUB_OAUTH_CLIENT_SECRET)%'
+            $redirectBaseUrl: '%env(APP_URL)%'
+
+    # Yandex-адаптер (oauth-03): кастомный AbstractProvider (нет поддерживаемого
+    # league-пакета), попадает в реестр так же, как Google/GitHub — через тег
+    # app.oauth_provider (см. _instanceof выше).
+    App\Service\Oauth\Provider\YandexProvider:
+        arguments:
+            $clientId: '%env(YANDEX_OAUTH_CLIENT_ID)%'
+            $clientSecret: '%env(YANDEX_OAUTH_CLIENT_SECRET)%'
+            $redirectBaseUrl: '%env(APP_URL)%'
+
+    # VK ID-адаптер (oauth-04): PKCE (S256) обязателен, client_secret у VK ID
+    # НЕТ вовсе — конструктор его не принимает (см. VkProvider PHPDoc), поэтому
+    # аргумент $clientSecret здесь отсутствует в отличие от остальных провайдеров.
+    App\Service\Oauth\Provider\VkProvider:
+        arguments:
+            $clientId: '%env(VK_OAUTH_CLIENT_ID)%'
+            $redirectBaseUrl: '%env(APP_URL)%'
 
     AsyncAws\S3\S3Client:
         arguments:
