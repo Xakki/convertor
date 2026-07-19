@@ -170,11 +170,19 @@ worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compo
 # unexports COMPOSE_FILE and `docker compose` only auto-loads .env (not .env.local),
 # so the worker-ai overlay would otherwise be dropped. Image/env come from the
 # exported vars (set DOCKER_IMAGE_AI=...:cpu + DEVSERVER_HOST=0.0.0.0 in .env.local).
-WORKER_AI_DC = $(DC) -f docker-compose.yml -f docker-compose.worker-ai.yml
+# Full 4-file set matches the live deployment's COMPOSE_FILE (.env.local): base +
+# worker-ai + fluent-logging + limits. worker-ai's own logging/limits are inline in
+# docker-compose.worker-ai.yml; the two overlays are included so the file set is
+# identical to the running container's and `up` never recreates it with a narrower set.
+WORKER_AI_DC = $(DC) -f docker-compose.yml -f docker-compose.worker-ai.yml -f docker/fluent-logging.yml -f docker/limits.yml
 
 .PHONY: worker-ai-up
 worker-ai-up: ## Run the AI worker (CPU dev-server) on this host, reachable via nginx /worker-ai/
 	$(WORKER_AI_DC) up -d worker-ai
+
+.PHONY: worker-ai-recreate
+worker-ai-recreate: ## Force-recreate ONLY worker-ai to pick up a rebuilt image (keeps its overlays)
+	$(WORKER_AI_DC) up -d --force-recreate --no-deps worker-ai
 
 .PHONY: worker-ai-down
 worker-ai-down: ## Stop & remove the on-server AI worker

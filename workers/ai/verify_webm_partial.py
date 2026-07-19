@@ -1,21 +1,33 @@
-"""Verify truncated webm/opus partial decode on the real av/ffmpeg path.
+"""Verify truncated webm/opus partial decode on the real production stream path.
 
-The AI dev-server (`workers/ai/devserver/routes_stream.py`) accumulates browser
-`MediaRecorder` webm/opus frames into a growing buffer and, on a cadence, writes
-the buffer to a temp file and runs faster-whisper `process_file()` for `partial`
-results. A mid-stream partial is a truncated webm container (header + prefix, tail
-may end mid-cluster). The dev-server catches decode failures with an in-process
-`except Exception` and emits an error frame (routes_stream.py ~161-165).
+The AI dev-server (`workers/ai/devserver/routes_stream.py`) feeds browser
+`MediaRecorder` webm/opus frames, as they arrive over the WS, straight into a
+persistent `PcmStreamDecoder` (`workers/ai/devserver/pcm_decoder.py`): ONE PyAV
+webm container opened once on a background daemon thread, fed via `.feed(data)`
+on a non-seekable byte pipe (the first fed bytes must be the EBML header). PCM
+is pulled with `.drain()` per frame and `.close()` at stream end, then handed to
+`VadChunker.push()`/`.flush()` (`workers/ai/devserver/vad_chunker.py`) to cut
+30ms-framed speech segments, each of which goes to
+`StreamingWhisper.transcribe_pcm()` (`workers/ai/providers/streaming_stt.py`).
+A mid-stream partial is therefore a truncated webm PREFIX fed into an
+in-progress container (header + some bytes, tail may end mid-cluster).
 
-That catch is USELESS against a SIGSEGV/SIGABRT from ffmpeg/PyAV C code, or a hang:
-a decode crash/hang in the in-process WS route takes down the WHOLE dev-server. This
-harness determines which failure mode a truncated webm actually triggers.
+A truncated/malformed webm prefix can fail two different ways:
+  (a) `decoder.decode_error()` gets set inside the background decode thread —
+      CATCHABLE: production checks it after every `.feed()`/`.close()`, sends
+      an error frame over the WS, and breaks the loop (see routes_stream.py).
+  (b) PyAV/ffmpeg C code SIGSEGVs, SIGABRTs, or hangs decoding a malformed
+      container — an in-process `except Exception` around the WS route CANNOT
+      catch a C-level crash, and a hang blocks the decode thread forever. Either
+      would take down (or wedge) the WHOLE dev-server, not just one connection.
+
+This harness determines which failure mode a truncated webm actually triggers.
 
 Design: parent synthesizes a real webm/opus, truncates it as a PREFIX at many byte
 offsets (server always has header+prefix), and runs EACH decode attempt in a SEPARATE
 SUBPROCESS with a timeout, classifying by the child's exit status:
   exit 0                         -> clean (text non-empty / empty)
-  nonzero + Python traceback     -> catchable exception (reported)
+  nonzero + Python traceback     -> catchable exception (reported; mirrors decode_error())
   killed by signal (-11/-6/...)  -> CRASH
   timeout                        -> HANG
 
@@ -50,38 +62,42 @@ CHILD_TIMEOUT = 60  # seconds; longer than a tiny-model decode of a ~5s clip
 def run_child(bytes_path: str) -> int:
     data = Path(bytes_path).read_bytes()
 
-    # Supplementary raw probe (diagnostics only) — never masks process_file.
-    probe = {"opened": False, "frames": 0, "err": None}
-    try:
-        import av
-
-        with av.open(bytes_path, "r") as container:
-            probe["opened"] = True
-            for frame in container.decode(audio=0):
-                probe["frames"] += 1
-    except Exception as exc:  # noqa: BLE001
-        probe["err"] = f"{type(exc).__name__}: {exc}"
-
-    # THE thing that matters: exact production path (_transcribe -> process_file).
+    from workers.ai.devserver.pcm_decoder import PcmStreamDecoder
+    from workers.ai.devserver.vad_chunker import VadChunker
     from workers.ai.providers.streaming_stt import StreamingWhisper
 
-    model = StreamingWhisper(MODEL, DEVICE, COMPUTE)
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-        tmp.write(data)
-        path = Path(tmp.name)
-    try:
-        result = model.process_file(path)
-    finally:
-        path.unlink(missing_ok=True)
+    decoder = PcmStreamDecoder(sample_rate=16000)
+    decoder.feed(data)  # truncated prefix starts at offset 0 = EBML header (faithful)
+    pcm = decoder.drain()
+    pcm += decoder.close()  # flush tail
+    err = decoder.decode_error()
+    if err is not None:
+        raise err  # CATCHABLE path — re-raise so parent classifies it EXCEPTION
 
-    text = (result.get("final") or "").strip()
+    chunker = VadChunker()
+    segs = list(chunker.push(pcm))
+    last = chunker.flush()
+    if last:
+        segs.append(last)
+
+    model = StreamingWhisper(MODEL, DEVICE, COMPUTE)
+    texts = []
+    language = None
+    for seg in segs:
+        r = model.transcribe_pcm(seg)
+        t = (r.get("final") or "").strip()
+        if t:
+            texts.append(t)
+        language = r.get("language") or language
+    text = " ".join(texts).strip()
+
     out = {
         "ok": True,
         "text_len": len(text),
         "text_preview": text[:80],
-        "language": result.get("language"),
-        "segments": len(result.get("segments", [])),
-        "probe": probe,
+        "language": language,
+        "segments": len(segs),
+        "pcm_bytes": len(pcm),
     }
     print("RESULT " + json.dumps(out))
     return 0
@@ -140,8 +156,8 @@ def classify(cp: subprocess.CompletedProcess | None, timed_out: bool) -> tuple[s
         try:
             obj = json.loads(detail)
             if obj.get("text_len", 0) > 0:
-                return "CLEAN/TEXT", f"{obj['text_len']}ch: {obj['text_preview']!r} probe_frames={obj['probe']['frames']}"
-            return "CLEAN/EMPTY", f"probe_opened={obj['probe']['opened']} probe_frames={obj['probe']['frames']} probe_err={obj['probe']['err']}"
+                return "CLEAN/TEXT", f"{obj['text_len']}ch: {obj['text_preview']!r} pcm_bytes={obj['pcm_bytes']} segments={obj['segments']}"
+            return "CLEAN/EMPTY", f"pcm_bytes={obj['pcm_bytes']} segments={obj['segments']}"
         except Exception:
             return "CLEAN/?", detail
     if rc < 0:
@@ -212,13 +228,38 @@ def run_parent() -> int:
 
     crashed = [r for r in rows if r[3] == "CRASH"]
     hung = [r for r in rows if r[3] == "HANG"]
+
+    # Baseline self-assert: the untruncated (100%) input on BOTH profiles must
+    # decode+transcribe cleanly with non-empty text, else the sweep below is not
+    # trustworthy (a broken pipeline would report every truncation as "clean").
+    # NOTE: CLEAN/TEXT requires espeak-ng in the image — the 440Hz sine fallback
+    # in synth_webm() decodes fine but transcribes to empty text, which would
+    # (correctly) fail this baseline assert.
+    def _find_100pct(profile: str):
+        return next((r for r in rows if r[0] == profile and r[1] == "100%"), None)
+
+    baseline_live = _find_100pct("live")
+    baseline_file = _find_100pct("file")
+
     print("\n================ VERDICT ================")
     if crashed or hung:
-        print(f"UNSAFE: {len(crashed)} CRASH, {len(hung)} HANG -> in-process except is INSUFFICIENT.")
+        print(f"UNSAFE: {len(crashed)} CRASH, {len(hung)} HANG -> in-process except/decode_error() is INSUFFICIENT.")
         return 1
-    print("SAFE: no CRASH, no HANG across both webm profiles.")
-    print("All partials -> catchable exception or clean (cumulative text / empty) result.")
-    print("=> routes_stream.py:161-165 (except Exception -> error frame, keep socket) is SUFFICIENT.")
+
+    baseline_ok = True
+    for name, row in (("live", baseline_live), ("file", baseline_file)):
+        if row is None:
+            print(f"UNSAFE: baseline 100% row missing for profile={name!r}.")
+            baseline_ok = False
+        elif row[3] != "CLEAN/TEXT":
+            print(f"UNSAFE: baseline 100% for profile={name!r} is not CLEAN/TEXT: {row[3]} ({row[4]})")
+            baseline_ok = False
+    if not baseline_ok:
+        return 1
+
+    print("SAFE: no CRASH, no HANG across both webm profiles, and both 100% baselines are CLEAN/TEXT.")
+    print("All partials -> catchable exception (decode_error()/raised) or clean (cumulative text / empty) result.")
+    print("=> the in-process except Exception / decoder.decode_error() check in the WS route is SUFFICIENT.")
     return 0
 
 

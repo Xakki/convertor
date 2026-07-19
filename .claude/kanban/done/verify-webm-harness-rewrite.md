@@ -51,4 +51,35 @@
 
 **Найдено при:** ревью [[ai-devserver-stream-vad]] / [[ai-devserver-webm-partial-decode-gate]].
 
-**Status:** todo — груминг завершён, scope ясен.
+**Execution Log (2026-07-18, ветка `task/verify-webm-harness`, commit `7cb38ec`):**
+- Реализовано (файл `workers/ai/verify_webm_partial.py`): докстринг переписан под
+  прод-путь; `run_child` гонит усечённый префикс через прод-декодер
+  `PcmStreamDecoder.feed()/drain()/close()` (`workers/ai/devserver/pcm_decoder.py`) →
+  `VadChunker.push()/flush()` (`workers/ai/devserver/vad_chunker.py`) →
+  `StreamingWhisper.transcribe_pcm()`; `decode_error()` ре-рейзится (→ EXCEPTION,
+  зеркалит ловимый прод-путь). `classify()` без `probe`. `run_parent` ассертит
+  `100%` обоих профилей = `CLEAN/TEXT`, иначе exit 1. Sweep/subprocess/timeout как были.
+- `python3 -m py_compile` — OK. Уточнение (drift): три класса лежат в РАЗНЫХ модулях
+  (`pcm_decoder.py`, `vad_chunker.py`, `providers/streaming_stt.py`), не в одном.
+- **Ручной прогон в образе worker-ai (AC #4) — подтверждён на пересобранном образе:**
+  `docker run … xakki-convertor/worker-ai:cpu workers/ai/verify_webm_partial.py` →
+  **exit 0 / SAFE**, оба 100%-базлайна `CLEAN/TEXT`, транскрипция растёт монотонно по
+  префиксу; `hdr-1KB`→`CLEAN/EMPTY`; ни CRASH, ни HANG. Вывод харнесса подтверждает:
+  in-process `except`/`decode_error()` в WS-route ДОСТАТОЧЕН.
+- **Стоп-находка (не баг харнесса) — образ пересобран, корневая причина установлена:**
+  прежний `xakki-convertor/worker-ai:cpu` не содержал `webrtcvad` → первый прогон дал
+  exit 1 (self-assert сработал верно). Причина НЕ в кэше: `ai.cpu.Dockerfile` берёт
+  `FROM harbor.xakki.ru/convertor/worker-ai-base:latest` — устаревший base ИЗ Harbor
+  (собран до `webrtcvad-wheels` в `requirements-ai-ml.txt:10`). Пересборка через
+  локальный base-тег (в обход реестра) → `webrtcvad-wheels-2.0.14`, `import webrtcvad`
+  OK, харнесс exit 0. Полный разбор + правильный порядок (`build-ai-base` →
+  **`push-ai-base`** → `build-ai-cpu`) — grooming-карточка
+  `stale-worker-ai-cpu-image-webrtcvad.md`.
+
+**Известное ограничение:** декод идёт в фоновом демон-потоке `PcmStreamDecoder` с
+ограничением `close()` в 5с — зависание НА СТАДИИ ДЕКОДА бьётся этим таймаутом и
+классифицируется как `CLEAN/EMPTY`, а не `HANG` (это ФАКТ прод-архитектуры, харнесс
+её честно отражает). Subprocess-`HANG` теперь стережёт `transcribe_pcm`/`feed`, а не
+фоновый декод-поток. Осознанно, фикса не требует.
+
+**Status:** test — реализовано + валидировано (харнесс exit 0 при наличии deps).

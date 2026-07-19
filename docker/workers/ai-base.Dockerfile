@@ -9,7 +9,10 @@
 
 FROM scratch
 
-# Worker code (namespace package: workers/ai/__init__.py; 'workers' is PEP 420 implicit)
+# Worker code (namespace package: workers/ai/__init__.py; 'workers' is PEP 420 implicit).
+# workers/common/ is a runtime dep of workers/ai (config.py, worker.py, devserver import
+# workers.common.*) — without it the image crash-loops with ModuleNotFoundError.
+COPY workers/common/ /app/workers/common/
 COPY workers/ai/ /app/workers/ai/
 
 # Requirements shipped alongside the code so working images don't need the build context
