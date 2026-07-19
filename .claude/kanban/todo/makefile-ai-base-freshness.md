@@ -21,31 +21,42 @@ grooming-карточка `stale-worker-ai-cpu-image-webrtcvad.md`. Текущи
 **Задача:** сделать так, чтобы сборка рабочего образа НЕ могла молча взять устаревший
 base.
 
-**Варианты (выбрать при груминге/реализации):**
-1. `build-ai-cpu`/`build-ai-cuda` зависят от `build-ai-base` (локальный свежий base) и
-   передают его как `--build-arg AI_BASE_IMAGE=<локальный-тег без registry-префикса>`,
-   чтобы BuildKit гарантированно брал локальный, а не тянул registry-`latest`.
-2. Либо добавить `--pull` в рецепты cpu/cuda (тянуть свежий base из Harbor) + сделать
-   `push-ai-base` обязательным шагом (напр. `release-ai-base: build-ai-base push-ai-base`).
-3. Расширить HEALTHCHECK в `ai.cpu.Dockerfile:73` / `ai.cuda.Dockerfile` с `import
-   faster_whisper` до `import faster_whisper, webrtcvad`, чтобы устаревший base ловился
-   как unhealthy сразу.
+**Decisions (груминг 2026-07-19):** выбран комбинированный подход (build-time + runtime):
+- **Build-time (герметично):** `build-ai-cpu`/`build-ai-cuda` зависят от `build-ai-base`
+  (локальный свежий base) и передают его как
+  `--build-arg AI_BASE_IMAGE=<локальный-тег БЕЗ registry-префикса>` — BuildKit
+  гарантированно берёт локальный образ, а не тянет устаревший registry-`latest`.
+  (`push-ai-base` остаётся отдельным явным шагом для распространения базы на другие хосты.)
+- **Runtime (guard):** расширить HEALTHCHECK в `ai.cpu.Dockerfile:73` и
+  `ai.cuda.Dockerfile` с `import faster_whisper` до
+  `import faster_whisper, webrtcvad, workers.common` — устаревший/битый base ловится как
+  unhealthy на старте, а не при ручном прогоне.
+- **Пин зависимости:** запиннить `webrtcvad-wheels==2.0.14` в `requirements-ai-ml.txt`
+  (сейчас без пина) — воспроизводимость сборки.
+
+**Рассмотренные и отклонённые:** только `--pull` + обязательный `push-ai-base` (требует
+сети/Harbor на каждый build) — отклонён в пользу локального base-тега; только HEALTHCHECK
+без build-time фикса — не предотвращает сборку из старой базы.
 
 **Критерии приёмки:**
-- Одной make-командой из чистого состояния собирается `worker-ai:cpu`, в котором
-  `python3 -c "import webrtcvad"` проходит — БЕЗ ручного `push-ai-base` между шагами.
-- Тег base без registry-префикса ИЛИ `--pull` — устаревший registry-`latest` больше не
-  может незаметно попасть в рабочий образ.
-- HEALTHCHECK ловит отсутствие `webrtcvad` (опционально, но желательно).
-- Обновить комментарии в `docker-compose.worker-ai.yml` / Dockerfile-заголовках под
-  новый порядок.
+- Одной make-командой из чистого состояния собирается `worker-ai:cpu` (и `:cuda`), в
+  котором standalone-импорт `python3 -c "import webrtcvad, workers.common, faster_whisper"`
+  проходит — БЕЗ ручного `push-ai-base` между шагами.
+- `build-ai-cpu`/`build-ai-cuda` передают base локальным тегом без registry-префикса →
+  устаревший registry-`latest` не может незаметно попасть в рабочий образ.
+- HEALTHCHECK в `ai.cpu.Dockerfile` + `ai.cuda.Dockerfile` = `import faster_whisper,
+  webrtcvad, workers.common` (битый/устаревший base → unhealthy на старте).
+- `webrtcvad-wheels==2.0.14` запиннен в `requirements-ai-ml.txt`.
+- Обновить комментарии в `docker-compose.worker-ai.yml` / Dockerfile-заголовках + скилл
+  [[worker-ai-image]] под новый порядок.
 
-**Файлы:** `workers/Makefile` (таргеты `build-ai-*`), возможно
-`docker/workers/ai.cpu.Dockerfile` + `ai.cuda.Dockerfile` (HEALTHCHECK), заголовки
-`docker-compose.worker-ai.yml`.
+**Файлы:** `workers/Makefile` (таргеты `build-ai-*`), `docker/workers/ai.cpu.Dockerfile`
++ `ai.cuda.Dockerfile` (HEALTHCHECK), `docker/workers/requirements-ai-ml.txt` (пин),
+заголовки `docker-compose.worker-ai.yml`, скилл `.claude/skills/worker-ai-image/`.
 
 **Найдено при:** задача `verify-webm-harness-rewrite` (2026-07-18), см.
 [[stale-worker-ai-cpu-image-webrtcvad]].
 
-**Status:** todo — scope ясен, вариант реализации выбрать по месту (рекоменд. — №1:
-локальный base-тег как build-arg, самый герметичный).
+**Status:** todo — груминг завершён (2026-07-19), подход выбран (локальный base-тег +
+HEALTHCHECK + пин), scope и AC зафиксированы. Сюда сведены форвард-пункты закрытых находок
+[[stale-worker-ai-cpu-image-webrtcvad]] и [[ai-base-missing-workers-common]].

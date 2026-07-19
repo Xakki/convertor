@@ -73,5 +73,7 @@ webrtcvad-wheels` тот же харнесс → exit 0 / SAFE. Значит т�
   автоматически, а не при ручном прогоне харнесса.
 - Стоит ли пиннить `webrtcvad-wheels` по версии (сейчас без пина; поставилось `2.0.14`).
 
-**Status:** grooming — корневая причина установлена; нужно решение: (1) push-ai-base +
-CUDA-ребилд, (2) автоматизировать порядок в Makefile, (3) расширить healthcheck.
+**Status:** DONE (груминг 2026-07-19) — корневая причина установлена, свежий base
+перезалит в Harbor, CPU-образ пересобран (healthy). Форвард-пункты вынесены: CUDA-ребилд →
+[[cuda-worker-ai-rebuild-gpu-host]]; автоматизация порядка + `--pull`/healthcheck + пин
+webrtcvad → [[makefile-ai-base-freshness]].

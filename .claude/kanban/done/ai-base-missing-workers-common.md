@@ -45,5 +45,7 @@ ModuleNotFoundError: No module named 'workers.common'
 [[verify-webm-harness-rewrite]] (2026-07-18). Связано с
 [[stale-worker-ai-cpu-image-webrtcvad]].
 
-**Status:** grooming — код-фикс применён и проверен; остаётся CUDA-ребилд на GPU-хосте
-+ решение по standalone-гейту (свести с [[makefile-ai-base-freshness]]).
+**Status:** DONE (груминг 2026-07-19) — код-фикс применён, проверен standalone-гейтом и
+смержен в main (`924b20c`). Форвард-пункты вынесены: CUDA-ребилд →
+[[cuda-worker-ai-rebuild-gpu-host]]; standalone-гейт в HEALTHCHECK/CI →
+[[makefile-ai-base-freshness]].
