@@ -20,8 +20,11 @@ xakki-convertor/worker-ai:cuda  (или :cpu)         ← собирается �
 
 - **Весь прикладной код — в `worker-ai-base`** (в Harbor). Рабочий образ забирает его
   через `COPY --from=aibase /app /app`; из контекста сборки код НЕ берётся.
-- **Сборке рабочего образа нужен только Dockerfile**, не весь репозиторий (контекст
-  сборки не используется для кода).
+- **Сборке рабочего образа нужен только Dockerfile** — но это верно для ручной сборки
+  без Makefile (см. 3b) с `AI_BASE_IMAGE` из Harbor. Через `make build-ai-cpu/cuda` (3a,
+  обычный путь) репозиторий на хосте всё же нужен: эти таргеты сами пересобирают свежий
+  `worker-ai-base` ЛОКАЛЬНО (`AI_BASE_LOCAL`) из исходников перед сборкой рабочего
+  образа — см. «Сборка рабочего образа» ниже.
 - **Запуску нужен только сам образ** — ни репозитория, ни bind-mount кода
   (`-v …/convertor:/app` НЕ используется в проде; он только для локальной разработки и
   маскирует отсутствие кода в образе, см. Траблшутинг).
@@ -39,11 +42,16 @@ xakki-convertor/worker-ai:cuda  (или :cpu)         ← собирается �
 
 ## Сборка рабочего образа
 
-> Пересобирать при изменении кода/зависимостей. Код обновляется через **пересборку и
-> перезалив `worker-ai-base` в Harbor** (обычно с сервера-сборщика/CI), затем на хосте —
-> `docker pull` базы + локальная пересборка рабочего образа.
+> Пересобирать при изменении кода/зависимостей. **Через `make build-ai-cpu`/
+> `build-ai-cuda` (путь 3a) это происходит автоматически** — оба таргета зависят от
+> `build-ai-base` и сначала пересобирают локальный `worker-ai-base:local` из текущих
+> исходников, только потом собирают рабочий образ поверх него. Ручной `docker pull`
+> Harbor-тега для этого пути НЕ нужен и на итоговый образ не влияет. `docker pull` нужен
+> только для пути 3b (сборка без репозитория — там `AI_BASE_IMAGE` берётся из Harbor
+> напрямую) и для распространения базы на хосты, которые сами не собирают её из
+> исходников (см. «Обновление при изменении кода/зависимостей» ниже).
 
-### 1. Подтянуть свежий base из Harbor (КРИТИЧНО)
+### 1. Подтянуть свежий base из Harbor (нужно только для пути 3b, без репозитория)
 
 ```bash
 docker login harbor.xakki.ru
@@ -52,7 +60,9 @@ docker pull harbor.xakki.ru/convertor/worker-ai-base:latest
 
 ⚠️ Без явного `pull` локально закешированный устаревший `base:latest` будет использован
 как есть (`FROM harbor…base:latest` берёт локальный образ, если он есть) — и рабочий
-образ соберётся из старого кода. Это ровно тот класс багов, что описан в Траблшутинге.
+образ соберётся из старого кода. Актуально ТОЛЬКО для сборки без Makefile (3b); путь 3a
+(`make build-ai-cpu/cuda`) от Harbor-тега не зависит — свежесть гарантирует
+`build-ai-base` в самом Makefile.
 
 ### 2. Определить compute capability GPU
 
@@ -70,6 +80,9 @@ make build-ai-cuda CUDA_ARCH=86
 #   встроенный llama.cpp GGUF → WITH_LLAMACPP=1
 #   CPU-хост без GPU: make build-ai-cpu
 ```
+Таргет сам сначала выполнит `build-ai-base` (свежий `worker-ai-base:local` из текущих
+исходников на хосте), затем соберёт рабочий образ поверх него — шаг 1 (pull) для этого
+пути не нужен.
 
 ### 3b. Собрать — без репозитория (нужен только Dockerfile)
 
@@ -168,23 +181,31 @@ docker inspect worker-ai --format '{{.State.Status}} / {{.State.Health.Status}}'
 docker logs -f worker-ai                                                            # старт + подключение к gateway, без traceback
 docker exec worker-ai python3 -c "import workers.ai.worker, webrtcvad; print('LIVE OK')"
 ```
-Healthcheck внутри образа = `import faster_whisper` (start-period 60s).
+Healthcheck внутри образа = `import faster_whisper, webrtcvad, workers.common`
+(start-period 60s).
 
 ## Обновление при изменении кода/зависимостей
 
-1. Пересобрать и **перезалить `worker-ai-base` в Harbor** (сборщик/CI):
-   `make build-ai-base && make push-ai-base` (без `push-ai-base` хосты возьмут старую базу).
-2. На хосте: `docker pull harbor.xakki.ru/convertor/worker-ai-base:latest`.
-3. Пересобрать рабочий образ (шаг 3) + гейт (шаг 4).
-4. Пересоздать контейнер (`docker rm -f worker-ai` + `docker run …`, или
-   `--force-recreate` через compose).
+На хосте с репозиторием (путь 3a, обычный случай):
+1. `make build-ai-cpu` / `make build-ai-cuda CUDA_ARCH=<cc>` — сам пересобирает свежий
+   `worker-ai-base:local` из текущих исходников, отдельный шаг для базы не нужен.
+2. Гейт (шаг 4 выше).
+3. Пересоздать контейнер (`docker rm -f worker-ai` + `docker run …`, или
+   `--force-recreate` через compose / `make worker-ai-recreate`).
+
+На хосте без репозитория (путь 3b) или чтобы раздать свежую базу на другой хост:
+1. С хоста, где есть исходники: `make push-ai-base` (пересобирает и пушит
+   `worker-ai-base` в Harbor).
+2. На целевом хосте: `docker pull harbor.xakki.ru/convertor/worker-ai-base:latest`.
+3. Пересобрать рабочий образ вручную (шаг 3b) + гейт (шаг 4).
+4. Пересоздать контейнер.
 
 ## Траблшутинг
 
 | Симптом | Причина | Решение |
 |---|---|---|
-| `ModuleNotFoundError: No module named 'workers.common'` (крэш-луп) | Устаревший `worker-ai-base` без `workers/common/` (образ собран до фикса, либо не сделан `docker pull` базы). | `docker pull` свежей базы (шаг 1) → пересборка. Гейт шага 4 ловит это ДО запуска. |
-| `ModuleNotFoundError: No module named 'webrtcvad'` | Устаревшая база без `webrtcvad-wheels` (был в старых образах). | То же: свежая база + пересборка. |
+| `ModuleNotFoundError: No module named 'workers.common'` (крэш-луп) | Устаревший `worker-ai-base` без `workers/common/` — путь 3a (`make build-ai-cpu/cuda`) сам чинит это пересборкой базы; на пути 3b (без репозитория) — не сделан `docker pull` базы. | Путь 3a: пересобрать (`make build-ai-cpu/cuda` снова). Путь 3b: `docker pull` свежей базы (шаг 1) → пересборка. Гейт шага 4 / HEALTHCHECK ловит это ДО/во время запуска. |
+| `ModuleNotFoundError: No module named 'webrtcvad'` | Устаревшая база без `webrtcvad-wheels` (был в старых образах, инцидент 2026-07-18). | Путь 3a теперь исключает это структурно (свежая база при каждой сборке); путь 3b — свежая база + пересборка. |
 | `CRITICAL ws-client misconfigured, refusing to start` | Пуст `GATEWAY_WS_URL` или `WORKER_API_TOKEN`. | Задать обе переменные (обязательные). |
 | Образ «работает» с `-v …/convertor:/app`, но падает без него | Кода нет в образе — bind-mount подсовывал его с хоста, маскируя пробел. | Никогда не полагаться на bind-mount кода в проде; прогонять гейт шага 4. |
 | GPU не виден в контейнере | Нет `nvidia-container-toolkit` или флага `--gpus all`. | Установить toolkit; проверить `docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi`. |

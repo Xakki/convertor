@@ -4,11 +4,13 @@
 # ============================================================================
 # ## Build (run once on the GPU host, then on code/deps changes)
 # ============================================================================
-# 1. Pull the published ai-base from Harbor:
-#    docker login harbor.xakki.ru
-#    docker pull harbor.xakki.ru/convertor/worker-ai-base:latest
+# build-ai-cuda/build-ai-cpu САМИ пересобирают свежий ai-base ЛОКАЛЬНО
+# (worker-ai-base:local) перед сборкой рабочего образа — ручной pull из Harbor
+# больше не нужен и НЕ гарантирует свежесть (см. инцидент 2026-07-18: устаревший
+# Harbor-тег → образ без webrtcvad). `push-ai-base` нужен только чтобы раздать
+# базу на другие хосты (remote-воркеры тянут её из Harbor).
 #
-# 2. Build the CUDA working image locally (adjust CUDA_ARCH for your card):
+# Build the CUDA working image locally (adjust CUDA_ARCH for your card):
 #    make build-ai-cuda CUDA_ARCH=86          # RTX 3080/3090 (Ampere)
 #    # make build-ai-cuda CUDA_ARCH=75        # RTX 20xx / T4
 #    # make build-ai-cuda CUDA_ARCH=89        # RTX 40xx (Ada Lovelace)

@@ -71,7 +71,7 @@ ENV WHISPER_DEVICE=cpu \
 # Import-based healthcheck — образ самодостаточен вне compose (параметры согласованы
 # с docker-compose.worker-ai.yml). Обязательно python3 (не python).
 HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
-    CMD python3 -c "import faster_whisper" || exit 1
+    CMD python3 -c "import faster_whisper, webrtcvad, workers.common" || exit 1
 
 USER app
 ENTRYPOINT ["/usr/bin/tini", "--"]

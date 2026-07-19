@@ -108,13 +108,18 @@ build-workers-test: build-data-test build-ffmpeg-test build-image-test build-lib
 ##@ Build worker-ai (remote / Harbor + local GPU)
 
 # New two-layer scheme:
-#   ai-base  (light: code + pure-python deps) → published to Harbor, rarely rebuilt.
+#   ai-base  (light: code + pure-python deps) → build-ai-cpu/build-ai-cuda ВСЕГДА
+#            пересобирают ai-base ЛОКАЛЬНО (AI_BASE_LOCAL) перед сборкой рабочего
+#            образа — гарантирует, что working-образ никогда не подтянет протухший
+#            Harbor-тег. push-ai-base — отдельный шаг, только для раздачи базы на
+#            другие хосты (remote-воркеры тянут AI_BASE_IMAGE из Harbor).
 #   ai.cuda  (FROM ai-base + CUDA ML stack)   → LOCAL build on GPU host, NOT published.
 #   ai.cpu   (FROM ai-base + CPU ML stack)    → LOCAL build for CI / CPU-only runs.
 #
 # Run instructions and model-sharing volumes: see docker-compose.worker-ai.yml header.
 HARBOR_NS       ?= harbor.xakki.ru/convertor
 AI_BASE_IMAGE   ?= $(HARBOR_NS)/worker-ai-base:latest
+AI_BASE_LOCAL   ?= worker-ai-base:local
 AI_CUDA_IMAGE   ?= $(IMG)/worker-ai:cuda
 AI_CPU_IMAGE    ?= $(IMG)/worker-ai:cpu
 
@@ -134,18 +139,18 @@ APP_UID         ?= 1000
 APP_GID         ?= 1000
 
 .PHONY: build-ai-base
-build-ai-base: ## Build the LIGHT ai-base image (code + pure-python deps, no ML)
-	docker build -t $(AI_BASE_IMAGE) \
+build-ai-base: ## Build the LIGHT ai-base image (code + pure-python deps, no ML); тегирует Harbor-тег + локальный
+	docker build -t $(AI_BASE_IMAGE) -t $(AI_BASE_LOCAL) \
 	    -f docker/workers/ai-base.Dockerfile .
 
 .PHONY: push-ai-base
-push-ai-base: build-ai-base ## Build + push ai-base to Harbor (the only published AI image)
+push-ai-base: build-ai-base ## Раздать ai-base на другие хосты: push $(AI_BASE_IMAGE) в Harbor (build-ai-cpu/cuda сами по себе от push не зависят)
 	docker push $(AI_BASE_IMAGE)
 
 .PHONY: build-ai-cuda
-build-ai-cuda: ## LOCAL build: ai.cuda (FROM ai-base + CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
+build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (FROM ai-base + CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
 	docker build -t $(AI_CUDA_IMAGE) \
-	    --build-arg AI_BASE_IMAGE=$(AI_BASE_IMAGE) \
+	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
 	    --build-arg TORCH_CUDA_ARCH=$(TORCH_CUDA_ARCH) \
 	    --build-arg WITH_LLAMACPP=$(WITH_LLAMACPP) \
@@ -154,9 +159,9 @@ build-ai-cuda: ## LOCAL build: ai.cuda (FROM ai-base + CUDA ML). CUDA_ARCH=86 WI
 	    -f docker/workers/ai.cuda.Dockerfile .
 
 .PHONY: build-ai-cpu
-build-ai-cpu: ## LOCAL build: ai.cpu (FROM ai-base + CPU ML stack, no GPU required)
+build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (FROM ai-base + CPU ML stack, no GPU required)
 	docker build -t $(AI_CPU_IMAGE) \
-	    --build-arg AI_BASE_IMAGE=$(AI_BASE_IMAGE) \
+	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg APP_UID=$(APP_UID) \
 	    --build-arg APP_GID=$(APP_GID) \
 	    -f docker/workers/ai.cpu.Dockerfile .

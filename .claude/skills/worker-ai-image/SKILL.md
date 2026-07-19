@@ -30,21 +30,25 @@ compose, run-команды). Здесь — суть + грабли/гейты,
 - Код в рабочий образ приходит ТОЛЬКО из базы; из контекста сборки — ничего. Значит
   сборке нужен лишь Dockerfile (не репозиторий), запуску — только образ (без bind-mount кода).
 
-Make-таргеты (`workers/Makefile`): `build-ai-base`, `push-ai-base`, `build-ai-cpu`,
-`build-ai-cuda [CUDA_ARCH=86 TORCH_CUDA_ARCH=8.6 WITH_LLAMACPP=0]`,
-`worker-ai-up` / `worker-ai-recreate` / `worker-ai-down` (on-server CPU dev-server).
+Make-таргеты (`workers/Makefile`): `build-ai-base` (тегирует ОБА тега — Harbor
+`AI_BASE_IMAGE` и локальный `AI_BASE_LOCAL` — за один build), `push-ai-base` (только push
+`AI_BASE_IMAGE` в Harbor — для раздачи на другие хосты), `build-ai-cpu`, `build-ai-cuda
+[CUDA_ARCH=86 TORCH_CUDA_ARCH=8.6 WITH_LLAMACPP=0]` (оба зависят от `build-ai-base` и
+передают `--build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL)`), `worker-ai-up` / `worker-ai-recreate`
+/ `worker-ai-down` (on-server CPU dev-server).
 
-## КРИТИЧНЫЕ грабли и гейты (все всплыли 2026-07-18)
+## КРИТИЧНЫЕ грабли и гейты (грабли 2–3 всплыли 2026-07-18, грабля 1 закрыта
+`makefile-ai-base-freshness` — см. ниже)
 
-1. **Устаревший base в Harbor → рабочий образ из старого кода.** `ai.cpu/cuda.Dockerfile`
-   берут `FROM harbor…/worker-ai-base:latest`. BuildKit использует локальный кеш этого
-   тега (или тянет из Harbor) — если он устарел, образ соберётся из старого
-   `requirements`/кода, ДАЖЕ с `--no-cache`. Признаки: пропал `webrtcvad`, старый
-   `requirements-ai-ml.txt` в `/app`.
-   **Правило:** менял код/requirements → `make build-ai-base && make push-ai-base` (перезалить
-   в Harbor) ПЕРЕД `build-ai-cpu/cuda`. На хосте — `docker pull …worker-ai-base:latest` перед
-   сборкой. Разово в обход реестра: `build-ai-cpu --build-arg AI_BASE_IMAGE=<локальный-тег
-   без registry-префикса>`.
+1. **(ЗАКРЫТО автоматизацией) Устаревший base в Harbor → рабочий образ из старого кода.**
+   Раньше `ai.cpu/cuda.Dockerfile` тянули `FROM harbor…/worker-ai-base:latest` напрямую, и
+   протухший Harbor-тег (или его локальный кеш) молча давал образ из старого
+   `requirements`/кода — так 2026-07-18 пропал `webrtcvad`. Теперь `build-ai-cpu` и
+   `build-ai-cuda` **сами зависят от `build-ai-base`** и всегда сначала пересобирают
+   `AI_BASE_LOCAL` (`worker-ai-base:local`, БЕЗ registry-префикса, только что из исходников)
+   — Harbor-тег в рабочую сборку вообще не участвует. `push-ai-base` остаётся отдельным шагом
+   и нужен ТОЛЬКО чтобы раздать свежую базу на другие хосты (remote-воркеры тянут
+   `AI_BASE_IMAGE` из Harbor через `docker pull`).
 
 2. **`ai-base` обязан бандлить `workers/common/`.** `workers/ai` импортит `workers.common`
    (`config.py`, `worker.py`, `devserver/ws_runner.py`). `ai-base.Dockerfile` копирует и
@@ -60,6 +64,9 @@ Make-таргеты (`workers/Makefile`): `build-ai-base`, `push-ai-base`, `buil
      -c "import workers.ai.config, workers.ai.worker, webrtcvad, av, faster_whisper; print('OK')"
    ```
    Печатает `OK` → образ валиден. `ModuleNotFoundError` → база устарела/битая (грабли 1–2).
+   Этот же набор (`faster_whisper, webrtcvad, workers.common`) теперь встроен и в
+   `HEALTHCHECK` обоих Dockerfile'ов — контейнер сам уходит в `unhealthy`, если что-то из
+   этого пропало из образа (доп. страховка сверх ручного гейта выше).
 
 ## On-server пересоздание (saFin CPU dev-server)
 
@@ -73,16 +80,27 @@ make worker-ai-recreate        # $(WORKER_AI_DC) up -d --force-recreate --no-dep
 
 ## Обновление образа (чек-лист)
 
-1. `make build-ai-base && make push-ai-base` (перезалить базу — иначе хосты возьмут старую).
-2. Хост: `docker pull …worker-ai-base:latest`.
-3. `make build-ai-cpu` (saFin) / `make build-ai-cuda CUDA_ARCH=<cc>` (GPU-хост).
-4. STANDALONE-гейт (см. выше).
-5. Пересоздать: `make worker-ai-recreate` (saFin) или `docker rm -f worker-ai` + `docker run …`.
+На локальном/on-server хосте (обычный случай — код уже здесь, свежую базу собирать
+незачем тянуть из Harbor):
+1. `make build-ai-cpu` (saFin) / `make build-ai-cuda CUDA_ARCH=<cc>` (GPU-хост) — сама
+   пересоберёт свежий `AI_BASE_LOCAL` из текущих исходников (см. грабля 1) перед сборкой
+   рабочего образа.
+2. STANDALONE-гейт (см. выше).
+3. Пересоздать: `make worker-ai-recreate` (saFin) или `docker rm -f worker-ai` + `docker run …`.
+
+Чтобы раздать свежую базу на хост БЕЗ репозитория (ручная сборка Dockerfile'ом напрямую,
+`AI_BASE_IMAGE=<Harbor-тег>`, без Makefile) — отдельно: `make push-ai-base` (пушит
+`AI_BASE_IMAGE` в Harbor), затем на том хосте `docker pull …worker-ai-base:latest` перед
+ручным `docker build`. Если на хосте ЕСТЬ репозиторий и он собирает через
+`make build-ai-cpu/cuda` — `push-ai-base`/`docker pull` ему не нужны вообще: свежесть там
+даёт `git pull` исходников, а Harbor-тег в эту сборку не участвует (см. грабля 1).
 
 ## Связанное
 
 - `docs/worker-ai-deploy.md` — полный запуск (env, compose, GPU, траблшутинг).
-- kanban-находки: `stale-worker-ai-cpu-image-webrtcvad`, `ai-base-missing-workers-common`,
-  `makefile-ai-base-freshness` (todo — автоматизировать свежесть базы + standalone-гейт в CI/healthcheck).
+- kanban-находки: `stale-worker-ai-cpu-image-webrtcvad`, `ai-base-missing-workers-common`
+  (обе закрыты), `makefile-ai-base-freshness` (реализовано в `workers/Makefile`:
+  `build-ai-cpu`/`build-ai-cuda` зависят от `build-ai-base` и всегда используют свежий
+  `AI_BASE_LOCAL`; см. грабля 1 выше).
 - Роль воркера в транспорте — скиллы `backend-architecture`, `e2e-ws-transport-stack`,
   `docs/queue-contract.md` (воркер = WS-клиент gateway, не трогает KeyDB/S3 напрямую).

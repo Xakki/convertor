@@ -57,6 +57,23 @@ base.
 **Найдено при:** задача `verify-webm-harness-rewrite` (2026-07-18), см.
 [[stale-worker-ai-cpu-image-webrtcvad]].
 
-**Status:** todo — груминг завершён (2026-07-19), подход выбран (локальный base-тег +
-HEALTHCHECK + пин), scope и AC зафиксированы. Сюда сведены форвард-пункты закрытых находок
-[[stale-worker-ai-cpu-image-webrtcvad]] и [[ai-base-missing-workers-common]].
+**Status:** ready — реализовано (ветка `task/makefile-ai-base-freshness`, коммит `f3dcab4`).
+Сюда сведены форвард-пункты закрытых находок [[stale-worker-ai-cpu-image-webrtcvad]]
+и [[ai-base-missing-workers-common]].
+
+**Execution log (2026-07-19):**
+- `workers/Makefile`: добавлен `AI_BASE_LOCAL ?= worker-ai-base:local` (без registry-префикса);
+  `build-ai-base` тегает и Harbor-тег, и локальный; `build-ai-cpu`/`build-ai-cuda` теперь
+  зависят от `build-ai-base` и передают `--build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL)`.
+  `push-ai-base` остался отдельным шагом (рассылка базы на другие хосты), не зависимость cpu/cuda.
+- HEALTHCHECK в `ai.cpu.Dockerfile` + `ai.cuda.Dockerfile` → `import faster_whisper, webrtcvad, workers.common`.
+- `requirements-ai-ml.txt`: `webrtcvad-wheels==2.0.14` (запиннен).
+- Docs: заголовки `docker-compose.worker-ai.yml`, `docs/worker-ai-deploy.md`, скилл `worker-ai-image`.
+- Проверка (статическая): `make -C workers -n build-ai-cpu/cuda` → base собирается первым,
+  build-arg = локальный тег; `make worker-ai-check` + `make docker-check` → exit 0; HEALTHCHECK
+  guard валиден (WORKDIR /app, `workers.common` уже импортируется рантаймом `python3 -m workers.ai`).
+
+**Остаточный gap (не блокер приёмки этой карты):** AC «одной make-командой собирается образ,
+импорт проходит» проверен на уровне wiring, но НЕ реальной ML-сборкой (torch/CUDA-пул тут не
+поднять). Рантайм-прогон `make build-ai-cpu`/`build-ai-cuda` + `worker-ai-recreate` с проверкой
+healthy — на GPU/CPU-хосте, покрывается картой [[cuda-worker-ai-rebuild-gpu-host]].

@@ -7,7 +7,7 @@
 faster-whisper==1.2.1
 ctranslate2==4.8.0
 av==17.1.0
-webrtcvad-wheels
+webrtcvad-wheels==2.0.14
 # TTS (Python engine; espeak-ng binary installed via apt in each Dockerfile)
 pyttsx3==2.99
 # Embedding
