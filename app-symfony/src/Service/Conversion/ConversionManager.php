@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Service\Conversion;
 
+use App\DTO\ConversionRequestDTO;
 use App\DTO\ConversionResultDTO;
 use App\Entity\Conversion;
 use App\Entity\FileStorage;
@@ -42,11 +43,20 @@ class ConversionManager
     }
 
     /**
-     * @param bool $privileged есть ли у пользователя ROLE_USER (полный логин).
-     *                         Гость (false) не допускается к ai/video-парам.
+     * @param ConversionRequestDTO $request входной контракт Controller → Manager;
+     *                                      `$request->privileged` — есть ли у
+     *                                      пользователя ROLE_USER (полный логин).
+     *                                      Гость (false) не допускается к
+     *                                      ai/video-парам.
      */
-    public function createConversion(User $user, UploadedFile $file, string $toFormat, bool $ocr = false, bool $privileged = true): Conversion
+    public function createConversion(ConversionRequestDTO $request): Conversion
     {
+        $user       = $request->user;
+        $file       = $request->file;
+        $toFormat   = $request->toFormat;
+        $ocr        = $request->ocr;
+        $privileged = $request->privileged;
+
         $fromFormat = strtolower($file->getClientOriginalExtension());
 
         // Explicit OCR intent: validate against the OCR capability set up front

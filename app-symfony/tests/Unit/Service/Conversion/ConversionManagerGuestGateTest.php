@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Service\Conversion;
 
+use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\User;
 use App\Exception\AuthRequiredException;
@@ -54,13 +55,13 @@ final class ConversionManagerGuestGateTest extends TestCase
 
         $manager = $this->buildManager($quota, $this->okS3Client(), $this->stampingEm());
 
-        $conversion = $manager->createConversion(
+        $conversion = $manager->createConversion(new ConversionRequestDTO(
             $this->guestUser(),
             $this->makeUpload('jpg'),
             'txt',
             false,
             false, // privileged=false (гость)
-        );
+        ));
 
         self::assertFalse($conversion->isAi());
         self::assertSame('image', $conversion->getCategory()->value);
@@ -76,13 +77,13 @@ final class ConversionManagerGuestGateTest extends TestCase
 
         $manager = $this->buildManager($quota, $this->okS3Client(), $this->stampingEm());
 
-        $conversion = $manager->createConversion(
+        $conversion = $manager->createConversion(new ConversionRequestDTO(
             new User(),
             $this->makeUpload('mp3'),
             'txt',
             false,
             true, // privileged=true
-        );
+        ));
 
         self::assertTrue($conversion->isAi());
     }
@@ -110,7 +111,7 @@ final class ConversionManagerGuestGateTest extends TestCase
         $guest = $this->guestUser();
         self::assertNull($guest->getId(), 'precondition: guest is transient');
 
-        $manager->createConversion($guest, $this->makeUpload('jpg'), 'txt', false, false);
+        $manager->createConversion(new ConversionRequestDTO($guest, $this->makeUpload('jpg'), 'txt', false, false));
 
         self::assertContains(User::class, $persistOrder, 'transient guest must be persisted');
         self::assertContains(Conversion::class, $persistOrder);
@@ -143,7 +144,7 @@ final class ConversionManagerGuestGateTest extends TestCase
         $guest = $this->guestUser();
         (new \ReflectionProperty(User::class, 'id'))->setValue($guest, 7);
 
-        $manager->createConversion($guest, $this->makeUpload('jpg'), 'txt', false, false);
+        $manager->createConversion(new ConversionRequestDTO($guest, $this->makeUpload('jpg'), 'txt', false, false));
 
         self::assertNotContains(User::class, $persistOrder, 'persisted guest must NOT be re-persisted');
     }
@@ -164,13 +165,13 @@ final class ConversionManagerGuestGateTest extends TestCase
         $this->expectException(AuthRequiredException::class);
         $this->expectExceptionMessage('Войдите через Telegram для ai/video конвертаций');
 
-        $manager->createConversion(
+        $manager->createConversion(new ConversionRequestDTO(
             $this->guestUser(),
             $this->makeUpload($from),
             $to,
             false,
             false, // privileged=false (гость)
-        );
+        ));
     }
 
     private function guestUser(): User

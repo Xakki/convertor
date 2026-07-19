@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Service\Conversion;
 
+use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\User;
 use App\Message\ConversionMessage;
@@ -92,7 +93,7 @@ final class ConversionManagerOcrTest extends TestCase
         $file = $this->makeUpload($from);
 
         // createConversion enqueues internally (dispatch + charge happen inside).
-        $conversion = $manager->createConversion($this->makeUser(), $file, $to, $ocr);
+        $conversion = $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $file, $to, $ocr));
 
         self::assertIsArray($captured);
         /** @var ConversionMessage $message */
@@ -217,7 +218,7 @@ final class ConversionManagerOcrTest extends TestCase
         );
 
         $this->expectException(\InvalidArgumentException::class);
-        $manager->createConversion($this->makeUser(), $this->makeUpload('gif'), 'txt', true);
+        $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $this->makeUpload('gif'), 'txt', true));
     }
 
     /**
@@ -258,7 +259,7 @@ final class ConversionManagerOcrTest extends TestCase
         );
 
         $this->expectException(\RuntimeException::class);
-        $manager->createConversion($this->makeUser(), $this->makeUpload('jpg'), 'txt', false);
+        $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $this->makeUpload('jpg'), 'txt', false));
     }
 
     /**
@@ -286,7 +287,7 @@ final class ConversionManagerOcrTest extends TestCase
         );
 
         $this->expectException(\RuntimeException::class);
-        $manager->createConversion($this->makeUser(), $this->makeUpload('jpg'), 'txt', false);
+        $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $this->makeUpload('jpg'), 'txt', false));
     }
 
     /**
@@ -313,7 +314,7 @@ final class ConversionManagerOcrTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Unsupported conversion: zip → tar.gz');
-        $manager->createConversion($this->makeUser(), $this->makeUpload('zip'), 'tar.gz', false);
+        $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $this->makeUpload('zip'), 'tar.gz', false));
     }
 
     /**
@@ -335,7 +336,7 @@ final class ConversionManagerOcrTest extends TestCase
         $file = $this->makeRawUpload('jpg', "<?php echo 'pwn'; ?>\n");
 
         try {
-            $manager->createConversion($this->makeUser(), $file, 'txt', false);
+            $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $file, 'txt', false));
             self::fail('Expected UnsupportedMediaTypeHttpException');
         } catch (UnsupportedMediaTypeHttpException $e) {
             self::assertSame(415, $e->getStatusCode());
@@ -361,7 +362,7 @@ final class ConversionManagerOcrTest extends TestCase
         $file = $this->makeSizedUpload('jpg', 60 * 1024 * 1024); // > 50 MB
 
         try {
-            $manager->createConversion($this->makeUser(), $file, 'txt', false);
+            $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $file, 'txt', false));
             self::fail('Expected 413 HttpException');
         } catch (HttpException $e) {
             self::assertSame(413, $e->getStatusCode());
@@ -387,7 +388,7 @@ final class ConversionManagerOcrTest extends TestCase
         $file = $this->makeSizedUpload('jpg', 600 * 1024 * 1024); // > 500 MB
 
         try {
-            $manager->createConversion($this->makeUser(), $file, 'txt', false);
+            $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $file, 'txt', false));
             self::fail('Expected 413 HttpException');
         } catch (HttpException $e) {
             self::assertSame(413, $e->getStatusCode());
@@ -432,7 +433,7 @@ final class ConversionManagerOcrTest extends TestCase
             new S3Storage($s3Client, 'convertor'),
         );
 
-        $conversion = $manager->createConversion($this->makeUser(), $this->makeUpload('jpg'), 'txt', false);
+        $conversion = $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $this->makeUpload('jpg'), 'txt', false));
 
         self::assertSame('image', $conversion->getCategory()->value);
     }

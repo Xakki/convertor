@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Service\Conversion;
 
+use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\User;
 use App\Exception\ConversionDisabledException;
@@ -55,7 +56,7 @@ final class ConversionManagerToggleTest extends TestCase
         $this->expectException(ConversionDisabledException::class);
         $this->expectExceptionMessage('Конвертация временно отключена');
 
-        $manager->createConversion(new User(), $this->makeJpgUpload(), 'txt', false, true);
+        $manager->createConversion(new ConversionRequestDTO(new User(), $this->makeJpgUpload(), 'txt', false, true));
     }
 
     public function testEnabledPairProceeds(): void
@@ -70,7 +71,7 @@ final class ConversionManagerToggleTest extends TestCase
 
         $manager = $this->buildManager($quota, $this->okS3Client(), $this->stampingEm(), $toggle);
 
-        $conversion = $manager->createConversion(new User(), $this->makeJpgUpload(), 'txt', false, true);
+        $conversion = $manager->createConversion(new ConversionRequestDTO(new User(), $this->makeJpgUpload(), 'txt', false, true));
 
         self::assertSame('txt', $conversion->getToFormat());
         self::assertSame('image', $conversion->getCategory()->value);

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
+use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\FileStorage;
 use App\Entity\User;
@@ -127,7 +128,8 @@ class ConversionController extends AbstractController
         try {
             // createConversion now enqueues (dispatch) + charges quota internally,
             // so the whole charge→submit→enqueue path is atomic in one place.
-            $conversion = $this->conversionManager->createConversion($user, $file, strtolower((string) $toFormat), $ocr, $privileged);
+            $conversionRequest = new ConversionRequestDTO($user, $file, strtolower((string) $toFormat), $ocr, $privileged);
+            $conversion        = $this->conversionManager->createConversion($conversionRequest);
 
             return $this->json([
                 'conversion_id' => $conversion->getId(),

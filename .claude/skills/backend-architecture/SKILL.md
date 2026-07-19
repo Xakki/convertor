@@ -33,7 +33,7 @@ Backend построен по образцу **https://github.com/Xakki/ExRate**
 | Toggle-гейт (админ вкл/выкл пары) | `app-symfony/src/Service/Conversion/ConversionToggleService.php` |
 | Queue-DTO (job-контракт на воркер) | `app-symfony/src/Message/ConversionMessage.php` |
 | Status-DTO (ответ клиенту) | `app-symfony/src/DTO/ConversionResultDTO.php` |
-| Request-DTO (объявлен, но НЕ используется — см. «Дрифт» ниже) | `app-symfony/src/DTO/ConversionRequestDTO.php` |
+| Request-DTO (вход Controller → Manager) | `app-symfony/src/DTO/ConversionRequestDTO.php` |
 | Entity (персистентное состояние) | `app-symfony/src/Entity/Conversion.php`, `WorkerCapability.php`, `FileStorage.php` |
 | Custom Messenger-transport (XADD в KeyDB Streams) | `app-symfony/src/Messenger/Transport/CleanRedisTransport.php`, `CleanRedisTransportFactory.php` |
 | Messenger routing config (6 транспортов `conv_<key>` → stream `conv.<key>`) | `app-symfony/config/packages/messenger.yaml` |
@@ -48,8 +48,11 @@ Backend построен по образцу **https://github.com/Xakki/ExRate**
 
 ## Поток запроса: Registry → Manager → Messenger → воркер
 
-1. `ConversionController::convert()` (HTTP `POST /api/v1/.../convert`) вызывает
-   `ConversionManager::createConversion(User, UploadedFile, toFormat, ocr, privileged)`.
+1. `ConversionController::convert()` (HTTP `POST /api/v1/.../convert`) собирает
+   `ConversionRequestDTO` (`user`, `file`, `toFormat`, `ocr`, `privileged`) и
+   вызывает `ConversionManager::createConversion(ConversionRequestDTO $request)`
+   — DTO destructure'ится в локальные переменные в начале метода, дальше поток
+   не меняется.
 2. Manager спрашивает **Registry** — `isSupported()`/`getCategory()`/`isAi()`
    (или `isOcrSupported()` для OCR-флага) — чистая проверка пары форматов по
    матрице (БД `worker_capabilities`, с hardcoded fallback в
@@ -90,21 +93,17 @@ Python-воркеры (исполнение).
 
 ## Дрифт от текста CLAUDE.md (зафиксировать при обнаружении новых расхождений)
 
-- `ConversionRequestDTO` (`app-symfony/src/DTO/ConversionRequestDTO.php`)
-  объявлен, но нигде не используется вне своего файла — реальный вход
-  Manager'а принимает `User`/`UploadedFile`/`string $toFormat` напрямую, а не
-  DTO. Не удалён намеренно (возможно задел на будущее) — при рефакторинге
-  входного контракта учитывать этот факт.
 - «AbstractBase для воркеров» из CLAUDE.md верно только для **4 из 5**
   типов воркеров (`image`, `libreoffice`/document, `ffmpeg`/audio+video,
   `data` — наследники `StreamConsumerBase`). Remote AI-воркер
   (`workers/ai/worker.py`) НЕ наследует `StreamConsumerBase` — он работает
   через `WsClient` напрямую с модульными функциями, без общего базового
   класса.
-- Реальных DTO меньше, чем предполагает формулировка «DTO для передачи данных
-  между слоями»: рабочих контрактов два — `ConversionMessage` (queue-job) и
-  `ConversionResultDTO` (status-ответ клиенту); `ConversionRequestDTO` — мёртвый
-  код (см. выше).
+- Живых DTO — **три**: `ConversionRequestDTO` (вход Controller → Manager,
+  `createConversion(ConversionRequestDTO $request)`), `ConversionMessage`
+  (queue-job) и `ConversionResultDTO` (status-ответ клиенту). До рефакторинга
+  `ConversionRequestDTO` был мёртвым кодом (объявлен, но не использовался) —
+  теперь это реальный входной контракт.
 
 **Перед тем как полагаться на факт из этого файла — сверься с указанными
 исходниками; нашёл дрифт — поправь скилл в том же изменении и сообщи team-lead.**
