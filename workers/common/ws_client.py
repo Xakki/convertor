@@ -542,12 +542,17 @@ class WsClient:
             k: sorted(v) if isinstance(v, (set, frozenset)) else list(v)
             for k, v in matrix_raw.items()
         }
+        # matrix_categories (from-формат → "audio"|"document") — читает PHP-реестр
+        # (ConversionRegistry::buildMatrixFromCapabilities) для AI-воркеров, чтобы
+        # выбрать FileCategory; без него AI-пары молча дропаются.
+        matrix_categories: dict = dict(caps.get("matrix_categories", {}))
         return {
             "workerType": self._cfg.worker_type,
             "isAi": self._cfg.worker_type == "ai",
             "streams": routing_keys,
             "routingKeys": routing_keys,
             "matrix": matrix,
+            "matrix_categories": matrix_categories,
             "image": None,
             "version": self._cfg.version,
         }

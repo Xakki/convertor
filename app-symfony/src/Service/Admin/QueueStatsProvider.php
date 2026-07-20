@@ -6,6 +6,7 @@ namespace App\Service\Admin;
 
 use App\Entity\Conversion;
 use App\Repository\ConversionRepository;
+use App\Service\Conversion\ConversionRegistry;
 use Symfony\Contracts\HttpClient\Exception\ExceptionInterface as HttpClientExceptionInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
@@ -25,6 +26,13 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  *  - `stalled` — есть backlog (`lag>0`) при 0 consumers группы;
  *  - dead-letter — рост `conv.dead` (`convertor_dead_letter_messages`);
  *  - db-stuck  — строки `Conversion` в Pending/Processing старше порога.
+ *
+ * `warnings` — доп. сигнал конфигурации (не про очередь-стрим, а про полноту
+ * capability-данных воркера в БД): AI-воркер объявил в `matrix` from-формат,
+ * для которого нет `matrix_categories` → пара молча дропается при построении
+ * routing-матрицы ({@see ConversionRegistry::buildMatrixFromCapabilities()}).
+ * Раньше это тонуло в `logger->warning`; теперь видно в admin. Считается «на
+ * лету» через {@see ConversionRegistry::getCapabilityWarnings()}.
  */
 final readonly class QueueStatsProvider
 {
@@ -52,6 +60,7 @@ final readonly class QueueStatsProvider
         private int $dbStuckMinutes = 15,
         private int $dbStuckLimit = 50,
         private float $timeoutSeconds = 2.0,
+        private ?ConversionRegistry $registry = null,
     ) {
     }
 
@@ -62,7 +71,8 @@ final readonly class QueueStatsProvider
      *     exporterError: string|null,
      *     streams: list<array{type: string, stream: string, length: int|null, pending: int|null, lag: int|null, consumers: int|null, maxIdleMs: int|null, signals: list<string>}>,
      *     deadLetter: int|null,
-     *     dbStuck: array{count: int, thresholdMinutes: int, items: list<array{id: int, status: string, from: string, to: string, ageMinutes: int, updatedAt: string}>}
+     *     dbStuck: array{count: int, thresholdMinutes: int, items: list<array{id: int, status: string, from: string, to: string, ageMinutes: int, updatedAt: string}>},
+     *     warnings: list<array{workerType: string, droppedFormats: list<string>, droppedCount: int, totalFormats: int}>
      * }
      */
     public function collect(): array
@@ -123,6 +133,7 @@ final readonly class QueueStatsProvider
             'streams'           => $streams,
             'deadLetter'        => $deadLetter,
             'dbStuck'           => $this->dbStuck(),
+            'warnings'          => $this->registry?->getCapabilityWarnings() ?? [],
         ];
     }
 

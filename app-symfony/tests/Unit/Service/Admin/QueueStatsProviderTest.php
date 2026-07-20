@@ -7,6 +7,7 @@ namespace App\Tests\Unit\Service\Admin;
 use App\Repository\ConversionRepository;
 use App\Service\Admin\PrometheusMetricsParser;
 use App\Service\Admin\QueueStatsProvider;
+use App\Service\Conversion\ConversionRegistry;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -88,9 +89,35 @@ final class QueueStatsProviderTest extends TestCase
         self::assertSame(0, $data['dbStuck']['count']);
     }
 
-    private function provider(ResponseInterface $response): QueueStatsProvider
+    /** Без ConversionRegistry (не передан в конструктор) — warnings пустой, ключ всё равно присутствует. */
+    public function testWarningsEmptyWithoutRegistry(): void
     {
-        $conversions = $this->createMock(ConversionRepository::class);
+        $provider = $this->provider(new MockResponse(self::FIXTURE));
+        $data     = $provider->collect();
+
+        self::assertArrayHasKey('warnings', $data);
+        self::assertSame([], $data['warnings']);
+    }
+
+    /** ConversionRegistry::getCapabilityWarnings() прокидывается в JSON как есть. */
+    public function testWarningsPropagateFromRegistry(): void
+    {
+        $registryWarnings = [
+            ['workerType' => 'ai', 'droppedFormats' => ['mp3'], 'droppedCount' => 1, 'totalFormats' => 2],
+        ];
+
+        $registry = $this->createStub(ConversionRegistry::class);
+        $registry->method('getCapabilityWarnings')->willReturn($registryWarnings);
+
+        $provider = $this->provider(new MockResponse(self::FIXTURE), $registry);
+        $data     = $provider->collect();
+
+        self::assertSame($registryWarnings, $data['warnings']);
+    }
+
+    private function provider(ResponseInterface $response, ?ConversionRegistry $registry = null): QueueStatsProvider
+    {
+        $conversions = $this->createStub(ConversionRepository::class);
         $conversions->method('countStuck')->willReturn(0);
         $conversions->method('findStuck')->willReturn([]);
 
@@ -99,6 +126,7 @@ final class QueueStatsProviderTest extends TestCase
             new PrometheusMetricsParser(),
             $conversions,
             'http://metrics-exporter:9472/metrics',
+            registry: $registry,
         );
     }
 }

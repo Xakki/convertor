@@ -37,6 +37,16 @@ Make-таргеты (`workers/Makefile`): `build-ai-base` (тегирует ОБ
 передают `--build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL)`), `worker-ai-up` / `worker-ai-recreate`
 / `worker-ai-down` (on-server CPU dev-server).
 
+## ⚠️ ВАЖНО: запускать AI-таргеты ТОЛЬКО из корня репо
+
+Таргеты для AI-воркера — **`build-ai-base`, `push-ai-base`, `build-ai-cpu`, `build-ai-cuda`, `worker-ai-recreate`, `worker-ai-up`** — ОБЯЗАТЕЛЬНО запускаются из корня репо:
+```bash
+make push-ai-base        # ✓ правильно
+make -C workers push-ai-base  # ✗ НЕПРАВИЛЬНО — Dockerfile-пути не разрешатся
+```
+
+Причина: `workers/Makefile` инклюдится в корневой `Makefile` (строка 1); при запуске с `-C workers` пути вроде `docker/workers/ai-base.Dockerfile` разрешаются относительно `workers/`, файл не найдётся, сборка упадёт. Из корня пути правильные.
+
 ## КРИТИЧНЫЕ грабли и гейты (грабли 2–3 всплыли 2026-07-18, грабля 1 закрыта
 `makefile-ai-base-freshness` — см. ниже)
 

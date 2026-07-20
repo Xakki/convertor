@@ -33,7 +33,7 @@ class WorkerCapability
 
     /**
      * Весь блоб возможностей воркера из тела register-запроса (isAi, streams,
-     * routingKeys, matrix, image, version).
+     * routingKeys, matrix, matrix_categories, image, version).
      *
      * @var array<string, mixed>
      */

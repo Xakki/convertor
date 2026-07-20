@@ -18,7 +18,7 @@ SaaS-сервис конвертации файлов всех форматов:
 
 `php`, `cron`, `mariadb`, `keydb`, `nginx`, `worker-libreoffice`, `worker-ffmpeg-audio`, `worker-ffmpeg-video`, `worker-image`, `worker-data`, `ws-gateway`, `metrics-exporter`.
 
-AI-воркер (GPU) — **remote, вне основного стека**: запускается отдельно (напр. на домашнем WSL+GPU) через `docker-compose.worker-ai.yml` и подключается к публичному `wss://`. В `make up` его нет.
+AI-воркер — через отдельный `docker-compose.worker-ai.yml` (в `make up` его нет). On-server запускается как полноценный prod CPU-воркер (подключается по внутреннему `ws://ws-gateway:8091`); удалённые GPU-хосты (напр. домашний WSL+GPU) поднимают тот же воркер и подключаются к публичному `wss://` — оба независимые consumer'ы `conv.ai`, задачи балансируются между ними.
 
 ### Транспорт: WS-Gateway как единственный читатель очередей
 

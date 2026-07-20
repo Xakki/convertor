@@ -113,6 +113,14 @@ services:
             API_BASE_URL: ${API_BASE_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
             WORKER_TYPE: ${WORKER_TYPE:-ai}
+            # WS-транспорт (prod worker mode): без явного GATEWAY_WS_URL воркер падает
+            # обратно на публичный wss://…/ws/worker/, зашитый в workers/ai/worker.py
+            # (_run_with_signals default_gateway_ws_url) — годится для remote-хоста, но
+            # на этом сервере зеркалим on-server воркеров из основного docker-compose.yml
+            # (worker-data и др.) и берём внутренний адрес из корневого .env.
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            # Рабочий каталог для временных файлов конвертации (см. worker-data/др.).
+            WORK_DIR: /tmp/worker
             # STT
             WHISPER_MODEL: ${WHISPER_MODEL:-base}
             # Пустой фолбэк (не cpu/int8!) — иначе compose-env забивает автодетект в
@@ -153,11 +161,16 @@ services:
             # here (comma-separated, no path), else the /ws/stream handshake is rejected (1008).
             #   e.g. DEVSERVER_ALLOWED_ORIGINS=https://convertor.xakki.pro
             DEVSERVER_ALLOWED_ORIGINS: ${DEVSERVER_ALLOWED_ORIGINS:-}
-        # Run the dev-server (FastAPI UI + in-process WS-client worker loop) instead of the
-        # bare worker. nginx reaches it internally as worker-ai:8877, so
-        # set DEVSERVER_HOST=0.0.0.0 (in .env.local) — no host ports: publish needed.
-        command: ["python3", "-m", "workers.ai", "--devserver"]
-        #   ports: ["${DEVSERVER_PORT:-8877}:${DEVSERVER_PORT:-8877}"]   # only for direct host curl
+        # PROD worker mode (заменяет dev-UI, 2026-07-20): подключается к ws-gateway и
+        # реально обрабатывает conv.ai задачи — как остальные on-server воркеры в
+        # основном docker-compose.yml. Раньше здесь стоял `--devserver` (FastAPI UI +
+        # in-process WS-client), который по дизайну НЕ подключается к gateway и не
+        # берёт задачи; nginx-роут /worker-ai/ и DEVSERVER_* env ниже больше не
+        # обслуживают прод-трафик — оставлены как заглушённая опция для локальной
+        # отладки (см. закомментированный роут в docker/nginx/*/conf.d/default.conf).
+        # Чтобы вернуть dev-UI вручную: command: ["python3", "-m", "workers.ai", "--devserver"].
+        command: ["python3", "-m", "workers.ai"]
+        #   ports: ["${DEVSERVER_PORT:-8877}:${DEVSERVER_PORT:-8877}"]   # only for --devserver + direct host curl
         # Uncomment for CUDA GPU support (nvidia-container-toolkit required on host):
         # deploy:
         #     resources:

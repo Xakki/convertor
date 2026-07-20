@@ -1014,6 +1014,40 @@ async def test_register_failure_does_not_stop_worker(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_register_forwards_matrix_categories(tmp_path):
+    """AI-воркер объявляет matrix_categories в capabilities — тело register должно
+    прокидывать их под тем же ключом (snake_case), который читает PHP-реестр
+    (ConversionRegistry::buildMatrixFromCapabilities, blob['matrix_categories'])."""
+    gw = FakeGateway()
+    sym = FakeSymfony()
+
+    async def noop(job, progress):
+        return ResultSignal.completed(data=b"", ext="txt")
+
+    caps = {
+        "routing_keys": ["ai"],
+        "matrix": {"mp3": ["txt"], "txt": ["mp3"]},
+        "matrix_categories": {"mp3": "audio", "txt": "document"},
+    }
+    async with _running(gw, tmp_path, noop, sym, capabilities=caps):
+        await _wait_for(lambda: any("/register" in r.url.path for r in sym.requests))
+
+    reg_reqs = [r for r in sym.requests if "/register" in r.url.path]
+    body = json.loads(reg_reqs[0].content)
+    assert body["matrix_categories"] == {"mp3": "audio", "txt": "document"}
+
+
+def test_build_register_body_matrix_categories_absent_when_source_has_none(tmp_path):
+    """Без matrix_categories в capabilities (non-AI воркер) — ключ отдаётся пустым
+    словарём, а не отсутствует/крашит (empty-safe)."""
+    cfg = _cfg(9999, tmp_path)
+    caps = {"routing_keys": ["image"], "matrix": {"png": ["jpg"]}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    body = client._build_register_body()
+    assert body["matrix_categories"] == {}
+
+
+@pytest.mark.asyncio
 async def test_no_register_when_no_capabilities(tmp_path):
     """Без capabilities воркер НЕ делает POST /register."""
     gw = FakeGateway()

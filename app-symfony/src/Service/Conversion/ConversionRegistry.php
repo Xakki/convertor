@@ -148,6 +148,63 @@ class ConversionRegistry
         $this->cache?->delete(self::CACHE_KEY);
     }
 
+    /**
+     * Admin-visible health signal: per AI worker (`isAi=true` in the registered
+     * capability blob), which `from` formats it declared in `matrix` but that
+     * got silently dropped from the routing matrix because `matrix_categories`
+     * has no (or an unresolvable) entry for them — see the `continue` in
+     * {@see buildMatrixFromCapabilities()}. Computed on the fly directly from
+     * the repository, independent of the (possibly cached) routing matrix, so
+     * it reflects the current DB state even when the matrix cache is warm.
+     * Only DB-backed registrations are considered (no repository / DB error /
+     * hardcoded fallback → no warnings, nothing to report on).
+     *
+     * @return list<array{workerType: string, droppedFormats: list<string>, droppedCount: int, totalFormats: int}>
+     */
+    public function getCapabilityWarnings(): array
+    {
+        if ($this->repository === null) {
+            return [];
+        }
+
+        try {
+            $capabilities = $this->repository->findAllCapabilities();
+        } catch (\Throwable) {
+            return [];
+        }
+
+        $warnings = [];
+        foreach ($capabilities as $cap) {
+            $blob = $cap->getCapabilities();
+            if (! ($blob['isAi'] ?? false)) {
+                continue;
+            }
+
+            /** @var array<string, list<string>> $rawMatrix */
+            $rawMatrix = $blob['matrix'] ?? [];
+            /** @var array<string, string> $matrixCategories */
+            $matrixCategories = $blob['matrix_categories'] ?? [];
+
+            $dropped = [];
+            foreach (array_keys($rawMatrix) as $from) {
+                if (self::resolveAiCategory($matrixCategories[$from] ?? '') === null) {
+                    $dropped[] = $from;
+                }
+            }
+
+            if ($dropped !== []) {
+                $warnings[] = [
+                    'workerType'     => $cap->getWorkerType(),
+                    'droppedFormats' => $dropped,
+                    'droppedCount'   => count($dropped),
+                    'totalFormats'   => count($rawMatrix),
+                ];
+            }
+        }
+
+        return $warnings;
+    }
+
     // -------------------------------------------------------------------------
     // Internals
     // -------------------------------------------------------------------------
@@ -230,12 +287,7 @@ class ConversionRegistry
                 /** @var array<string, string> $matrixCategories */
                 $matrixCategories = $blob['matrix_categories'] ?? [];
                 foreach ($rawMatrix as $from => $targets) {
-                    $catStr   = $matrixCategories[$from] ?? '';
-                    $category = match ($catStr) {
-                        'audio'    => FileCategory::Audio,
-                        'document' => FileCategory::Document,
-                        default    => null,
-                    };
+                    $category = self::resolveAiCategory($matrixCategories[$from] ?? '');
                     if ($category === null) {
                         $this->logger?->warning('ConversionRegistry: AI worker: нет matrix_categories для формата', [
                             'from' => $from,
@@ -445,5 +497,19 @@ class ConversionRegistry
     private function categoryForStream(string $stream): FileCategory
     {
         return FileCategory::from($stream);
+    }
+
+    /**
+     * AI `matrix_categories` value → FileCategory, or null when missing/unresolvable.
+     * Single source of truth shared by {@see buildMatrixFromCapabilities()} (drops
+     * the pair) and {@see getCapabilityWarnings()} (reports it as dropped).
+     */
+    private static function resolveAiCategory(string $catStr): ?FileCategory
+    {
+        return match ($catStr) {
+            'audio'    => FileCategory::Audio,
+            'document' => FileCategory::Document,
+            default    => null,
+        };
     }
 }

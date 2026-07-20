@@ -170,19 +170,21 @@ build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (FROM 
 worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compose)
 	docker compose -f docker-compose.worker-ai.yml config -q
 
-# On-server run of the AI worker (CPU dev-server) as part of the convertor stack,
-# reachable via nginx at /worker-ai/. Explicit -f because the root Makefile
-# unexports COMPOSE_FILE and `docker compose` only auto-loads .env (not .env.local),
-# so the worker-ai overlay would otherwise be dropped. Image/env come from the
-# exported vars (set DOCKER_IMAGE_AI=...:cpu + DEVSERVER_HOST=0.0.0.0 in .env.local).
-# Full 4-file set matches the live deployment's COMPOSE_FILE (.env.local): base +
-# worker-ai + fluent-logging + limits. worker-ai's own logging/limits are inline in
-# docker-compose.worker-ai.yml; the two overlays are included so the file set is
-# identical to the running container's and `up` never recreates it with a narrower set.
+# On-server run of the AI worker as part of the convertor stack — prod worker mode
+# (WS-client, connects to ws-gateway and takes conv.ai jobs; the FastAPI dev-UI at
+# /worker-ai/ is retired, see docker-compose.worker-ai.yml `command`). Explicit -f
+# because the root Makefile unexports COMPOSE_FILE and `docker compose` only
+# auto-loads .env (not .env.local), so the worker-ai overlay would otherwise be
+# dropped. Image/env come from the exported vars (set DOCKER_IMAGE_AI=...:cpu in
+# .env.local). Full 4-file set matches the live deployment's COMPOSE_FILE
+# (.env.local): base + worker-ai + fluent-logging + limits. worker-ai's own
+# logging/limits are inline in docker-compose.worker-ai.yml; the two overlays are
+# included so the file set is identical to the running container's and `up` never
+# recreates it with a narrower set.
 WORKER_AI_DC = $(DC) -f docker-compose.yml -f docker-compose.worker-ai.yml -f docker/fluent-logging.yml -f docker/limits.yml
 
 .PHONY: worker-ai-up
-worker-ai-up: ## Run the AI worker (CPU dev-server) on this host, reachable via nginx /worker-ai/
+worker-ai-up: ## Run the AI worker (prod, CPU) on this host as part of the stack
 	$(WORKER_AI_DC) up -d worker-ai
 
 .PHONY: worker-ai-recreate
@@ -200,7 +202,7 @@ worker-ai-logs: ## Tail the on-server AI worker logs
 ##@ Queue / Workers
 
 .PHONY: worker-logs
-worker-logs: ## Tail logs for on-server worker services (worker-ai is remote — see docker-compose.worker-ai.yml)
+worker-logs: ## Tail logs for on-server worker services (worker-ai runs via a separate compose file — see worker-ai-logs)
 	$(DC) logs -f worker-libreoffice worker-ffmpeg worker-image worker-data
 
 .PHONY: queue-status

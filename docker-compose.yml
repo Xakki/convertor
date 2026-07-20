@@ -332,9 +332,9 @@ services:
         networks:
             - default
 
-    # worker-ai is a REMOTE worker (home WSL + GPU), run separately via
-    # docker-compose.worker-ai.yml (add it to COMPOSE_FILE in .env.local). It is
-    # intentionally NOT part of the main on-server stack.
+    # worker-ai lives in docker-compose.worker-ai.yml (add it to COMPOSE_FILE in
+    # .env.local). On-server it runs as a full prod CPU worker; remote GPU hosts
+    # run the same worker in parallel — both are independent conv.ai consumers.
 
     worker-data:
         build:
