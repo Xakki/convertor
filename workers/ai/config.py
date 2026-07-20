@@ -22,6 +22,19 @@ from workers.common.env import getenv_float, getenv_int
 LLM_BACKENDS = ("ollama", "llamacpp")
 
 
+def _autodetect_device() -> str:
+    """Автоопределение устройства для Whisper/embedding: "cuda", если torch видит GPU,
+    иначе "cpu". Ленивый импорт torch (тяжёлая зависимость, не нужна на CPU-путях, где
+    torch может отсутствовать/быть битым) — любая ошибка импорта/детекта безопасно
+    трактуется как отсутствие GPU."""
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:  # noqa: BLE001 — любой сбой импорта/детекта → безопасный fallback
+        return "cpu"
+
+
 @dataclass(frozen=True)
 class Config:
     # Рабочий каталог: временные файлы конвертации. Единственный источник WORK_DIR —
@@ -81,12 +94,15 @@ class Config:
 def load_config() -> Config:
     """Собрать Config из окружения. Чистое чтение — не валидирует и не поднимает исключений
     при отсутствующих ключах (вызывай .validate() там, где действительно нужно стартовать)."""
-    whisper_device = os.getenv("WHISPER_DEVICE", "cpu")
+    whisper_device = os.getenv("WHISPER_DEVICE", "").strip() or _autodetect_device()
+    whisper_compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "").strip() or (
+        "float16" if whisper_device == "cuda" else "int8"
+    )
     return Config(
         work_dir=Path(os.getenv("WORK_DIR", tempfile.gettempdir())).resolve(),
         whisper_model=os.getenv("WHISPER_MODEL", "base"),
         whisper_device=whisper_device,
-        whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
+        whisper_compute_type=whisper_compute_type,
         stream_window_sec=getenv_int("STREAM_WINDOW_SEC", 20),
         stream_overlap_sec=getenv_int("STREAM_OVERLAP_SEC", 2),
         vad_aggressiveness=getenv_int("VAD_AGGRESSIVENESS", 2),

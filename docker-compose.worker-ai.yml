@@ -60,6 +60,11 @@ services:
     worker-ai:
         image: ${DOCKER_IMAGE_AI:-xakki-convertor/worker-ai:cuda}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
+        # Стабильный hostname → стабильный auto-derived WORKER_ID (см. ws_client.py
+        # _default_worker_id, §6.1): без пиннинга каждое пересоздание контейнера
+        # получало бы новое имя KeyDB-consumer'а (мирроим hostname-паттерн php/cron
+        # в основном docker-compose.yml).
+        hostname: "${COMPOSE_PROJECT_NAME:-convertor}-worker-ai"
         restart: unless-stopped
         stop_grace_period: 60s
         stop_signal: SIGTERM
@@ -110,8 +115,11 @@ services:
             WORKER_TYPE: ${WORKER_TYPE:-ai}
             # STT
             WHISPER_MODEL: ${WHISPER_MODEL:-base}
-            WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
-            WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+            # Пустой фолбэк (не cpu/int8!) — иначе compose-env забивает автодетект в
+            # workers/ai/config.py (_autodetect_device). Пусто → воркер сам определит
+            # cuda+float16 при видимом GPU, иначе cpu+int8.
+            WHISPER_DEVICE: ${WHISPER_DEVICE:-}
+            WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-}
             STREAM_WINDOW_SEC: ${STREAM_WINDOW_SEC:-20}
             STREAM_OVERLAP_SEC: ${STREAM_OVERLAP_SEC:-2}
             # TTS

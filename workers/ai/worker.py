@@ -143,7 +143,15 @@ def build_handle_job(cfg: Config):
 
 async def _run_with_signals(cfg: Config, *, http_client=None) -> None:
     """Async body: строит WsClient, регистрирует SIGTERM/SIGINT → stop(), запускает цикл."""
-    ws_cfg = WsClientConfig.from_env(work_dir=cfg.work_dir)
+    # Прод-дефолты для удалённого AI-воркера (worker-режим). devserver
+    # (workers/ai/devserver/ws_runner.py) намеренно НЕ передаёт эти дефолты — его пустой
+    # GATEWAY_WS_URL + guard в WsClientConfig.validate() оставляют on-server контейнер
+    # выключенным из прод-стрима (см. комментарий в WsClientConfig.from_env).
+    ws_cfg = WsClientConfig.from_env(
+        work_dir=cfg.work_dir,
+        default_gateway_ws_url="wss://convertor.xakki.pro/ws/worker/",
+        default_api_base_url="https://convertor.xakki.pro",
+    )
     client = WsClient(ws_cfg, build_handle_job(cfg), http_client=http_client, capabilities=CAPABILITIES)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):

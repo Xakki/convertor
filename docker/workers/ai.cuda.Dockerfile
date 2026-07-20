@@ -113,8 +113,13 @@ RUN set -- /tmp/llama_wheels/*.whl; [ -f "$1" ] && pip install --no-cache-dir "$
 
 WORKDIR /app
 
-ENV WHISPER_DEVICE=cuda \
-    WHISPER_COMPUTE_TYPE=float16
+# Запекаем WORKER_TYPE в образ — этот образ ВСЕГДА ai-воркер, передавать флаг
+# руками (bare `docker run`) не нужно; при желании всё ещё переопределим -e/compose.
+ENV WORKER_TYPE=ai
+
+# WHISPER_DEVICE/WHISPER_COMPUTE_TYPE больше НЕ запекаются — автоопределяются в
+# workers/ai/config.py (_autodetect_device): cuda+float16, если torch видит GPU, иначе
+# cpu+int8. Запечённый ENV замаскировал бы автодетект; переопределяются через -e/compose.
 
 # Import-based healthcheck — образ самодостаточен вне compose (параметры согласованы
 # с docker-compose.worker-ai.yml). Обязательно python3 (не python).

@@ -38,6 +38,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -81,6 +82,19 @@ def _load_snapshot() -> tuple[float, float, float]:
         ncpu = os.cpu_count() or 1
         load = max(0.0, min(1.0, os.getloadavg()[0] / ncpu))
     return 0.0, 0.0, load
+
+
+def _default_worker_id() -> str:
+    """Фолбэк WORKER_ID, когда env не задан. Должен оставаться СТАБИЛЬНЫМ между
+    реконнектами (§6.1 — используется дословно как имя KeyDB-consumer'а; свежий id
+    на каждый старт плодит consumer'ов и тормозит резюме in-flight задач). Hostname
+    контейнера стабилен на весь его жизненный цикл; случайный суффикс — только
+    если hostname недоступен."""
+    with suppress(OSError):
+        host = socket.gethostname().strip()
+        if host:
+            return host
+    return f"worker-{uuid.uuid4().hex[:12]}"
 
 
 def _safe_dir_name(job_id: str) -> str:
@@ -155,12 +169,27 @@ class WsClientConfig:
             )
 
     @classmethod
-    def from_env(cls, *, work_dir: Path | None = None) -> WsClientConfig:
+    def from_env(
+        cls,
+        *,
+        work_dir: Path | None = None,
+        default_gateway_ws_url: str = "",
+        default_api_base_url: str = "http://localhost:8080",
+    ) -> WsClientConfig:
         """Собрать конфиг из окружения. Идентичность/URL не валидирует (это делает
         `validate()` перед стартом), НО кривой числовой env fail-fast'ит: `getenv_int/
         float` поднимают ValueError на нечисловом значении прямо здесь, при load.
 
         `work_dir` — если передан явно, WORK_DIR env не читается (единственный источник).
+
+        `default_gateway_ws_url`/`default_api_base_url` — ОПЦИОНАЛЬНЫЕ фолбэки транспорта,
+        передаются вызывающим кодом (не хардкодятся здесь!). Причина: этот метод общий для
+        ВСЕХ воркеров И devserver'а (`workers/ai/devserver/ws_runner.py`) — если бы прод-URL
+        gateway жил тут как дефолт, devserver-контейнер на сервере (worker-режим=выключен,
+        но с уже прописанным WORKER_API_TOKEN) начал бы САМ подключаться к прод-gateway и
+        принимать боевые задачи — незапланированный второй прод-воркер. Поэтому пустой
+        `GATEWAY_WS_URL` без явного дефолта остаётся пустым → `validate()` фейлит запуск
+        (см. guard там же). Прод-дефолты передаёт ТОЛЬКО worker-режим (`workers/ai/worker.py`).
         """
         import tempfile
 
@@ -170,10 +199,10 @@ class WsClientConfig:
             else Path(os.getenv("WORK_DIR", tempfile.gettempdir())).resolve()
         )
         return cls(
-            worker_id=os.getenv("WORKER_ID", ""),
+            worker_id=os.getenv("WORKER_ID", "").strip() or _default_worker_id(),
             worker_type=os.getenv("WORKER_TYPE", ""),
-            gateway_ws_url=os.getenv("GATEWAY_WS_URL", ""),
-            api_base_url=os.getenv("API_BASE_URL", "http://localhost:8080"),
+            gateway_ws_url=os.getenv("GATEWAY_WS_URL", "").strip() or default_gateway_ws_url,
+            api_base_url=os.getenv("API_BASE_URL", "").strip() or default_api_base_url,
             worker_api_token=os.getenv("WORKER_API_TOKEN", ""),
             version=_compose_version(),
             work_dir=resolved_work_dir,

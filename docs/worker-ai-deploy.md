@@ -119,17 +119,29 @@ docker run --rm --entrypoint python3 xakki-convertor/worker-ai:cuda \
 ```bash
 docker rm -f worker-ai 2>/dev/null || true    # если уже запущен старый
 
-docker run -d --name worker-ai --restart unless-stopped --gpus all \
-  -e GATEWAY_WS_URL=wss://<gateway-host>/ws/worker/ \
+docker run -d --name worker-ai --hostname worker-ai --restart unless-stopped --gpus all \
   -e WORKER_API_TOKEN=<ТОКЕН> \
-  -e API_BASE_URL=https://convertor.xakki.pro \
-  -e WHISPER_DEVICE=cuda -e WHISPER_COMPUTE_TYPE=float16 \
-  -e LLM_BACKEND=llamacpp \
   -v ~/.cache/huggingface:/home/app/.cache/huggingface \
   xakki-convertor/worker-ai:cuda
+  # Опциональные переопределения (по умолчанию — прод-дефолты/автодетект, см. таблицы ниже):
+  #   -e GATEWAY_WS_URL=wss://<другой-gateway>/ws/worker/ \
+  #   -e API_BASE_URL=https://<другой-api> \
+  #   -e WHISPER_DEVICE=cuda -e WHISPER_COMPUTE_TYPE=float16 \
+  #   -e LLM_BACKEND=llamacpp \
 ```
 
-CPU-хост: образ `:cpu`, без `--gpus all`, `WHISPER_DEVICE=cpu WHISPER_COMPUTE_TYPE=int8`.
+`WORKER_API_TOKEN` — единственная ОБЯЗАТЕЛЬНАЯ переменная (секрет, дефолта нет и быть не
+может — guard в `WsClientConfig.validate()` не даёт стартовать без токена). Остальное
+(`GATEWAY_WS_URL`, `API_BASE_URL`, `WHISPER_*`) теперь имеет прод-дефолт/автодетект —
+задавать вручную нужно только для переопределения (см. «Больше НЕ обязательные» ниже).
+
+CPU-хост: образ `:cpu`, без `--gpus all` — `WHISPER_DEVICE`/`WHISPER_COMPUTE_TYPE`
+автоопределятся в `cpu`/`int8` сами (torch не увидит GPU).
+
+`--hostname worker-ai` пиннит стабильный `WORKER_ID` (см. ниже) между пересозданиями
+контейнера. Без пиннинга hostname'а (или явного `-e WORKER_ID=…`) каждое пересоздание
+контейнера получает НОВОЕ имя KeyDB-consumer'а — по одному «утёкшему» consumer'у на
+пересоздание (не ломает работу, но засоряет consumer group).
 
 ### Compose-альтернатива
 
@@ -149,19 +161,31 @@ docker compose -f docker-compose.worker-ai.yml --env-file .env.worker-ai up -d
 
 | Переменная | Назначение |
 |---|---|
-| `GATEWAY_WS_URL` | Публичный WS gateway: `wss://…/ws/worker/`. Пусто → воркер не стартует (guard, без reconnect-storm). |
-| `WORKER_API_TOKEN` | Bearer для WS-upgrade (auth) и прямого HTTP к API. Секрет. |
-| `API_BASE_URL` | База Symfony API (GET входного файла / POST крупного результата), напр. `https://convertor.xakki.pro`. Без path-компонента. |
+| `WORKER_API_TOKEN` | Bearer для WS-upgrade (auth) и прямого HTTP к API. Секрет, дефолта нет и быть не может. Пусто → воркер не стартует (guard в `WsClientConfig.validate()`, без reconnect-storm). |
 
-### Whisper (STT) / устройство
+### Больше НЕ обязательные
 
 | Переменная | Дефолт | Примечание |
 |---|---|---|
-| `WHISPER_DEVICE` | `cpu` | В cuda-образе выставлен `cuda`. |
-| `WHISPER_COMPUTE_TYPE` | `int8` | В cuda-образе `float16`. |
+| `GATEWAY_WS_URL` | `wss://convertor.xakki.pro/ws/worker/` (только worker-режим) | Прод-дефолт передаётся ТОЛЬКО из `workers/ai/worker.py` (worker-режим, `run()` → `_run_with_signals()` → `WsClientConfig.from_env(default_gateway_ws_url=…)`). Общий `WsClientConfig.from_env()` (`workers/common/ws_client.py`) сам по себе дефолта НЕ несёт — это намеренно: devserver-путь (`workers/ai/devserver/ws_runner.py`) вызывает `from_env()` без него, иначе on-server devserver-контейнер начал бы САМ подключаться к прод-gateway. Переопределяется `-e GATEWAY_WS_URL=…`. |
+| `API_BASE_URL` | `https://convertor.xakki.pro` (только worker-режим) | Аналогично `GATEWAY_WS_URL` — прод-дефолт только в worker-режиме, без path-компонента. Переопределяется `-e API_BASE_URL=…`. |
+| `WORKER_TYPE` | `ai` | Запечён в образ (`ai.cpu.Dockerfile`/`ai.cuda.Dockerfile`, `ENV WORKER_TYPE=ai`) — передавать вручную больше не нужно, но можно переопределить `-e`/compose. |
+| `WORKER_ID` | hostname контейнера | Стабильное имя KeyDB-consumer'а. Если не задан явно, `ws_client.py` берёт `socket.gethostname()`. Для стабильности между пересозданиями контейнера пиньте hostname (`--hostname worker-ai` в `docker run` выше) или задайте `WORKER_ID` явно — иначе каждое пересоздание получает новое имя consumer'а (см. заметку после команды запуска). |
+
+### Whisper (STT) / устройство
+
+`WHISPER_DEVICE`/`WHISPER_COMPUTE_TYPE` теперь АВТООПРЕДЕЛЯЮТСЯ в `workers/ai/config.py`
+(`_autodetect_device`, ленивый `torch.cuda.is_available()`): `cuda`+`float16`, если GPU
+виден, иначе `cpu`+`int8`. Самоисцеление: образ `:cuda`, запущенный БЕЗ `--gpus all`,
+автоматически падает обратно на `cpu`/`int8` (torch не увидит GPU) вместо падения/ошибки.
+
+| Переменная | Дефолт | Примечание |
+|---|---|---|
+| `WHISPER_DEVICE` | автодетект (`cuda`/`cpu`) | Переопределить явно — `-e WHISPER_DEVICE=cuda\|cpu`. |
+| `WHISPER_COMPUTE_TYPE` | автодетект (`float16`/`int8`) | Следует за `WHISPER_DEVICE`, если не задан явно. |
 | `WHISPER_MODEL` | `base` | Размер модели faster-whisper. |
 | `EMBEDDING_MODEL` | `Qwen/Qwen3-Embedding-0.6B` | |
-| `EMBEDDING_DEVICE` | = `WHISPER_DEVICE` | |
+| `EMBEDDING_DEVICE` | = `WHISPER_DEVICE` (после автодетекта) | |
 
 ### LLM (text→text)
 
@@ -206,7 +230,7 @@ Healthcheck внутри образа = `import faster_whisper, webrtcvad, worke
 |---|---|---|
 | `ModuleNotFoundError: No module named 'workers.common'` (крэш-луп) | Устаревший `worker-ai-base` без `workers/common/` — путь 3a (`make build-ai-cpu/cuda`) сам чинит это пересборкой базы; на пути 3b (без репозитория) — не сделан `docker pull` базы. | Путь 3a: пересобрать (`make build-ai-cpu/cuda` снова). Путь 3b: `docker pull` свежей базы (шаг 1) → пересборка. Гейт шага 4 / HEALTHCHECK ловит это ДО/во время запуска. |
 | `ModuleNotFoundError: No module named 'webrtcvad'` | Устаревшая база без `webrtcvad-wheels` (был в старых образах, инцидент 2026-07-18). | Путь 3a теперь исключает это структурно (свежая база при каждой сборке); путь 3b — свежая база + пересборка. |
-| `CRITICAL ws-client misconfigured, refusing to start` | Пуст `GATEWAY_WS_URL` или `WORKER_API_TOKEN`. | Задать обе переменные (обязательные). |
+| `CRITICAL ws-client misconfigured, refusing to start` | Пуст `WORKER_API_TOKEN` (единственная обязательная переменная без дефолта). | Задать `-e WORKER_API_TOKEN=<ТОКЕН>`. |
 | Образ «работает» с `-v …/convertor:/app`, но падает без него | Кода нет в образе — bind-mount подсовывал его с хоста, маскируя пробел. | Никогда не полагаться на bind-mount кода в проде; прогонять гейт шага 4. |
 | GPU не виден в контейнере | Нет `nvidia-container-toolkit` или флага `--gpus all`. | Установить toolkit; проверить `docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi`. |
 
