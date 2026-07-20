@@ -48,7 +48,7 @@ from urllib.parse import urlparse
 
 import httpx
 from websockets.asyncio.client import connect as ws_connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from workers.common.env import getenv_float, getenv_int
 
@@ -323,6 +323,17 @@ class _ConnState:
 class WsClient:
     """Постоянный WS-клиент воркера. `handle_job` — seam обработки одной задачи."""
 
+    # Reason-строки, которые gateway кладёт в close(1008, reason) при auth/handshake-фейле
+    # (workers/gateway/ws_server.py: CLOSE_POLICY_VIOLATION=1008, строки 194/238/242/248/251).
+    # Держим В ОДНОМ месте — расшифровка причины для лога воркера, без дублирования логики.
+    _CLOSE_CAUSE_HINTS: dict[str, str] = {
+        "unauthorized": "неверный WORKER_API_TOKEN",
+        "malformed ready": "битый ready-фрейм — баг клиента/протокола",
+        "expected ready frame": "первый фрейм после connect был не ready — баг клиента/протокола",
+        "missing workerId": "пустой WORKER_ID",
+        "invalid workerType": "WORKER_TYPE не входит в допустимый список — см. ALLOWED_WORKER_TYPES",
+    }
+
     def __init__(
         self,
         cfg: WsClientConfig,
@@ -342,6 +353,11 @@ class WsClient:
         self._capabilities = capabilities
         self._stop = asyncio.Event()
         self._ready_ok = False            # был ли успешный connect+ready в текущей попытке
+        # Диагностика обрыва: человекочитаемая причина конца ПОСЛЕДНЕЙ сессии —
+        # WS close code+reason / HTTP upgrade rejection / exception. Выставляется в
+        # `_run_connection`, читается ЕДИНЫМ reconnect-логом в `run()` (не завязано на
+        # то, какая именно задача (reader/pinger/send_ready) заметила обрыв первой).
+        self._last_close_desc: str | None = None
 
     # ------------------------------------------------------------------
     # Публичное
@@ -367,15 +383,18 @@ class WsClient:
         try:
             while not self._stop.is_set():
                 self._ready_ok = False
+                self._last_close_desc = None
                 try:
                     await self._run_connection()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 — любой сбой сессии → reconnect
-                    logger.warning(
-                        "ws session ended, will reconnect",
-                        extra={"workerId": cfg.worker_id, "error": str(exc)},
-                    )
+                    # `_run_connection` уже сам логирует детально известные причины
+                    # (close code/reason, HTTP upgrade reject) и, как правило, НЕ рейзит
+                    # их наружу — сюда долетают только неожиданные (DNS/refused/баги).
+                    # Фолбэк на случай, если причину распознать не успели.
+                    if not self._last_close_desc:
+                        self._last_close_desc = f"{type(exc).__name__}: {exc}"
                 if self._stop.is_set():
                     break
                 # Соединение упало — сразу сигналим наблюдателю (до backoff-сна), чтобы
@@ -384,6 +403,14 @@ class WsClient:
                     self._on_reconnect_start()
                 if self._ready_ok:
                     backoff = cfg.ws_reconnect_backoff_base_s
+                # Единая reconnect-строка: причина обрыва (код/reason WS-close, HTTP upgrade
+                # reject или exception) + величина следующей паузы. Не vague — всегда с причиной.
+                logger.warning(
+                    "ws session ended (%s), reconnecting in %.1fs",
+                    self._last_close_desc or "причина не распознана, см. предыдущие строки лога",
+                    backoff,
+                    extra={"workerId": cfg.worker_id},
+                )
                 # Спим backoff, но прерываемся немедленно на stop().
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._stop.wait(), timeout=backoff)
@@ -405,38 +432,107 @@ class WsClient:
     # ------------------------------------------------------------------
 
     async def _run_connection(self) -> None:
-        """Одна WS-сессия: connect+auth → ready → concurrent reader/ping до обрыва."""
+        """Одна WS-сессия: connect+auth → ready → concurrent reader/ping до обрыва.
+
+        Диагностика (мотивация — WARNING «ws session ended, will reconnect» без ЕДИНОЙ
+        детали делал auth/handshake-фейлы недиагностируемыми): на каждом известном пути
+        обрыва выставляет `self._last_close_desc` — человекочитаемую причину для ЕДИНОГО
+        reconnect-лога в `run()`. Управление реконнектом/backoff НЕ меняется — только what
+        we log и когда.
+        """
         headers = {"Authorization": f"Bearer {self._cfg.worker_api_token}"}
-        async with ws_connect(
-            self._cfg.gateway_ws_url, additional_headers=headers
-        ) as ws:
-            await self._send_ready(ws)
-            # NB: _ready_ok выставляется НЕ здесь, а при первом входящем фрейме сервера
-            # (reader) — доказательство, что handshake прошёл, а не upgrade-принят-и-закрыт.
-            logger.info(
-                "ws connected, ready sent",
-                extra={
-                    "workerId": self._cfg.worker_id,
-                    "workerType": self._cfg.worker_type,
-                    "slots": self._cfg.slots,
-                },
-            )
-            state = _ConnState(self._cfg.ws_result_inline_max)
-            reader = asyncio.create_task(self._reader_loop(ws, state))
-            pinger = asyncio.create_task(self._ping_loop(ws, state))
-            register = asyncio.create_task(self._register())
-            # stop-waiter: без него stop() не разбудил бы idle keep-alive сессию (ни reader,
-            # ни pinger не завершаются) → graceful shutdown/SIGTERM висел бы до обрыва TCP.
-            stopper = asyncio.create_task(self._stop.wait())
-            try:
-                await asyncio.wait(
-                    {reader, pinger, stopper}, return_when=asyncio.FIRST_COMPLETED
+        try:
+            async with ws_connect(
+                self._cfg.gateway_ws_url, additional_headers=headers
+            ) as ws:
+                try:
+                    await self._send_ready(ws)
+                except ConnectionClosed as exc:
+                    # Сервер закрывает соединение ДО чтения ready при auth-фейле (§7 a:
+                    # ws_server.py проверяет Bearer СРАЗУ после upgrade, до _handshake) —
+                    # это самый частый путь обрыва для неверного WORKER_API_TOKEN.
+                    self._last_close_desc = self._note_session_close(ws, exc)
+                    return
+                # NB: _ready_ok выставляется НЕ здесь, а при первом входящем фрейме сервера
+                # (reader) — доказательство, что handshake прошёл, а не upgrade-принят-и-закрыт.
+                logger.info(
+                    "ws connected, ready sent",
+                    extra={
+                        "workerId": self._cfg.worker_id,
+                        "workerType": self._cfg.worker_type,
+                        "slots": self._cfg.slots,
+                    },
                 )
-            finally:
-                stopper.cancel()
-                with suppress(asyncio.CancelledError):
-                    await stopper
-                await self._teardown(state, reader, pinger, register)
+                state = _ConnState(self._cfg.ws_result_inline_max)
+                reader = asyncio.create_task(self._reader_loop(ws, state))
+                pinger = asyncio.create_task(self._ping_loop(ws, state))
+                register = asyncio.create_task(self._register())
+                # stop-waiter: без него stop() не разбудил бы idle keep-alive сессию (ни reader,
+                # ни pinger не завершаются) → graceful shutdown/SIGTERM висел бы до обрыва TCP.
+                stopper = asyncio.create_task(self._stop.wait())
+                try:
+                    await asyncio.wait(
+                        {reader, pinger, stopper}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
+                    stopper.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await stopper
+                    await self._teardown(state, reader, pinger, register)
+                if not self._stop.is_set():
+                    # Сессия завершилась НЕ по нашему stop() — reader/pinger заметили обрыв
+                    # (сервер закрыл / TCP оборвался / liveness). ws.close_code/close_reason
+                    # уже проставлены протоколом к этому моменту независимо от того, кто
+                    # именно из reader/pinger первым это заметил.
+                    self._last_close_desc = self._note_session_close(ws)
+        except InvalidStatus as exc:
+            # HTTP upgrade отклонён ДО WS-рукопожатия (напр. reverse-proxy/балансировщик
+            # перед gateway вернул non-101). У websockets.exceptions.InvalidStatus есть
+            # `.response.status_code` — используем его, а не голый str(exc).
+            status = exc.response.status_code
+            if status in (401, 403):
+                logger.error(
+                    "gateway отклонил upgrade (auth?): HTTP %s — вероятно неверный"
+                    " WORKER_API_TOKEN (значение не логируется)",
+                    status,
+                    extra={"workerId": self._cfg.worker_id},
+                )
+                self._last_close_desc = f"HTTP upgrade rejected {status} (вероятно неверный WORKER_API_TOKEN)"
+            else:
+                self._last_close_desc = f"HTTP upgrade rejected {status}"
+
+    def _note_session_close(self, ws, exc: ConnectionClosed | None = None) -> str:
+        """Человекочитаемое описание причины конца WS-сессии + (для 1008 unauthorized)
+        отдельная ERROR-строка про WORKER_API_TOKEN — самый частый реальный failure mode.
+
+        Источник кода/reason — `ws.close_code`/`ws.close_reason` (websockets проставляет их
+        в протокол, как только соединение реально закрылось, независимо от того, кто первым
+        это заметил — reader/pinger/send). Фолбэк на `exc.rcvd` — на случай, если `ws`-объект
+        по какой-то причине их ещё не выставил, а само исключение уже несёт close-фрейм.
+        """
+        code = ws.close_code
+        reason = ws.close_reason or ""
+        if code is None and exc is not None and exc.rcvd is not None:
+            code = exc.rcvd.code
+            reason = exc.rcvd.reason or reason
+        if code is None:
+            return "TCP-соединение оборвано без close-фрейма (сеть/таймаут/OOM на другой стороне)"
+        if code == 1008:
+            if reason == "unauthorized":
+                logger.error(
+                    "WS-handshake отклонён: close 1008 'unauthorized' — проверьте"
+                    " WORKER_API_TOKEN (значение не логируется)",
+                    extra={"workerId": self._cfg.worker_id},
+                )
+            hint = self._CLOSE_CAUSE_HINTS.get(reason, "нарушение протокола handshake")
+            return f"gateway закрыл сессию: close 1008 policy violation {reason!r} — вероятно {hint}"
+        if code == 1011:
+            # 1011 в этом протоколе шлёт САМ клиент при liveness-таймауте (см. _ping_loop) —
+            # уже залогировано там отдельной строкой; здесь просто отражаем факт для reconnect-лога.
+            return f"close {code} {reason!r} (liveness: пропущены pong'и, инициатор — сам клиент)"
+        if code in (1000, 1001):
+            return f"gateway закрыл сессию штатно: close {code} {reason!r}"
+        return f"close {code} {reason!r}"
 
     def _build_register_body(self) -> dict:
         caps = self._capabilities or {}
@@ -519,6 +615,18 @@ class WsClient:
                     continue
                 # Первый входящий фрейм = сервер принял handshake (1008-reject фреймов
                 # не шлёт) → соединение реально живое, можно сбрасывать backoff.
+                if not self._ready_ok:
+                    # Ровно один раз за сессию: явное подтверждение здорового старта,
+                    # чтобы в логах не приходилось гадать по отсутствию WARNING'ов.
+                    logger.info(
+                        "connected to gateway, registered as %s (type %s)",
+                        self._cfg.worker_id,
+                        self._cfg.worker_type,
+                        extra={
+                            "workerId": self._cfg.worker_id,
+                            "workerType": self._cfg.worker_type,
+                        },
+                    )
                 self._ready_ok = True
                 ftype = frame.get("type")
                 if ftype == "job":
