@@ -193,3 +193,27 @@ fast-DLQ покрывает это как временную меру).
 - Стейл-пункты карточки исправлены (см. Acceptance Criteria выше): формулировка
   коллизий обновлена на `NON_AI_PRECEDENCE` + last-write-only-at-equal-rank;
   multi-instance union — подтверждён неизменным, отдельного кода не потребовалось.
+
+### Доп. раунд ревью — закрыты 2 найденные тимлидом дыры покрытия
+
+- **Sync-guard фикстуры vs миграции:** добавлен
+  `tests/Unit/Support/ConversionRegistrySeedFixtureSyncTest.php` —
+  reflection-вызов `Version20260722150301::seedRows()` (класс миграции не
+  под Composer PSR-4, поэтому `require_once` файла миграции перед рефлексией)
+  и побайтовое `assertSame` с данными `ConversionRegistrySeedFixture::capabilities()`.
+  Рефлексия в саму миграцию — осознанный выбор (не то же самое, что рефлексия
+  из ПРОД-кода, которую избегали изначально: там причина была не тащить
+  runtime-зависимость на миграцию; тест на такую зависимость не завязан).
+  Тест зелёный (данные сегодня идентичны), при расхождении в будущем упадёт
+  явно, а не "почини golden — и мимо".
+- **Позитивный кейс кеша:** добавлен sibling-тест `testCachePersistsHealthyResult`
+  рядом с `testCacheDoesNotPersistEmptyOrErrorResult` — две инстанции
+  `ConversionRegistry` на общем `ArrayAdapter`, здоровые данные, второй запрос
+  не должен снова бить в БД (`assertSame(1, $callCount, ...)`). Проверено
+  вручную (не автоматизированный шаг, разовая sabotage-проверка перед
+  коммитом): временно заменил `$save = $pairs !== []` на `$save = false`,
+  прогнал только этот тест — упал ожидаемо ("2 identical to 1"), затем вернул
+  строку обратно, `git diff` по файлу — пусто, подтверждено что откат чистый.
+- QA перепрогнан целиком после обоих добавлений: `make phpstan` — `[OK] No
+  errors`; `make cs` → `make cs-check` — `Found 0 of 201 files that can be
+  fixed`; `make test-php-live` — `OK (431 tests, 1777 assertions)`, drift 2/2.

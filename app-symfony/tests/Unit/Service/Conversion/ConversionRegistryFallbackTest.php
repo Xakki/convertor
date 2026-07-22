@@ -103,6 +103,40 @@ final class ConversionRegistryFallbackTest extends TestCase
         self::assertSame(2, $callCount, 'blip must NOT have been cached — DB must be re-queried');
     }
 
+    /**
+     * Positive counterpart to {@see testCacheDoesNotPersistEmptyOrErrorResult()}
+     * (registry-05 review: proving the negative case alone leaves the happy
+     * path unguarded — dropping or inverting `$save = ($pairs !== [])` in
+     * `buildMatrix()` would silently regress EVERY request back to hitting the
+     * DB, a performance regression under load with no failing test). A second
+     * `ConversionRegistry` instance sharing the same cache pool must NOT
+     * trigger another `findAllCapabilities()` call once a healthy result has
+     * been built and cached.
+     */
+    public function testCachePersistsHealthyResult(): void
+    {
+        $cache     = new ArrayAdapter();
+        $callCount = 0;
+
+        $repo = $this->createStub(WorkerCapabilityRepository::class);
+        $repo->method('findAllCapabilities')->willReturnCallback(function () use (&$callCount): array {
+            ++$callCount;
+
+            return ConversionRegistrySeedFixture::capabilities();
+        });
+
+        // "Запрос 1": холодный кеш, БД здорова → матрица строится и кешируется.
+        $registryA = new ConversionRegistry($repo, $cache);
+        self::assertTrue($registryA->isSupported('jpg', 'png'));
+        self::assertSame(1, $callCount);
+
+        // "Запрос 2": тот же кеш-пул — результат берётся из кеша, БД повторно
+        // НЕ запрашивается.
+        $registryB = new ConversionRegistry($repo, $cache);
+        self::assertTrue($registryB->isSupported('jpg', 'png'));
+        self::assertSame(1, $callCount, 'healthy result must be served from cache — DB must NOT be re-queried');
+    }
+
     /** БД содержит данные — матрица строится из БД. */
     public function testBuildsMatrixFromDbWhenNonEmpty(): void
     {
