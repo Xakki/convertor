@@ -204,3 +204,19 @@ register-round-trip) делает отдельный агент против к�
 - **QA**: `PYTHONPATH=. pytest workers/tests/test_routing_drift.py -v` — 2 passed (реальный
   прогон против dev-контейнеров, не мок). `make test-drift` — 2 passed. Другие Python-сьюты
   этот файл не задевает (не импортируется ничем, кроме себя).
+
+**Дозаказ тимлида (2026-07-22, wiring): `test-drift` вшит в `make test-php-live`.** Root
+`Makefile::test-php-live` (уже "CANONICAL CI target", `test-db-setup`-зависимость гарантирует
+`$(DC) up -d --wait mariadb keydb php` — тот самый живой `php`-контейнер, в который
+`test-drift` делает `docker exec`) — добавлен `$(MAKE) test-drift` второй строкой рецепта,
+после `$(MAKE) test-php` (тот же `$(MAKE)`-паттерн, что уже использовался для test-php —
+гарантия порядка под `make -j`). НЕ вшивал в `test`/`test-python` — они НЕ требуют живого
+стека по дизайну (`test` явно комментирует «БЕЗ провижининга», `test-python` гоняет
+контейнеризованные unit-сьюты по одному воркеру). Стале-комментарий над `test-drift` в
+`workers/Makefile:258` переписан (докстринг-часть — не `##` — по-прежнему разрешена длиннее,
+но факты актуализированы: docker+php-контейнер+непустая БД, не «src+stdlib»); `##`-строка
+сокращена и обновлена терсно (не абзац, одна строка): «Routing register-round-trip: Python
+CAPABILITIES vs live dump-matrix.php (needs docker+php+DB; run via test-php-live)».
+**Проверено реальным прогоном** `make test-php-live` целиком (не только test-drift изолированно):
+PHPUnit 429/429 OK, ЗАТЕМ `test-drift` — 2 passed, оба видны в одном логе одного `make`-вызова,
+exit 0. Guard больше не «никем не запускаемый» — часть канонического CI-таргета.

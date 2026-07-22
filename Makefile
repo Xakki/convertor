@@ -156,8 +156,9 @@ test-db-setup: ## Провижининг тест-БД convertor-test + KeyDB + 
 # complete before that target's recipe runs, even under -j). Plain `make test` runs
 # the SAME PHPUnit suite WITHOUT provisioning first (see comment on `test` above) —
 # use THIS target in CI for a reliable run.
-test-php-live: test-db-setup ## CANONICAL CI target: провижининг тест-БД, ЗАТЕМ PHPUnit (гарантированный порядок под make -j) — live-DB/KeyDB тесты реально выполняются
+test-php-live: test-db-setup ## CANONICAL CI target: провижининг тест-БД, ЗАТЕМ PHPUnit + routing-drift (гарантированный порядок под make -j) — live-DB/KeyDB тесты реально выполняются
 	$(MAKE) test-php
+	$(MAKE) test-drift
 
 # ---------------------------------------------------------------------------
 # Per-component fragments (variables above must be defined before these are

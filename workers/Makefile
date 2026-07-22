@@ -255,10 +255,13 @@ test-python-metrics: build-metrics-test ## Unit tests for metrics-exporter (need
 test-python-ai: build-ffmpeg-test ## AI-worker + dev-server unit tests (runs in worker-ffmpeg:test image, no Harbor pull)
 	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:test,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py)
 
-# test-drift запускается напрямую на хосте (не в контейнере): проверяет только
-# Python-словарь CAPABILITIES vs PHP-ключи реестра — нужен лишь src/ и stdlib.
+# test-drift запускается напрямую на хосте (docker exec в php-контейнер), НЕ только
+# src+stdlib (registry-04): нужен docker + запущенный php-контейнер + непустая БД
+# (register-round-trip: dump-matrix.php --json vs Python CAPABILITIES). Часть
+# `make test-php-live` (test-db-setup гарантирует live-стек); standalone-вызов ниже
+# по-прежнему работает, если стек уже поднят руками.
 .PHONY: test-drift
-test-drift: ## Routing-contract: PHP registry routing keys vs Python worker CAPABILITIES (may fail on known gaps — see .claude/kanban/grooming/)
+test-drift: ## Routing register-round-trip: Python CAPABILITIES vs live dump-matrix.php (needs docker+php+DB; run via test-php-live)
 	PYTHONPATH=. pytest workers/tests/test_routing_drift.py -v
 
 # REDIS_DB=3 — та же изоляция, что test-e2e (.env.test: db3 отделяет
