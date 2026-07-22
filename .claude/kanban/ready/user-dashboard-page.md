@@ -81,4 +81,25 @@
 (stale, тёмная тема, htmx ждёт HTML-фрагменты — только визуальный референс),
 эндпоинты `GET /api/v1/convert/history` + `GET /api/v1/quota` + `GET /api/v1/me`.
 
-**Status:** progress.
+**Execution Log:**
+- Ветка `task/user-dashboard-page`. Коммиты: `3c6eb13` (страница), `8d735d9`
+  (фикс порядка загрузки квоты).
+- Создано: `src/Controller/Web/DashboardController.php` (`GET /dashboard`,
+  `app_dashboard`), `templates/dashboard/index.html.twig`,
+  `templates/partials/_dashboard_app_script.html.twig` (Alpine-компонент
+  `dashboardApp()`), `tests/Functional/Controller/Web/DashboardControllerTest.php`.
+- Изменено: `templates/partials/_header.html.twig` (ссылка на кабинет в блоке
+  `x-show="loggedIn"`), `translations/messages.{en,ru}.yaml` (неймспейс
+  `dashboard.*` + `nav.dashboard`).
+- Превью-модалка `partials/_converter_preview_modal.html.twig` переиспользована
+  как есть; `authFetch`/`tryRefresh`/`filenameFrom`/`humanSize` минимально
+  продублированы в новый скрипт — рефактор скрипта главной не делался, чтобы не
+  сломать `/`.
+- Найден и исправлен баг: `loadQuota()` вызывался до резолва `tryRefresh()` —
+  залогиненный пользователь видел гостевые лимиты рядом с корректной карточкой
+  аккаунта.
+- QA: `make phpstan` → No errors; `make cs` → Fixed 0 of 197; `make cs-check` →
+  0 of 197; `make test-php-live` → OK, 417 tests / 1712 assertions.
+- Ревью: APPROVE, замечаний нет.
+
+**Status:** ready.
