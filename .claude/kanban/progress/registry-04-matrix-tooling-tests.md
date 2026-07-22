@@ -138,3 +138,69 @@ register-round-trip) делает отдельный агент против к�
   `make cs` → `make cs-check` — 0 файлов (примечание: `bin/` тоже вне Finder'а
   `.php-cs-fixer.php`, только `src/`+`tests/` — проверил `php -l` вручную, синтаксис чист).
   `make test-php-live` — 429/429 зелёных (тот же pre-existing notice).
+
+#### Python-зона
+
+Файл: `workers/tests/test_routing_drift.py` (полностью переписан). `workers/` больше нигде
+не трогал; `app-symfony/bin/dump-matrix.php` НЕ трогал (собственность PHP-зоны, контракт
+`--json` использован как есть).
+
+- **Смена источника данных**: было — PHP-хардкод (`workerCapabilities()`) vs Python
+  `CAPABILITIES`; стало — **register-round-trip**: живой снапшот `dump-matrix.php --json`
+  (читает `WorkerCapabilityRepository`/`ConversionRegistry` из БД, тот же путь, что наполняет
+  `POST /worker/register`) vs union `CAPABILITIES` всех `workers/*/worker.py`. Сама структура
+  двух assert'ов (A: registry routingKeys ⊆ worker routing_keys; B: worker matrix ⊆ registry
+  matrix) СОХРАНЕНА — она уже была корректной по направлению, поменялся только источник
+  правой стороны сравнения. Явно задокументировал В КОДЕ (докстринг B), почему направление
+  остаётся ОДНОСТОРОННИМ, а не превращено в равенство: по дизайну эпика eviction — «long-TTL
+  GC, не liveness-гейтинг» (`registry-00`) — строка capability переживает исчезновение/редеплой
+  воркера с другим набором пар; строгое равенство `registry == workers` флапало бы на
+  обычной операционной устарелости данных, а не на реальном дрейфе кода. Односторонний
+  `workers ⊆ registry` — именно то, что ловит «код воркера объявляет то, чего роутер не знает».
+- **`category` vs `stream`**: НЕ нормализовывал и не трогал — ни assert A (использует только
+  `stream`/`routingKeys`), ни assert B (использует только идентичность пары `from`/`to`) поле
+  `category` вообще не читают, так что расхождение category≠stream (напр. `markup`→`document`)
+  для этого файла не имеет значения. Явно написал это в докстринге, а не привёл к молчаливой
+  нормализации несуществующей проблемы.
+- **Убран `pytest.skip()` полностью** (был единственный, L92-95 старой версии, на non-zero
+  exit `docker exec`). `_load_registry()` переписан: native `php` → `docker exec` fallback
+  СОХРАНЁН (механизм выбора СПОСОБА вызова инструмента, не про пропуск теста), но любой отказ
+  на любом шаге (нет `php` И нет `docker`, `docker exec` упал, non-zero exit тула, невалидный
+  JSON) — теперь `pytest.fail()` с диагностикой (включая STDERR инструмента), НЕ skip.
+  Грепнул файл на `pytest.skip`/`.skip(` — 0 совпадений (только упоминания в докстринге,
+  объясняющие, почему skip здесь запрещён).
+- **Проверено эмпирически, что тест реально может упасть** (не просто «зелёный по
+  умолчанию»), тремя способами:
+  1. **Реальный pytest-прогон с внесённой порчей**: временно добавил в
+     `workers/data/worker.py::DataWorker.CAPABILITIES.matrix` пару
+     `"totally-bogus-src": ["totally-bogus-tgt"]`, прогнал `pytest workers/tests/test_routing_drift.py -v`
+     — `test_worker_matrix_subset_of_registry` **FAILED** с точным указанием
+     `workers/data: totally-bogus-src→totally-bogus-tgt` в сообщении; `test_all_routing_keys_have_worker`
+     остался PASSED (ожидаемо — расхождение не про routing-keys). Откатил правку тем же Edit
+     (НЕ через git checkout/restore — обычная правка-и-обратная-правка), `git diff --stat` после
+     отката — пусто, файл побитово идентичен закоммиченному; повторный прогон — 2 passed.
+  2. **Прямой вызов чистых helper'ов** (`_uncovered_routing_keys`, `_worker_pairs_missing_from_registry`
+     — вынесены из тела test-функций именно для такой проверки) с реальными данными + одной
+     точечной порчей на копии (без изменения файлов на диске): убрал `image` из списка
+     воркеров → assert A обнаружил `{'image'}` как uncovered; вставил bogus-пару в копию
+     capabilities воркера `ai` → assert B обнаружил ровно её.
+  3. **Never-skip drill**: замокал `_container_name()` на несуществующий контейнер —
+     `_load_registry()` бросил `pytest.fail.Exception` (не `pytest.skip.Exception`) с сообщением
+     про `docker exec` exit 1 — подтверждает, что путь отказа инструмента ведёт к жёсткому
+     failure, а не к тихому skip.
+  Базовый прогон (без порчи) — `make test-drift` → 2 passed за ~1с (docker exec fallback,
+  на этом хосте нет нативного `php`).
+- **Wiring-находка (репортю тимлиду, Makefile НЕ трогал)**: `make test-drift` НЕ входит ни в
+  один агрегатный таргет. `test-python` явно ИСКЛЮЧАЕТ его (`##`-хелp: «excludes e2e +
+  routing-drift; see test-e2e / test-drift»), `test: test-php test-python` — тоже без него.
+  CI-конфигурации в репо НЕТ ВООБЩЕ (`find` не нашёл ни `.github/workflows`, ни
+  `.gitlab-ci.yml`, ни другого workflow-файла). Значит сегодня этот guard выполняется ТОЛЬКО
+  по ручному вызову `make test-drift` человеком/агентом — тот самый паттерн «guard, который
+  никто не запускает», о котором просил проверить тимлид. Комментарий над таргетом в
+  `workers/Makefile:258-259` («запускается напрямую на хосте... нужен лишь src/ и stdlib»)
+  тоже устарел: тест теперь требует `docker` + запущенный `php`-контейнер + непустую БД, а не
+  только stdlib — но Makefile не трогал (явный запрет тимлида на реструктуризацию без
+  согласования), только фиксирую находку здесь и в отчёте.
+- **QA**: `PYTHONPATH=. pytest workers/tests/test_routing_drift.py -v` — 2 passed (реальный
+  прогон против dev-контейнеров, не мок). `make test-drift` — 2 passed. Другие Python-сьюты
+  этот файл не задевает (не импортируется ничем, кроме себя).
