@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Service\Conversion;
 
 use App\Entity\WorkerCapability;
+use App\Enum\FileCategory;
 use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionRegistry;
 use PHPUnit\Framework\TestCase;
@@ -186,6 +187,29 @@ final class ConversionRegistryFallbackTest extends TestCase
                 self::assertFalse($registry->isAi('pdf', $to));
                 self::assertSame('document', $registry->streamFor('pdf', $to));
             }
+        }
+    }
+
+    /**
+     * registry-03 ревью-фикс #2: `categoryForStream()` — `FileCategory::from()`,
+     * которая принимает ВСЕ 7 кейсов enum'а (включая `archive`/`markup`), не
+     * только 5 сегодняшних worker-type. Если добавить новый `FileCategory`-кейс
+     * и забыть про `NON_AI_PRECEDENCE`, два незалистенных типа при коллизии
+     * молча упадут на `PHP_INT_MAX` и воспроизведут order-dependent баг,
+     * который этот константа-список чинит — только за пределами видимых
+     * сегодня типов. Тест защищает от такой тихой регрессии.
+     */
+    public function testNonAiPrecedenceCoversEveryFileCategoryCase(): void
+    {
+        $precedence = (new \ReflectionClass(ConversionRegistry::class))->getConstant('NON_AI_PRECEDENCE');
+        self::assertIsArray($precedence);
+
+        foreach (FileCategory::cases() as $case) {
+            self::assertContains(
+                $case->value,
+                $precedence,
+                "FileCategory::{$case->name} ('{$case->value}') has no NON_AI_PRECEDENCE rank",
+            );
         }
     }
 

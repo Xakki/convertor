@@ -177,3 +177,20 @@ OCR-воркер — вопреки собственному докблоку к
 `"category":"document"` (было `"image"` до фикса), `ocrCapable:true`
 сохранился (флаг-путь на OCR не тронут, отдельная ветка `streamFor(ocr=true)`).
 QA: phpstan/cs-check чисто, `test-php-live` 428/428 зелёных.
+
+**Ревью-фикс #3 (2026-07-22): `NON_AI_PRECEDENCE` не покрывал все 7 кейсов
+`FileCategory`.** `categoryForStream()` = `FileCategory::from()`, принимает
+все 7 (включая `archive`/`markup`), а список ранжировал только 5 — два
+незалистенных типа при коллизии молча падали на `PHP_INT_MAX` и
+воспроизводили тот же order-dependent баг за пределами сегодняшних 5 типов.
+Список расширен до всех 7: `document, markup, data, audio, video, image,
+archive`. `markup` — сразу после `document` (нет живого workerType='markup',
+ранг чисто защитный, но рядом с целью, в которую он схлопывается при
+роутинге). `archive` — последний (нет ни одного воркера архивов в
+`workers/`, наименее устоявшаяся категория). Докблок `nonAiPrecedenceRank()`
+поправлен — `PHP_INT_MAX`-фолбэк был описан как «shouldn't happen», это
+было оптимистично при неполном списке; теперь честно: фолбэк для
+по-настоящему нераспознанной строки, не для валидной категории. Добавлен
+тест `testNonAiPrecedenceCoversEveryFileCategoryCase` (через
+`ReflectionClass::getConstant`) — падает, если будущий `FileCategory`-кейс
+добавят без ранга. QA: phpstan/cs-check чисто, `test-php-live` 429/429.

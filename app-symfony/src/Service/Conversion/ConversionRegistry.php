@@ -54,8 +54,28 @@ class ConversionRegistry
      * is independent of DB row/insertion order — see {@see nonAiPrecedenceRank()}.
      * Superseded by the epic's Phase 3 multi-candidate router (pdf→txt
      * document-extract vs image-OCR is its named reference case).
+     *
+     * Covers ALL 7 `FileCategory` cases, not just today's 5 registered worker
+     * types — `categoryForStream()` is `FileCategory::from($stream)`, which
+     * accepts `archive` and `markup` too without throwing (registry-02/03
+     * review: two unlisted types colliding would both fall through to
+     * {@see nonAiPrecedenceRank()}'s `PHP_INT_MAX` default and reproduce the
+     * exact order-dependent bug this constant exists to fix, just outside the
+     * 5 types visible today). `testNonAiPrecedenceCoversEveryFileCategoryCase`
+     * (ConversionRegistryFallbackTest) fails if a future `FileCategory` case
+     * is added here unranked.
+     *   - `document` highest: primary text-extraction path (the fix's own case).
+     *   - `markup` right after `document`: no live workerType='markup' registrant
+     *     exists (folded into `document` only at routing time by streamFor()),
+     *     so this rank is purely defensive — kept adjacent to its routing target
+     *     to minimise surprise if it were ever collided against.
+     *   - `data`, `audio`, `video` next: distinct format families, no known
+     *     current overlap with anything else.
+     *   - `image` before last: the losing side of the fix's own pdf case.
+     *   - `archive` lowest: no worker implements it yet (grepped `workers/` —
+     *     no archive worker directory), least-established category.
      */
-    private const NON_AI_PRECEDENCE = ['document', 'data', 'audio', 'video', 'image'];
+    private const NON_AI_PRECEDENCE = ['document', 'markup', 'data', 'audio', 'video', 'image', 'archive'];
 
     /**
      * Explicit textual-source allowlist for {@see isTextSourceSupported()}
@@ -586,10 +606,12 @@ class ConversionRegistry
     }
 
     /**
-     * Priority rank for {@see NON_AI_PRECEDENCE} — lower wins. Unknown/unlisted
-     * worker types (shouldn't happen for real registrations) get the lowest
-     * priority (never win a tie) instead of throwing, matching the
-     * graceful-degradation style of the rest of this build path.
+     * Priority rank for {@see NON_AI_PRECEDENCE} — lower wins. NON_AI_PRECEDENCE
+     * lists all 7 `FileCategory` cases, so `PHP_INT_MAX` here is a defensive
+     * fallback for a genuinely unrecognised/malformed workerType string only —
+     * NOT an expected path for any valid registration — matching the
+     * graceful-degradation style of the rest of this build path (never throws,
+     * just never wins a tie).
      */
     private static function nonAiPrecedenceRank(string $workerType): int
     {

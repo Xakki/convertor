@@ -47,6 +47,11 @@ generalized router the static matrix can't express.
   `PermanentError` fast-DLQ covers them; after Phase 2 they're gone → 400 up-front, no churn.
 - **Collision policy (interim, Phase 1-2):** two workers registering the same pair → mirror current
   `buildMatrix()`: non-AI precedence, last-registered-wins. Real multi-candidate handling = Phase 3.
+  **Уточнено registry-03 ревью (2026-07-22):** появился второй уровень — кросс-типовые коллизии
+  между двумя non-AI воркерами (напр. `pdf→txt`: `document` vs `image`-OCR) резолвятся
+  детерминированным precedence-рангом `ConversionRegistry::NON_AI_PRECEDENCE`, НЕ порядком строк
+  из БД; last-registered-wins остаётся только для коллизий ВНУТРИ одного ранга (несколько
+  инстансов одного workerType). Тоже interim, снимается Phase 3 multi-candidate router'ом.
 
 **Груминг Phase 2 (2026-07-22):**
 - D1. Хардкод `workerCapabilities()` УДАЛЯЕТСЯ; вместо fallback — seed-миграция, заливающая
