@@ -2,3 +2,4 @@
 docker/logs
 tmp
 data
+/.claude/kanban/grooming/TODO.md

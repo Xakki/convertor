@@ -20,3 +20,4 @@ docker/mysqld_exporter.cnf
 __pycache__/
 *.pyc
 .i
+/.claude/kanban/grooming/TODO.md
