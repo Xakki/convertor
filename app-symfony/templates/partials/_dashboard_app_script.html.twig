@@ -106,9 +106,14 @@
                     } else {
                         this.historyLoading = false;
                     }
+                    // home-13: квота — ПОСЛЕ tryRefresh(), иначе auth.token ещё
+                    // пуст и authFetch() ушёл бы гостевым запросом даже для
+                    // залогиненного (guest-cookie аутентифицирует, но план/лимиты
+                    // были бы гостевые, не реальные пользователя) — тот же баг-
+                    // трап, что и в converterApp(), тот же фикс: внутри .then().
+                    this.loadQuota();
                     this.authResolved = true;
                 });
-                this.loadQuota();
 
                 // Тот же мост, что и в converterApp() — гость может принять/
                 // отклонить согласие ПОСЛЕ первой загрузки страницы.
