@@ -1,0 +1,64 @@
+{# ── Модалка медиа-вьюера (image/pdf) — home-05, D4 LIGHT MVP.
+   Вынесено из conversion/index.html.twig в partial home-09-seo-conversion-pages
+   — переиспользуется conversion/pair.html.twig БИТ-В-БИТ.
+
+   ВАЖНО: этот partial ссылается на viewer.open/closeViewer()/viewer.objectUrl/
+   viewer.type и т.д. — все эти свойства объявлены в converterApp(). Include
+   ОБЯЗАН находиться ВНУТРИ <div x-data="converterApp()"> в обоих родительских
+   шаблонах (сразу после _converter_preview_modal.html.twig), иначе Alpine
+   резолвит директивы в пустом/глобальном скоупе → "viewer is not defined" и
+   вьюер никогда не открывается (баг home-05, обнаружен и исправлен 2026-07-21:
+   ранее include стоял СНАРУЖИ x-data — не повторять эту ошибку).
+
+   XSS-safety: viewer.objectUrl приходит либо из URL.createObjectURL(blob) (свой
+   результат — байты сначала пришли авторизованным fetch, здесь же превращаются
+   в Blob-URL), либо это публичный inline-URL примера (home-04, без авторизации).
+   В обоих случаях значение используется ТОЛЬКО как `:src` у <img>/<embed> —
+   браузер интерпретирует его как ресурс для декодирования (растровый рендерер
+   картинки / встроенный PDF-вьюер), а НЕ как HTML-разметку. Ни innerHTML, ни
+   x-html здесь не участвуют — downstream XSS через непроверенные байты результата
+   исключён тем же способом, что и в text-модалке выше (x-text). #}
+<div
+    x-show="viewer.open"
+    x-cloak
+    @keydown.escape.window="closeViewer()"
+    class="fixed inset-0 z-50 flex items-center justify-center p-4"
+>
+    <div class="absolute inset-0 bg-slate-900/50" @click="closeViewer()"></div>
+    <div class="relative flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg bg-white shadow-xl">
+        <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+            <h3 class="text-sm font-semibold text-slate-700">{{ 'home.preview_title'|trans }}</h3>
+            <button
+                @click="closeViewer()"
+                class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                aria-label="{{ 'common.close'|trans }}"
+            >✕</button>
+        </div>
+
+        <div class="min-h-0 flex-1 overflow-auto p-4">
+            <template x-if="viewer.loading">
+                <p class="text-sm text-slate-500">{{ 'common.loading'|trans }}</p>
+            </template>
+            <template x-if="!viewer.loading && viewer.error">
+                <p class="text-sm text-red-600" x-text="viewer.error"></p>
+            </template>
+            <template x-if="!viewer.loading && !viewer.error && viewer.objectUrl && viewer.type === 'image'">
+                {# object URL — ресурс для <img>, декодируется браузером как растровое
+                   изображение; не вставляется как HTML. #}
+                <img :src="viewer.objectUrl" class="mx-auto max-h-[70vh] max-w-full" alt="">
+            </template>
+            <template x-if="!viewer.loading && !viewer.error && viewer.objectUrl && viewer.type === 'pdf'">
+                {# object URL — ресурс для встроенного PDF-рендерера браузера
+                   (никакого серверного рендеринга страниц в картинки — D4). #}
+                <embed :src="viewer.objectUrl" type="application/pdf" class="h-[70vh] w-full" />
+            </template>
+        </div>
+
+        <div class="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
+            <button
+                @click="closeViewer()"
+                class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+            >{{ 'common.close'|trans }}</button>
+        </div>
+    </div>
+</div>

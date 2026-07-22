@@ -46,6 +46,15 @@ final class GuestAuthenticationTest extends WebTestCase
         self::assertSame(0, $data['ai_conversions']);
         self::assertArrayHasKey('conversions', $data);
 
+        // home-13: /quota теперь отдаёт ещё и лимиты плана + max_upload_bytes —
+        // гостю ai-лимит форсится в 0 (не «тихая» free-квота в 1), чтобы виджет
+        // на фронте не показывал доступный AI-лимит гостю.
+        self::assertSame(0, $data['ai_conversions_limit']);
+        self::assertArrayHasKey('conversions_limit', $data);
+        self::assertArrayHasKey('max_upload_bytes', $data);
+        self::assertIsInt($data['max_upload_bytes']);
+        self::assertGreaterThan(0, $data['max_upload_bytes']);
+
         // Ленивая модель: НИ cookie, НИ строки в `users`.
         self::assertNull(
             $this->guestCookieFromResponse($client),

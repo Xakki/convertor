@@ -237,6 +237,52 @@ class ConversionRepository extends ServiceEntityRepository
             ->getResult();
     }
 
+    /**
+     * Конвертации-кандидаты для admin-промо в пример (карточка
+     * admin-managed-examples): только `Completed` С результатом (`outputFile`
+     * не null — по построению у `Completed` он всегда есть, но фильтр в БД
+     * страхует legacy-несогласованность, а не только докстринг-гарантию).
+     * `q` — опциональный фильтр: числовой → id конвертации ИЛИ id/email
+     * владельца; иначе LIKE по email.
+     *
+     * @return array{items: list<Conversion>, total: int}
+     */
+    public function findPromotableCandidates(?string $q, int $limit, int $offset): array
+    {
+        $qb = $this->createQueryBuilder('c')
+            ->innerJoin('c.user', 'u')
+            ->where('c.status = :status')
+            ->andWhere('c.outputFile IS NOT NULL')
+            ->setParameter('status', ConversionStatus::Completed);
+
+        $q = trim((string) $q);
+        if ($q !== '') {
+            if (ctype_digit($q)) {
+                $qb->andWhere($qb->expr()->orX('c.id = :cid', 'u.id = :uid', 'u.email = :uemail'))
+                    ->setParameter('cid', (int) $q)
+                    ->setParameter('uid', (int) $q)
+                    ->setParameter('uemail', $q);
+            } else {
+                $qb->andWhere('u.email LIKE :ulike')->setParameter('ulike', '%' . $q . '%');
+            }
+        }
+
+        $total = (int) (clone $qb)->select('COUNT(c.id)')->getQuery()->getSingleScalarResult();
+
+        /** @var list<Conversion> $items */
+        $items = $qb->addSelect('u')
+            ->leftJoin('c.inputFile', 'inp')->addSelect('inp')
+            ->leftJoin('c.outputFile', 'outp')->addSelect('outp')
+            ->orderBy('c.createdAt', 'DESC')
+            ->addOrderBy('c.id', 'DESC')
+            ->setMaxResults(max(1, $limit))
+            ->setFirstResult(max(0, $offset))
+            ->getQuery()
+            ->getResult();
+
+        return ['items' => $items, 'total' => $total];
+    }
+
     public function save(Conversion $conversion, bool $flush = false): void
     {
         $this->getEntityManager()->persist($conversion);

@@ -1,0 +1,45 @@
+{% extends 'base.html.twig' %}
+
+{# home-06-legal-docs: статичная privacy policy, i18n через legal.privacy.*.
+   Содержание сверено со skill redesign-auth-access-contract — описывает
+   ТОЛЬКО реально собираемые данные (guest_id/locale/consent cookie,
+   OAuth-профиль, загружаемые файлы + авто-удаление). Ничего не выдумываем. #}
+{% block title %}{{ 'legal.privacy.title'|trans }}{% endblock %}
+
+{% block body %}
+<div class="mx-auto w-full max-w-3xl flex-1 px-4 py-10">
+    <h1 class="text-2xl font-semibold text-slate-800">{{ 'legal.privacy.heading'|trans }}</h1>
+    <p class="mt-2 text-sm text-slate-400">{{ 'legal.updated_on'|trans }}</p>
+
+    <p class="mt-6 text-slate-600">{{ 'legal.privacy.intro'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.privacy.data_heading'|trans }}</h2>
+    <ul class="mt-3 list-disc space-y-2 pl-5 text-slate-600">
+        <li>{{ 'legal.privacy.data_guest_cookie'|trans }}</li>
+        <li>{{ 'legal.privacy.data_locale_cookie'|trans }}</li>
+        <li>{{ 'legal.privacy.data_consent_cookie'|trans }}</li>
+        <li>{{ 'legal.privacy.data_oauth'|trans }}</li>
+        <li>{{ 'legal.privacy.data_session_cookie'|trans }}</li>
+        <li>{{ 'legal.privacy.data_files'|trans }}</li>
+    </ul>
+    <p class="mt-3 text-slate-600">{{ 'legal.privacy.data_no_tracking'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.privacy.purpose_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.privacy.purpose_text'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.privacy.processors_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.privacy.processors_text'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.privacy.retention_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.privacy.retention_text'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.privacy.rights_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.privacy.rights_text'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.privacy.contact_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">
+        {{ 'legal.privacy.contact_text'|trans }}
+        <a href="https://t.me/{{ telegram_bot_username }}" target="_blank" rel="noopener" class="text-sky-600 hover:underline">@{{ telegram_bot_username }}</a>
+    </p>
+</div>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends 'base.html.twig' %}
+
+{# home-06-legal-docs: статичные terms of use, i18n через legal.terms.*.
+   MVP-boilerplate: описание сервиса, лимиты (см. ROADMAP.md), запрет
+   злоупотреблений, as-is отказ от гарантий, контакты. #}
+{% block title %}{{ 'legal.terms.title'|trans }}{% endblock %}
+
+{% block body %}
+<div class="mx-auto w-full max-w-3xl flex-1 px-4 py-10">
+    <h1 class="text-2xl font-semibold text-slate-800">{{ 'legal.terms.heading'|trans }}</h1>
+    <p class="mt-2 text-sm text-slate-400">{{ 'legal.updated_on'|trans }}</p>
+
+    <p class="mt-6 text-slate-600">{{ 'legal.terms.intro'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.terms.service_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.terms.service_text'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.terms.limits_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.terms.limits_text'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.terms.acceptable_use_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.terms.acceptable_use_text'|trans }}</p>
+    <ul class="mt-3 list-disc space-y-2 pl-5 text-slate-600">
+        <li>{{ 'legal.terms.acceptable_use_item_illegal'|trans }}</li>
+        <li>{{ 'legal.terms.acceptable_use_item_abuse'|trans }}</li>
+        <li>{{ 'legal.terms.acceptable_use_item_rights'|trans }}</li>
+    </ul>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.terms.no_warranty_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.terms.no_warranty_text'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.terms.changes_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">{{ 'legal.terms.changes_text'|trans }}</p>
+
+    <h2 class="mt-8 text-lg font-semibold text-slate-800">{{ 'legal.terms.contact_heading'|trans }}</h2>
+    <p class="mt-3 text-slate-600">
+        {{ 'legal.terms.contact_text'|trans }}
+        <a href="https://t.me/{{ telegram_bot_username }}" target="_blank" rel="noopener" class="text-sky-600 hover:underline">@{{ telegram_bot_username }}</a>
+    </p>
+</div>
+{% endblock %}

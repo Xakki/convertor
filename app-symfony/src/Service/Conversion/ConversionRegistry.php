@@ -44,6 +44,23 @@ class ConversionRegistry
     private const OCR_RASTER  = ['jpg', 'png', 'tiff'];
 
     /**
+     * Explicit textual-source allowlist for {@see isTextSourceSupported()}
+     * (home-02-text-input) — Документы(txt) + Разметка(md/rst/latex/html/wiki)
+     * + Данные(csv/json/xml/yaml/toml), per ROADMAP.md «Матрица поддерживаемых
+     * конвертаций». A FIXED format list, not a category lookup: the DB-backed
+     * matrix ({@see buildMatrixFromCapabilities()}) collapses markup/data pairs
+     * into whatever `FileCategory` the registering worker declared (in
+     * production today that is `document` for md/html/rst — no dedicated
+     * `markup` category is actually registered), so branching on
+     * {@see getCategory()} would silently reject legitimate textual sources.
+     * Binary Document members (docx/odt/rtf/epub/pages/pdf) are deliberately
+     * NOT in this list.
+     */
+    private const TEXTUAL_SOURCE_FORMATS = [
+        'txt', 'md', 'rst', 'latex', 'wiki', 'html', 'csv', 'json', 'xml', 'yaml', 'toml',
+    ];
+
+    /**
      * Lazy per-request cache (строится однократно за запрос).
      *
      * @var array<string, array<string, array{category: FileCategory, isAi: bool}>>|null
@@ -109,6 +126,21 @@ class ConversionRegistry
     {
         return in_array($from, self::OCR_SOURCES, true)
             && in_array($to, self::OCR_TARGETS, true);
+    }
+
+    /**
+     * Text-mode source gate (home-02-text-input): is `$from` BOTH a genuinely
+     * textual format ({@see TEXTUAL_SOURCE_FORMATS}) AND a valid `isSupported()`
+     * pair with `$to`? Pasted text has no MIME-sniff safety net (unlike an
+     * uploaded file), so binary sources (docx/pdf/images/audio/video) are
+     * rejected here even though some of them ARE valid `isSupported()` pairs
+     * for the file-upload path. No separate from→to compatibility table — the
+     * pair check still delegates to {@see isSupported()}; only the source
+     * FORMAT allowlist is new.
+     */
+    public function isTextSourceSupported(string $from, string $to): bool
+    {
+        return in_array($from, self::TEXTUAL_SOURCE_FORMATS, true) && $this->isSupported($from, $to);
     }
 
     /**

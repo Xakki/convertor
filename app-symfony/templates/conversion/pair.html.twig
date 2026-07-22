@@ -1,0 +1,191 @@
+{% extends 'base.html.twig' %}
+
+{# SEO-страница под конкретную пару конвертации (home-09-seo-conversion-pages):
+   рендерится App\Controller\Web\ConversionPageController (роут app_conversion_pair,
+   `GET /convert/{source}-to-{target}`), пара уже провалидирована через
+   ConversionRegistry::isSupported() — сюда попадают только реальные пары.
+   `source`/`target` — коды форматов реестра (нижний регистр, [a-z0-9]+),
+   `category` — App\Enum\FileCategory::value этой пары.
+
+   Форма ниже — ТОТ ЖЕ Alpine-компонент converterApp(), что и на `/`
+   (conversion/index.html.twig), просто с lockedFrom/lockedTo/lockedCategory —
+   см. templates/partials/_converter_app_script.html.twig. Разметка формы
+   здесь СВОЯ (статичные лейбл-плашки вместо select), но реактивное состояние
+   и вся логика (submit/poll/download/viewer) — общий код, никакого форка JS. #}
+
+{% set pairSlug = source ~ '-to-' ~ target %}
+{% set fromLabel = source|upper %}
+{% set toLabel = target|upper %}
+
+{% block title %}{{ 'pair.title'|trans({'%from%': fromLabel, '%to%': toLabel, '%brand%': 'common.brand'|trans}) }}{% endblock %}
+
+{% block meta %}
+    <meta name="description" content="{{ 'pair.meta_description'|trans({'%from%': fromLabel, '%to%': toLabel}) }}">
+    <link rel="canonical" href="{{ url('app_conversion_pair', {pair: pairSlug}) }}">
+{% endblock %}
+
+{% block body %}
+<div
+    x-data="converterApp({ lockedFrom: '{{ source|e('js') }}', lockedTo: '{{ target|e('js') }}', lockedCategory: '{{ category|e('js') }}' })"
+    x-init="init()"
+    class="flex flex-1 flex-col"
+>
+    <main class="mx-auto w-full max-w-3xl px-4 py-8">
+        <p class="mb-4 text-sm">
+            <a href="{{ path('app_home') }}" class="text-indigo-600 hover:text-indigo-700">{{ 'pair.back_to_home'|trans }}</a>
+        </p>
+
+        <h1 class="text-2xl font-semibold text-slate-800">{{ 'pair.h1'|trans({'%from%': fromLabel, '%to%': toLabel}) }}</h1>
+        <p class="mt-2 text-sm text-slate-500">{{ 'pair.subheading'|trans({'%from%': fromLabel, '%to%': toLabel}) }}</p>
+
+        <template x-if="authError">
+            <div class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="authError"></div>
+        </template>
+
+        {# Гейт ai/video: конвертация без логина запрещена сервером (403). Ссылка
+           на /login — обычная навигация, БЕЗ popup (D1 эпика home-00), как на `/`. #}
+        <template x-if="!auth.token && loginRequired">
+            <div class="mt-4 flex flex-wrap items-center gap-3 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <span>{{ 'home.ai_gate_message'|trans }}</span>
+                <a
+                    href="/login"
+                    class="rounded bg-sky-500 px-3 py-1 text-xs font-medium text-white hover:bg-sky-600"
+                >{{ 'nav.login'|trans }}</a>
+            </div>
+        </template>
+
+        {# ── Форма загрузки и конвертации, source/target ЗАФИКСИРОВАНЫ на паре
+           из URL (см. Decisions карточки home-09) — статичные лейбл-плашки
+           вместо <select>, hidden input отражает реактивное значение (само по
+           себе не участвует в отправке — submit() строит FormData из JS-состояния,
+           не сериализует DOM-форму). ── #}
+        <div id="convert-form" class="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="mb-4 inline-flex rounded-lg border border-slate-200 p-1 text-sm">
+                <button
+                    type="button"
+                    @click="setMode('file')"
+                    :class="inputMode === 'file' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'"
+                    class="rounded-md px-3 py-1.5 font-medium transition"
+                >{{ 'home.input_mode_file'|trans }}</button>
+                <button
+                    type="button"
+                    @click="setMode('text')"
+                    :class="inputMode === 'text' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'"
+                    class="rounded-md px-3 py-1.5 font-medium transition"
+                >{{ 'home.input_mode_text'|trans }}</button>
+            </div>
+
+            {# Drag & drop зона (только file-режим) — идентична `/`. #}
+            <template x-if="inputMode === 'file'">
+                <div
+                    @dragover.prevent="dragging = true"
+                    @dragleave.prevent="dragging = false"
+                    @drop.prevent="onDrop($event)"
+                    @click="$refs.fileInput.click()"
+                    :class="dragging ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300'"
+                    class="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-10 text-center transition"
+                >
+                    <svg class="mb-3 h-10 w-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"/>
+                    </svg>
+                    <template x-if="!file">
+                        <p class="text-sm text-slate-500">{{ 'home.dropzone_hint'|trans }}</p>
+                    </template>
+                    <template x-if="file">
+                        <div class="text-sm">
+                            <p class="font-medium text-slate-700" x-text="file.name"></p>
+                            <p class="text-slate-400" x-text="humanSize(file.size)"></p>
+                        </div>
+                    </template>
+                    <input type="file" x-ref="fileInput" class="hidden" @change="onFilePick($event)">
+                </div>
+            </template>
+
+            {# Текстовый ввод (только text-режим) — идентично `/`; source_format
+               не выбирается (уже зафиксирован паре), только текст. #}
+            <template x-if="inputMode === 'text'">
+                <div>
+                    <textarea
+                        x-model="text"
+                        rows="8"
+                        placeholder="{{ 'home.text_placeholder'|trans|e('html_attr') }}"
+                        class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none"
+                    ></textarea>
+                    <div class="mt-1 flex items-center justify-between text-xs">
+                        <template x-if="text.trim() === ''">
+                            <span class="text-slate-400">{{ 'home.error.text_required'|trans }}</span>
+                        </template>
+                        <template x-if="text.trim() !== '' && textTooLarge">
+                            <span class="text-red-600" x-text="I18N.errors.textTooLarge.replace('%mb%', TEXT_SOFT_LIMIT_MB)"></span>
+                        </template>
+                        <span class="ml-auto text-slate-400" x-text="humanSize(textByteSize)"></span>
+                    </div>
+                </div>
+            </template>
+
+            {# Source/target — НЕ select: статичные плашки под пару из URL. #}
+            <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                <div>
+                    <span class="mb-1 block text-sm font-medium text-slate-600">{{ 'home.source_format_label'|trans }}</span>
+                    <div class="w-full rounded border border-slate-200 bg-slate-100 px-3 py-2 font-mono text-sm text-slate-600">{{ source }}</div>
+                    <input type="hidden" :value="fromFormat">
+                </div>
+                <div>
+                    <span class="mb-1 block text-sm font-medium text-slate-600">{{ 'home.target_format_label'|trans }}</span>
+                    <div class="w-full rounded border border-slate-200 bg-slate-100 px-3 py-2 font-mono text-sm text-slate-600">{{ target }}</div>
+                    <input type="hidden" :value="toFormat">
+                </div>
+            </div>
+
+            {# OCR toggle: file-режим, только для растр/pdf источников с текстовым таргетом. #}
+            <label x-show="inputMode === 'file' && showOcr" x-cloak class="mt-4 flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" x-model="ocr" class="h-4 w-4 rounded border-slate-300">
+                {{ 'home.ocr_label'|trans }}
+            </label>
+
+            <div class="mt-6">
+                <button
+                    @click="submit()"
+                    :disabled="!canSubmit"
+                    class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                    <span x-show="!submitting">{{ 'home.submit_button'|trans }}</span>
+                    <span x-show="submitting" x-cloak>{{ 'home.submit_sending'|trans }}</span>
+                </button>
+            </div>
+
+            <template x-if="error">
+                <div class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="error"></div>
+            </template>
+        </div>
+
+        {# ── Статус задачи и результат — тот же partial, что и на `/`. ── #}
+        {% include 'partials/_converter_job_status.html.twig' %}
+
+        {# ── SEO-текстовый блок под пару (структурная готовность, без
+           keyword-тюнинга — см. Decisions карточки home-09). ── #}
+        <section class="mt-10 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-slate-800">{{ 'pair.about_heading'|trans({'%from%': fromLabel, '%to%': toLabel}) }}</h2>
+            <p class="mt-2 text-sm leading-relaxed text-slate-600">{{ 'pair.about_body'|trans({'%from%': fromLabel, '%to%': toLabel}) }}</p>
+        </section>
+
+        {# ── Пример результата (home-04, пара-специфичный либо fallback по
+           категории — фильтрация в converterApp() init(), см. lockedFrom/
+           lockedTo/lockedCategory) — тот же partial, что и на `/`. ── #}
+        {% include 'partials/_converter_examples.html.twig' %}
+    </main>
+
+    {# ── Модалка предпросмотра (текст) — тот же partial и позиция, что и на `/`. ── #}
+    {% include 'partials/_converter_preview_modal.html.twig' %}
+
+    {# ── Модалка медиа-вьюера (image/pdf) — тот же partial, что и на `/`. ДОЛЖНА
+       быть ВНУТРИ x-data="converterApp()" — иначе viewer.* резолвится в пустом/
+       глобальном Alpine-скоупе и вьюер не открывается (баг home-05, найден
+       2026-07-21). ── #}
+    {% include 'partials/_converter_viewer_modal.html.twig' %}
+</div>
+
+{# ── converterApp() Alpine-компонент — тот же partial, что и на `/`, здесь
+   x-data выше передаёт lockedFrom/lockedTo/lockedCategory. ── #}
+{% include 'partials/_converter_app_script.html.twig' %}
+{% endblock %}

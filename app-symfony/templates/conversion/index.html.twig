@@ -1,145 +1,163 @@
 {% extends 'base.html.twig' %}
 
-{% block title %}Конвертер файлов — загрузка и конвертация{% endblock %}
-
-{% block stylesheets %}
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>[x-cloak]{display:none !important;}</style>
-{% endblock %}
-
-{% block javascripts %}
-    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
-{% endblock %}
+{% block title %}{{ 'home.title'|trans }}{% endblock %}
 
 {% block body %}
 <div
     x-data="converterApp()"
     x-init="init()"
-    class="min-h-screen bg-slate-50 text-slate-800"
+    class="flex flex-1 flex-col"
 >
-    <header class="border-b border-slate-200 bg-white">
-        <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
-            <div class="flex items-center gap-2">
-                <span class="text-2xl">⚫️</span>
-                <span class="text-lg font-semibold">Конвертер файлов</span>
-            </div>
-
-            {# ── Область входа / статуса пользователя ── #}
-            <div>
-                <div x-show="!auth.token" x-cloak>
-                    {# Magic-link логин: POST /start → открыть deep-link в новой вкладке.
-                       Никакого поллинга — пользователь завершает вход в Telegram и
-                       открывает пришедшую ссылку на этом же устройстве. #}
-                    <button
-                        @click="startLogin()"
-                        :disabled="loggingIn"
-                        class="rounded bg-sky-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-600 disabled:bg-slate-300"
-                    >
-                        <span x-show="!loggingIn">Войти через Telegram</span>
-                        <span x-show="loggingIn" x-cloak>Открываем Telegram…</span>
-                    </button>
-                </div>
-                <div x-show="auth.token" x-cloak class="flex items-center gap-3 text-sm">
-                    {# Чип профиля: аватар + имя. При profile_url — весь чип ссылка
-                       (:href на null отбрасывает атрибут → инертный текст). #}
-                    <a
-                        :href="user.profile_url"
-                        :target="user.profile_url ? '_blank' : null"
-                        rel="noopener"
-                        class="flex items-center gap-2 text-slate-600"
-                    >
-                        {# Аватар — data-URI из /me; при null — кружок с инициалом. #}
-                        <template x-if="user.avatar_url">
-                            <img :src="user.avatar_url" alt="" class="h-7 w-7 rounded-full object-cover">
-                        </template>
-                        <template x-if="!user.avatar_url">
-                            <span
-                                class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs font-medium text-slate-600"
-                                x-text="avatarInitial()"
-                            ></span>
-                        </template>
-                        <span x-text="user.name || auth.username || 'вы вошли'"></span>
-                    </a>
-                    <button
-                        @click="logout()"
-                        class="rounded border border-slate-300 px-3 py-1 text-slate-600 hover:bg-slate-100"
-                    >Выйти</button>
-                </div>
-            </div>
-        </div>
-    </header>
-
-    <main class="mx-auto max-w-3xl px-4 py-8">
+    <main class="mx-auto w-full max-w-3xl px-4 py-8">
         <template x-if="authError">
             <div class="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="authError"></div>
         </template>
 
-        {# Инструкция после нажатия «Войти»: завершить в Telegram и открыть
-           пришедшую ссылку на этом же устройстве. Поллинга нет. #}
-        <template x-if="loginHint">
-            <div class="mb-4 rounded border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
-                Продолжите в Telegram: нажмите «Войти», затем откройте пришедшую ссылку
-                на&nbsp;этом&nbsp;же&nbsp;устройстве.
+        {# Гейт ai/video: конвертация без логина запрещена сервером (403). Ссылка
+           на /login — обычная навигация, БЕЗ popup (D1 эпика home-00). #}
+        <template x-if="!auth.token && loginRequired">
+            <div class="mb-6 flex flex-wrap items-center gap-3 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <span>{{ 'home.ai_gate_message'|trans }}</span>
+                <a
+                    href="/login"
+                    class="rounded bg-sky-500 px-3 py-1 text-xs font-medium text-white hover:bg-sky-600"
+                >{{ 'nav.login'|trans }}</a>
             </div>
         </template>
 
-        {# Гейт ai/video: конвертация без логина запрещена сервером (403). #}
-        <template x-if="!auth.token && loginRequired">
-            <div class="mb-6 flex flex-wrap items-center gap-3 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <span>Для ai/video конвертаций нужен вход через Telegram.</span>
-                <button
-                    @click="startLogin()"
-                    :disabled="loggingIn"
-                    class="rounded bg-sky-500 px-3 py-1 text-xs font-medium text-white hover:bg-sky-600 disabled:bg-slate-300"
-                >Войти через Telegram</button>
+        {# ── home-13: виджет использованных квот — гость И залогиненный, прямо
+           над формой конвертации. Данные из GET /api/v1/quota (fetch в init(),
+           refresh после каждой завершённой конвертации — см. loadQuota() и её
+           вызовы в partials/_converter_app_script.html.twig). Безлимит (-1) →
+           символ ∞ (quotaLine()). Скрыт до первого успешного ответа
+           (x-if="quota.loaded"), чтобы не мигать нулями.
+           Coordination point для home-12 (гостевая история + cookie-consent):
+           тот блок встраивается ПОСЛЕ этого виджета (между виджетом и формой
+           либо под формой) — не переиспользует и не меняет эту разметку. #}
+        <template x-if="quota.loaded">
+            <div class="mb-4 flex flex-wrap items-center gap-x-6 gap-y-1 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-600">
+                <span>
+                    <span class="font-medium text-slate-700">{{ 'home.quota.plan_label'|trans }}:</span>
+                    <span x-text="quotaPlanLabel"></span>
+                </span>
+                <span>
+                    <span class="font-medium text-slate-700">{{ 'home.quota.conversions_label'|trans }}:</span>
+                    <span x-text="quotaLine(quota.conversions, quota.conversionsLimit)"></span>
+                </span>
+                <span>
+                    <span class="font-medium text-slate-700">{{ 'home.quota.ai_label'|trans }}:</span>
+                    <span x-text="quotaLine(quota.aiConversions, quota.aiConversionsLimit)"></span>
+                    <template x-if="quota.plan === 'guest'">
+                        <span class="text-slate-400">({{ 'home.quota.ai_guest_note'|trans }})</span>
+                    </template>
+                </span>
+                <span>
+                    <span class="font-medium text-slate-700">{{ 'home.quota.max_file_label'|trans }}:</span>
+                    <span x-text="humanSize(quota.maxUploadBytes)"></span>
+                </span>
             </div>
         </template>
 
         {# ── Форма загрузки и конвертации ── #}
-        <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-            {# Drag & drop зона #}
-            <div
-                @dragover.prevent="dragging = true"
-                @dragleave.prevent="dragging = false"
-                @drop.prevent="onDrop($event)"
-                @click="$refs.fileInput.click()"
-                :class="dragging ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300'"
-                class="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-10 text-center transition"
-            >
-                <svg class="mb-3 h-10 w-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"/>
-                </svg>
-                <template x-if="!file">
-                    <p class="text-sm text-slate-500">Перетащите файл сюда или нажмите, чтобы выбрать</p>
-                </template>
-                <template x-if="file">
-                    <div class="text-sm">
-                        <p class="font-medium text-slate-700" x-text="file.name"></p>
-                        <p class="text-slate-400" x-text="humanSize(file.size)"></p>
-                    </div>
-                </template>
-                <input type="file" x-ref="fileInput" class="hidden" @change="onFilePick($event)">
+        <div id="convert-form" class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+            {# Переключатель режима ввода: Файл (drag&drop, как раньше) / Текст
+               (paste без файла, home-02-text-input). #}
+            <div class="mb-4 inline-flex rounded-lg border border-slate-200 p-1 text-sm">
+                <button
+                    type="button"
+                    @click="setMode('file')"
+                    :class="inputMode === 'file' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'"
+                    class="rounded-md px-3 py-1.5 font-medium transition"
+                >{{ 'home.input_mode_file'|trans }}</button>
+                <button
+                    type="button"
+                    @click="setMode('text')"
+                    :class="inputMode === 'text' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'"
+                    class="rounded-md px-3 py-1.5 font-medium transition"
+                >{{ 'home.input_mode_text'|trans }}</button>
             </div>
 
-            {# Выбор целевого формата #}
+            {# Drag & drop зона (только file-режим) #}
+            <template x-if="inputMode === 'file'">
+                <div
+                    @dragover.prevent="dragging = true"
+                    @dragleave.prevent="dragging = false"
+                    @drop.prevent="onDrop($event)"
+                    @click="$refs.fileInput.click()"
+                    :class="dragging ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300'"
+                    class="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-10 text-center transition"
+                >
+                    <svg class="mb-3 h-10 w-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"/>
+                    </svg>
+                    <template x-if="!file">
+                        <p class="text-sm text-slate-500">{{ 'home.dropzone_hint'|trans }}</p>
+                    </template>
+                    <template x-if="file">
+                        <div class="text-sm">
+                            <p class="font-medium text-slate-700" x-text="file.name"></p>
+                            <p class="text-slate-400" x-text="humanSize(file.size)"></p>
+                        </div>
+                    </template>
+                    <input type="file" x-ref="fileInput" class="hidden" @change="onFilePick($event)">
+                </div>
+            </template>
+
+            {# Текстовый ввод (только text-режим): textarea + явный выбор source_format
+               (ограниченное текстовое подмножество — см. textSourceFormats). БЕЗ
+               синтеза File/Blob на клиенте — submit() шлёт text+source_format полями. #}
+            <template x-if="inputMode === 'text'">
+                <div>
+                    <textarea
+                        x-model="text"
+                        rows="8"
+                        placeholder="{{ 'home.text_placeholder'|trans|e('html_attr') }}"
+                        class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none"
+                    ></textarea>
+                    <div class="mt-1 flex items-center justify-between text-xs">
+                        <template x-if="text.trim() === ''">
+                            <span class="text-slate-400">{{ 'home.error.text_required'|trans }}</span>
+                        </template>
+                        <template x-if="text.trim() !== '' && textTooLarge">
+                            <span class="text-red-600" x-text="I18N.errors.textTooLarge.replace('%mb%', TEXT_SOFT_LIMIT_MB)"></span>
+                        </template>
+                        <span class="ml-auto text-slate-400" x-text="humanSize(textByteSize)"></span>
+                    </div>
+                </div>
+            </template>
+
+            {# Выбор исходного/целевого формата #}
             <div class="mt-6 grid gap-4 sm:grid-cols-2">
                 <label class="block">
-                    <span class="mb-1 block text-sm font-medium text-slate-600">Исходный формат</span>
-                    <input
-                        type="text"
-                        :value="fromFormat || '—'"
-                        disabled
-                        class="w-full rounded border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
-                    >
+                    <span class="mb-1 block text-sm font-medium text-slate-600">{{ 'home.source_format_label'|trans }}</span>
+                    <template x-if="inputMode === 'file'">
+                        <input
+                            type="text"
+                            :value="fromFormat || '—'"
+                            disabled
+                            class="w-full rounded border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                        >
+                    </template>
+                    <template x-if="inputMode === 'text'">
+                        <select
+                            x-model="fromFormat"
+                            class="w-full rounded border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:outline-none"
+                        >
+                            <option value="">{{ 'home.format_placeholder'|trans }}</option>
+                            <template x-for="f in textSourceFormats" :key="f">
+                                <option :value="f" x-text="f"></option>
+                            </template>
+                        </select>
+                    </template>
                 </label>
                 <label class="block">
-                    <span class="mb-1 block text-sm font-medium text-slate-600">Целевой формат</span>
+                    <span class="mb-1 block text-sm font-medium text-slate-600">{{ 'home.target_format_label'|trans }}</span>
                     <select
                         x-model="toFormat"
                         :disabled="targets.length === 0"
                         class="w-full rounded border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:outline-none disabled:bg-slate-100"
                     >
-                        <option value="">— выберите формат —</option>
+                        <option value="">{{ 'home.format_placeholder'|trans }}</option>
                         <template x-for="t in targets" :key="t">
                             <option :value="t" x-text="t"></option>
                         </template>
@@ -147,10 +165,10 @@
                 </label>
             </div>
 
-            {# OCR toggle: только для растр/pdf источников с текстовым таргетом #}
-            <label x-show="showOcr" x-cloak class="mt-4 flex items-center gap-2 text-sm text-slate-700">
+            {# OCR toggle: file-режим, только для растр/pdf источников с текстовым таргетом #}
+            <label x-show="inputMode === 'file' && showOcr" x-cloak class="mt-4 flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" x-model="ocr" class="h-4 w-4 rounded border-slate-300">
-                Распознать текст (OCR)
+                {{ 'home.ocr_label'|trans }}
             </label>
 
             {# Кнопка отправки #}
@@ -160,8 +178,8 @@
                     :disabled="!canSubmit"
                     class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
-                    <span x-show="!submitting">Конвертировать</span>
-                    <span x-show="submitting" x-cloak>Отправка…</span>
+                    <span x-show="!submitting">{{ 'home.submit_button'|trans }}</span>
+                    <span x-show="submitting" x-cloak>{{ 'home.submit_sending'|trans }}</span>
                 </button>
             </div>
 
@@ -171,60 +189,167 @@
             </template>
         </div>
 
-        {# ── Статус задачи и результат ── #}
-        <template x-if="job.id">
-            <div class="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-                <div class="flex items-center justify-between">
-                    <span class="text-sm text-slate-500">Задача #<span x-text="job.id"></span></span>
-                    <span
-                        class="rounded-full px-3 py-1 text-xs font-medium"
-                        :class="{
-                            'bg-slate-100 text-slate-600': isActive(job.status),
-                            'bg-green-100 text-green-700': job.status === 'completed',
-                            'bg-red-100 text-red-700': isFailed(job.status),
-                        }"
-                        x-text="statusLabel(job.status)"
-                    ></span>
+        {# ── Статус задачи и результат — partial (home-09), переиспользуется
+           conversion/pair.html.twig без изменений разметки. ── #}
+        {% include 'partials/_converter_job_status.html.twig' %}
+
+        {# ── home-04 (Part B): живые примеры конвертаций из S3 — partial
+           (home-09), переиспользуется conversion/pair.html.twig без изменений
+           разметки (фильтрация до пары/категории — в converterApp() init()). ── #}
+        {% include 'partials/_converter_examples.html.twig' %}
+
+        {# ── Витрина категорий/пар форматов (home-03) — целиком из
+           GET /api/v1/formats, никакого хардкода списка форматов в Twig/JS.
+           Клик по паре — best-effort предзаполнение формы + скролл-якорь к
+           #convert-form (id держится на форме выше, позиция витрины на это
+           не влияет). home-03-showcase-reorder: блок сознательно ПОСЛЕ формы
+           и примеров, сразу ПЕРЕД таблицей поддерживаемых форматов ниже —
+           так пользователь сначала видит форму/примеры, а витрина служит
+           переходом к полной таблице форматов. #}
+        <template x-if="showcaseCategories.length > 0">
+            <section class="mb-8">
+                <h2 class="text-lg font-semibold text-slate-800">{{ 'home.showcase_heading'|trans }}</h2>
+                <p class="mt-1 text-sm text-slate-500">{{ 'home.showcase_subheading'|trans }}</p>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <template x-for="cat in showcaseCategories" :key="cat.category">
+                        <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                            <h3 class="text-sm font-semibold text-slate-700" x-text="cat.label"></h3>
+                            <ul class="mt-3 space-y-1.5">
+                                <template x-for="pair in cat.pairs" :key="pair.from + '-' + pair.to">
+                                    <li>
+                                        <button
+                                            type="button"
+                                            @click="useShowcasePair(pair.from, pair.to)"
+                                            class="flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-sm text-slate-600 transition hover:bg-indigo-50 hover:text-indigo-700"
+                                        >
+                                            <span>
+                                                <span x-text="pair.from"></span>
+                                                <span class="text-slate-400"> → </span>
+                                                <span x-text="pair.to"></span>
+                                            </span>
+                                            <span
+                                                x-show="pair.isAi === true"
+                                                x-cloak
+                                                class="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700"
+                                                x-text="I18N.showcase.aiBadge"
+                                            ></span>
+                                        </button>
+                                    </li>
+                                </template>
+                            </ul>
+                            <p x-show="cat.more > 0" x-cloak class="mt-2 px-2 text-xs text-slate-400" x-text="I18N.showcase.more.replace('%count%', cat.more)"></p>
+                        </div>
+                    </template>
                 </div>
-
-                <template x-if="isActive(job.status)">
-                    <div class="mt-4 flex items-center gap-2 text-sm text-slate-500">
-                        <svg class="h-4 w-4 animate-spin text-indigo-500" viewBox="0 0 24 24" fill="none">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.4 0 0 5.4 0 12h4z"></path>
-                        </svg>
-                        Обработка…
-                    </div>
-                </template>
-
-                <template x-if="job.status === 'completed'">
-                    <div class="mt-4">
-                        {# Скачивание доступно и гостю: он владеет своей конвертацией
-                           через guest-cookie (fetch+blob с credentials:'include'). #}
-                        <button
-                            @click="download()"
-                            :disabled="downloading"
-                            class="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:bg-slate-300"
-                        >
-                            <span x-show="!downloading">Скачать результат</span>
-                            <span x-show="downloading" x-cloak>Загрузка…</span>
-                        </button>
-                    </div>
-                </template>
-
-                <template x-if="isFailed(job.status)">
-                    <div class="mt-4 text-sm text-red-600" x-text="job.error || (job.status === 'expired' ? 'Срок хранения результата истёк' : 'Конвертация не удалась')"></div>
-                </template>
-            </div>
+            </section>
         </template>
 
-        {# ── История конвертаций (только для залогиненного, восстанавливается при F5) ── #}
+        {# ── home-04 (Part A) / home-11: инфо-блок «форматы + лимиты» ──
+           Таблица форматов (home-11) теперь строится клиентски из this.formats
+           (formatMatrix getter, partials/_converter_app_script.html.twig) —
+           тот же fetch('/api/v1/formats'), что и у витрины/формы выше, второго
+           запроса нет. Больше не хардкод: авто-отражает реальную БД-матрицу,
+           включая AI-конвертации (STT/TTS/embedding, бейдж как в витрине).
+           Тарифная сетка ниже остаётся статичной Twig-разметкой — не эндпоинт
+           (GET /api/v1/quota отдаёт лимиты текущего юзера, не публичную сетку).
+           Числа лимитов сверены с реальным кодом (QuotaService + план-строки
+           миграции Version20260419000001), НЕ с 4-тировой моделью ROADMAP
+           (та ещё не реализована — см. limits.proposal_note). #}
+        <section class="mt-12">
+            <h2 class="text-lg font-semibold text-slate-800">{{ 'home.formats.heading'|trans }}</h2>
+            <p class="mt-1 text-sm text-slate-500">{{ 'home.formats.subheading'|trans }}</p>
+            <div class="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+                <table class="w-full min-w-[36rem] text-left text-sm">
+                    <thead class="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
+                        <tr>
+                            <th class="px-4 py-3 font-medium">{{ 'home.formats.col_category'|trans }}</th>
+                            <th class="px-4 py-3 font-medium">{{ 'home.formats.col_source'|trans }}</th>
+                            <th class="px-4 py-3 font-medium">{{ 'home.formats.col_target'|trans }}</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 text-slate-600">
+                        <template x-for="row in formatMatrix" :key="row.key">
+                            <tr>
+                                <td class="px-4 py-3 font-medium text-slate-700">
+                                    <span x-text="row.label"></span>
+                                    <span
+                                        x-show="row.isAi"
+                                        x-cloak
+                                        class="ml-1 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700"
+                                        x-text="I18N.showcase.aiBadge"
+                                    ></span>
+                                </td>
+                                <td class="px-4 py-3 font-mono text-xs" x-text="row.sources.join(', ')"></td>
+                                <td class="px-4 py-3 font-mono text-xs" x-text="row.targets.join(', ')"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 class="mt-10 text-lg font-semibold text-slate-800">{{ 'home.limits.heading'|trans }}</h2>
+            <p class="mt-1 text-sm text-slate-500">{{ 'home.limits.subheading'|trans }}</p>
+            <div class="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+                <table class="w-full min-w-[32rem] text-left text-sm">
+                    <thead class="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
+                        <tr>
+                            <th class="px-4 py-3 font-medium">{{ 'home.limits.col_param'|trans }}</th>
+                            <th class="px-4 py-3 font-medium">Free</th>
+                            <th class="px-4 py-3 font-medium">Basic</th>
+                            <th class="px-4 py-3 font-medium">Pro</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 text-slate-600">
+                        <tr>
+                            <td class="px-4 py-3 font-medium text-slate-700">{{ 'home.limits.conversions_day'|trans }}</td>
+                            <td class="px-4 py-3">2</td>
+                            <td class="px-4 py-3">100</td>
+                            <td class="px-4 py-3">∞ <span class="text-xs text-slate-400">({{ 'home.limits.unlimited'|trans }})</span></td>
+                        </tr>
+                        <tr>
+                            <td class="px-4 py-3 font-medium text-slate-700">{{ 'home.limits.ai_day'|trans }}</td>
+                            <td class="px-4 py-3">1</td>
+                            <td class="px-4 py-3">30</td>
+                            <td class="px-4 py-3">100</td>
+                        </tr>
+                        <tr>
+                            <td class="px-4 py-3 font-medium text-slate-700">{{ 'home.limits.max_file'|trans }}</td>
+                            <td class="px-4 py-3">50 MB</td>
+                            <td class="px-4 py-3">200 MB</td>
+                            <td class="px-4 py-3">500 MB</td>
+                        </tr>
+                        <tr>
+                            <td class="px-4 py-3 font-medium text-slate-700">{{ 'home.limits.price_month'|trans }}</td>
+                            <td class="px-4 py-3">$0</td>
+                            <td class="px-4 py-3">$3 · 150⭐</td>
+                            <td class="px-4 py-3">$10 · 500⭐</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="mt-2 text-xs text-slate-400">{{ 'home.limits.proposal_note'|trans }}</p>
+        </section>
+
+        {# ── История конвертаций. Залогиненный — грузится по JWT (tryRefresh),
+           не гейтится cookie-согласием. Гость (home-12) — грузится ТОЛЬКО при
+           cookie_consent=accepted (см. init()/readConsent() в
+           _converter_app_script.html.twig); conversions остаётся [] и секция
+           не рендерится, если согласия нет — отдельный запрос сюда не нужен. ── #}
         <template x-if="conversions.length > 0">
             <section class="mt-8">
-                <h2 class="mb-3 text-sm font-semibold text-slate-600">Мои конвертации</h2>
+                <template x-if="auth.token">
+                    <h2 class="mb-3 text-sm font-semibold text-slate-600">{{ 'home.history_heading'|trans }}</h2>
+                </template>
+                <template x-if="!auth.token">
+                    <div class="mb-3">
+                        <h2 class="text-sm font-semibold text-slate-600">{{ 'home.history_heading_guest'|trans }}</h2>
+                        <p class="mt-0.5 text-xs text-slate-400">{{ 'home.history_guest_note'|trans }}</p>
+                    </div>
+                </template>
                 <div class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm">
                     <template x-for="c in conversions" :key="c.id">
-                        <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                        <div class="px-4 py-3">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
                             <div class="min-w-0">
                                 <p class="text-sm font-medium text-slate-700">
                                     <span x-text="c.from_format || '—'"></span>
@@ -243,7 +368,7 @@
                                 <p class="text-xs text-slate-400">
                                     <span x-text="formatDate(c.created_at)"></span>
                                     <template x-if="c.processing_ms != null">
-                                        <span x-text="'· за ' + formatDuration(c.processing_ms)"></span>
+                                        <span x-text="'· ' + I18N.durationPrefix + formatDuration(c.processing_ms)"></span>
                                     </template>
                                 </p>
                             </div>
@@ -264,18 +389,34 @@
                                         :disabled="sourceLoadingId === c.id"
                                         class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
                                     >
-                                        <span x-show="sourceLoadingId !== c.id">Исходник</span>
-                                        <span x-show="sourceLoadingId === c.id" x-cloak>Загрузка…</span>
+                                        <span x-show="sourceLoadingId !== c.id">{{ 'home.history_source'|trans }}</span>
+                                        <span x-show="sourceLoadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
                                     </button>
                                 </template>
                                 <template x-if="sourceGone[c.id]">
-                                    <span class="text-xs text-slate-400">исходник удалён</span>
+                                    <span class="text-xs text-slate-400">{{ 'home.history_source_gone'|trans }}</span>
                                 </template>
-                                <template x-if="c.previewable === true && c.status === 'completed'">
+                                {# home-05: тип вьюера по формату/категории (D4 LIGHT MVP) —
+                                   text/image/pdf открывают попап, audio/video — инлайн-плеер ниже. #}
+                                <template x-if="c.status === 'completed' && viewerTypeForHistory(c) === 'text'">
                                     <button
                                         @click="openPreview(c.id, c.to_format)"
                                         class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
-                                    >Просмотр</button>
+                                    >{{ 'home.history_preview'|trans }}</button>
+                                </template>
+                                <template x-if="c.status === 'completed' && (viewerTypeForHistory(c) === 'image' || viewerTypeForHistory(c) === 'pdf')">
+                                    <button
+                                        @click="openViewer(viewerTypeForHistory(c), '/api/v1/convert/' + c.id + '/download', false)"
+                                        class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+                                    >{{ 'home.history_preview'|trans }}</button>
+                                </template>
+                                <template x-if="c.status === 'completed' && (viewerTypeForHistory(c) === 'audio' || viewerTypeForHistory(c) === 'video')">
+                                    <button
+                                        @click="togglePlayer('h' + c.id, viewerTypeForHistory(c), '/api/v1/convert/' + c.id + '/download', false)"
+                                        class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+                                    >
+                                        <span x-text="players['h' + c.id] ? I18N.viewer.hidePlayer : I18N.viewer.showPlayer"></span>
+                                    </button>
                                 </template>
                                 <template x-if="c.status === 'completed'">
                                     <button
@@ -283,11 +424,32 @@
                                         :disabled="downloadingId === c.id"
                                         class="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:bg-slate-300"
                                     >
-                                        <span x-show="downloadingId !== c.id">Скачать</span>
-                                        <span x-show="downloadingId === c.id" x-cloak>Загрузка…</span>
+                                        <span x-show="downloadingId !== c.id">{{ 'common.download'|trans }}</span>
+                                        <span x-show="downloadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
                                     </button>
                                 </template>
                             </div>
+                        </div>
+                        {# home-05: инлайн audio/video плеер строки истории — вне flex-строки
+                           выше, чтобы плеер занимал всю ширину карточки. #}
+                        <template x-if="players['h' + c.id]">
+                            <div class="mt-2">
+                                <template x-if="players['h' + c.id].loading">
+                                    <p class="text-xs text-slate-400">{{ 'common.loading'|trans }}</p>
+                                </template>
+                                <template x-if="players['h' + c.id].error">
+                                    <p class="text-xs text-red-600" x-text="players['h' + c.id].error"></p>
+                                </template>
+                                <template x-if="players['h' + c.id].objectUrl && players['h' + c.id].type === 'audio'">
+                                    {# object URL — источник для <audio>, НЕ HTML-контент (см. модалку вьюера выше). #}
+                                    <audio :src="players['h' + c.id].objectUrl" controls class="w-full"></audio>
+                                </template>
+                                <template x-if="players['h' + c.id].objectUrl && players['h' + c.id].type === 'video'">
+                                    {# object URL — источник для <video>, НЕ HTML-контент. #}
+                                    <video :src="players['h' + c.id].objectUrl" controls class="max-h-96 w-full"></video>
+                                </template>
+                            </div>
+                        </template>
                         </div>
                     </template>
                 </div>
@@ -295,539 +457,20 @@
         </template>
     </main>
 
-    {# ── Модалка предпросмотра результата (одна на страницу) ──
-       Текст рендерится ТОЛЬКО через x-text (untrusted content, без x-html). #}
-    <div
-        x-show="preview.open"
-        x-cloak
-        @keydown.escape.window="closePreview()"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
-    >
-        {# Бэкдроп: клик мимо — закрыть #}
-        <div class="absolute inset-0 bg-slate-900/50" @click="closePreview()"></div>
-        <div class="relative flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
-            <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                <h3 class="text-sm font-semibold text-slate-700">Предпросмотр результата</h3>
-                <button
-                    @click="closePreview()"
-                    class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                    aria-label="Закрыть"
-                >✕</button>
-            </div>
+    {# ── Модалки предпросмотра (текст) — partial (home-09), ВНУТРИ x-data,
+       переиспользуется conversion/pair.html.twig в той же позиции. ── #}
+    {% include 'partials/_converter_preview_modal.html.twig' %}
 
-            <template x-if="preview.truncated">
-                <div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-                    Показаны первые 64&nbsp;КБ — скачайте целиком.
-                </div>
-            </template>
-
-            <div class="min-h-0 flex-1 overflow-auto p-4">
-                <template x-if="preview.loading">
-                    <p class="text-sm text-slate-500">Загрузка…</p>
-                </template>
-                <template x-if="!preview.loading">
-                    <pre class="whitespace-pre-wrap break-words font-mono text-xs text-slate-700" x-text="preview.text"></pre>
-                </template>
-            </div>
-
-            <div class="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
-                <button
-                    @click="downloadPreview()"
-                    class="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
-                >Скачать</button>
-                <button
-                    @click="closePreview()"
-                    class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
-                >Закрыть</button>
-            </div>
-        </div>
-    </div>
+    {# ── Модалка медиа-вьюера (image/pdf) — partial (home-09). ДОЛЖНА быть
+       ВНУТРИ x-data="converterApp()" — иначе viewer.* резолвится в пустом/
+       глобальном Alpine-скоупе и вьюер не открывается (баг home-05, найден
+       2026-07-21). Переиспользуется conversion/pair.html.twig в той же
+       позиции. ── #}
+    {% include 'partials/_converter_viewer_modal.html.twig' %}
 </div>
 
-<script>
-    const STATUS_LABELS = {
-        pending: 'В очереди',
-        processing: 'Обработка',
-        completed: 'Готово',
-        failed: 'Ошибка',
-        expired: 'Истёк',
-    };
-    // Статусы задачи: активные (идёт обработка) и терминальные (менять не будут).
-    const ACTIVE_STATUSES = ['pending', 'processing'];
-    const TERMINAL_STATUSES = ['completed', 'failed', 'expired'];
-    const FAILED_STATUSES = ['failed', 'expired'];
-    // Алиасы расширений → канонические форматы реестра (реестр знает только их).
-    const EXT_ALIASES = {
-        jpeg: 'jpg', jpe: 'jpg',
-        tif: 'tiff',
-        htm: 'html',
-        yml: 'yaml',
-    };
-
-    function converterApp() {
-        return {
-            auth: { token: null, username: null },
-            authError: '',
-            loggingIn: false,   // идёт открытие deep-link
-            loginHint: false,   // показать инструкцию «завершите в Telegram»
-            formats: [],        // [{from, to, category, isAi, ocrCapable}]
-            file: null,
-            fromFormat: '',
-            toFormat: '',
-            ocr: false,
-            submitting: false,
-            downloading: false,
-            error: '',
-            dragging: false,
-            job: { id: null, status: null, error: null },
-            conversions: [],    // история конвертаций залогиненного пользователя
-            downloadingId: null, // id строки истории, которая сейчас качается
-            sourceLoadingId: null, // id строки, чей исходник сейчас качается
-            sourceGone: {},     // id → true, когда исходник удалён (410 Gone)
-            user: { name: null, avatar_url: null, profile_url: null }, // профиль /api/v1/me
-            preview: { open: false, id: null, text: '', truncated: false, loading: false, toFormat: null },
-            _pollTimer: null,
-            _pollTries: 0,
-            _pollGen: 0,        // токен поколения поллинга: отсекает устаревшие циклы
-
-            init() {
-                // Magic-ссылка из бота вернула сюда после провала → понятное сообщение.
-                if (new URLSearchParams(location.search).get('login_error') === '1') {
-                    this.authError = 'Ссылка недействительна, начните вход заново.';
-                    history.replaceState(null, '', location.pathname);
-                }
-
-                // Определяем залогиненное состояние по refresh-cookie: после 302 с
-                // /callback localStorage пуст, но refresh-cookie выставлена. Гость
-                // всегда получит 401 здесь — это норма, уходим в анонимный UI.
-                // Имя пользователя magic-link-флоу не отдаёт (/refresh → {token}),
-                // поэтому в шапке показываем фолбэк «вы вошли».
-                this.tryRefresh().then((ok) => {
-                    if (ok) {
-                        this.loginHint = false;
-                        // Токен восстановлен → история и профиль грузятся с Bearer (иначе 401).
-                        this.loadHistory();
-                        this.loadMe();
-                    }
-                });
-
-                // Загружаем матрицу форматов (публичный эндпоинт)
-                fetch('/api/v1/formats')
-                    .then((r) => r.json())
-                    .then((d) => { this.formats = d.formats || []; })
-                    .catch(() => { this.error = 'Не удалось загрузить список форматов'; });
-            },
-
-            // Инициировать вход: POST /start (credentials — принять tg_login_nonce),
-            // открыть deep-link в новой вкладке, показать инструкцию. Поллинга нет.
-            async startLogin() {
-                if (this.loggingIn) return;
-                this.loggingIn = true;
-                this.authError = '';
-                try {
-                    const res = await fetch('/api/v1/auth/telegram/start', {
-                        method: 'POST',
-                        credentials: 'include',
-                    });
-                    if (!res.ok) {
-                        this.authError = 'Не удалось начать вход через Telegram (' + res.status + ').';
-                        return;
-                    }
-                    const d = await res.json();
-                    if (d.deep_link) window.open(d.deep_link, '_blank', 'noopener');
-                    this.loginHint = true;
-                } catch (e) {
-                    this.authError = 'Сетевая ошибка при входе через Telegram.';
-                } finally {
-                    this.loggingIn = false;
-                }
-            },
-
-            isActive(s) { return ACTIVE_STATUSES.includes(s); },
-            isTerminal(s) { return TERMINAL_STATUSES.includes(s); },
-            isFailed(s) { return FAILED_STATUSES.includes(s); },
-
-            get targets() {
-                if (!this.fromFormat) return [];
-                return this.formats
-                    .filter((f) => f.from === this.fromFormat)
-                    .map((f) => f.to)
-                    .filter((v, i, a) => a.indexOf(v) === i)
-                    .sort();
-            },
-
-            get showOcr() {
-                if (!this.fromFormat || !this.toFormat) return false;
-                const pair = this.formats.find(
-                    (f) => f.from === this.fromFormat && f.to === this.toFormat,
-                );
-                return pair?.ocrCapable === true;
-            },
-
-            // Требует логина: ai-флаг ИЛИ категория video. Совпадает с гейтом
-            // сервера (isAi === true || category === 'video'); служит подсказкой
-            // ДО отправки. Финальное решение — 403 auth_required от /convert.
-            get loginRequired() {
-                if (!this.fromFormat || !this.toFormat) return false;
-                const pair = this.formats.find(
-                    (f) => f.from === this.fromFormat && f.to === this.toFormat,
-                );
-                if (!pair) return false;
-                return pair.isAi === true || pair.category === 'video';
-            },
-
-            get canSubmit() {
-                // Блокируем сабмит, пока текущая задача не дошла до терминала —
-                // иначе in-flight polling задачи A перезапишет job задачей B.
-                // Токен НЕ обязателен: аноним конвертит по guest-cookie; ai/video
-                // режется сервером (403), а не UI.
-                const jobBusy = this.job.id !== null && !this.isTerminal(this.job.status);
-                return !!this.file && !!this.toFormat
-                    && !this.submitting && !jobBusy;
-            },
-
-            onFilePick(e) { this.setFile(e.target.files[0]); },
-            onDrop(e) {
-                this.dragging = false;
-                this.setFile(e.dataTransfer.files[0]);
-            },
-            setFile(f) {
-                if (!f) return;
-                this.file = f;
-                this.fromFormat = this.deriveFormat(f.name);
-                this.toFormat = '';
-                this.ocr = false;
-                this.error = '';
-            },
-
-            // Расширение → канонический формат. Без точки — формат неизвестен (''),
-            // чтобы UI не показывал мусор вместо исходного формата.
-            deriveFormat(name) {
-                if (!name || name.indexOf('.') === -1) return '';
-                const ext = name.split('.').pop().toLowerCase();
-                return EXT_ALIASES[ext] || ext;
-            },
-
-            humanSize(bytes) {
-                if (bytes < 1024) return bytes + ' Б';
-                if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' КБ';
-                return (bytes / 1048576).toFixed(1) + ' МБ';
-            },
-
-            statusLabel(s) { return STATUS_LABELS[s] || s; },
-
-            // Единый транспорт: всегда credentials:'include' (guest-cookie несёт
-            // личность анонима), Bearer добавляем ТОЛЬКО при наличии токена (иначе
-            // не шлём 'Bearer null'). Одноразовый silent-refresh на 401 — лишь для
-            // залогиненного (был токен): guest-401 — не истечение сессии.
-            async authFetch(url, opts = {}) {
-                const withAuth = (o) => {
-                    const headers = { ...(o.headers || {}) };
-                    if (this.auth.token) headers['Authorization'] = 'Bearer ' + this.auth.token;
-                    return { ...o, headers, credentials: 'include' };
-                };
-                const hadToken = !!this.auth.token;
-                let res = await fetch(url, withAuth(opts));
-                if (res.status !== 401 || !hadToken) return res;
-
-                // Залогинен и словил 401 → ровно один тихий refresh + повтор.
-                const refreshed = await this.tryRefresh();
-                if (!refreshed) {
-                    this.sessionExpired();
-                    return res;
-                }
-                return fetch(url, withAuth(opts));
-            },
-
-            async tryRefresh() {
-                try {
-                    const res = await fetch('/api/v1/auth/refresh', {
-                        method: 'POST',
-                        credentials: 'include',
-                    });
-                    if (!res.ok) return false;
-                    const d = await res.json();
-                    if (!d.token) return false;
-                    this.auth.token = d.token;
-                    localStorage.setItem('jwt', d.token);
-                    return true;
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            sessionExpired() {
-                this.clearAuth();
-                // Сбрасываем in-flight задачу: resetJob() бампает _pollGen (гасит
-                // текущий цикл поллинга) и обнуляет job.id, иначе jobBusy навсегда
-                // залипнет true и кнопка «Конвертировать» останется мёртвой даже
-                // после повторного входа. Экспирация ловится только на
-                // НЕтерминальном поле, так что готовый результат не теряем.
-                this.resetJob();
-                this.authError = 'Сессия истекла, войдите заново. Задача сброшена, повторите после входа.';
-            },
-
-            async submit() {
-                if (!this.canSubmit) return;
-                this.error = '';
-                this.submitting = true;
-                this.resetJob();
-
-                const fd = new FormData();
-                fd.append('file', this.file);
-                fd.append('to_format', this.toFormat);
-                if (this.showOcr && this.ocr) fd.append('ocr', '1');
-
-                try {
-                    const res = await this.authFetch('/api/v1/convert', { method: 'POST', body: fd });
-                    if (res.status === 202) {
-                        const d = await res.json();
-                        this.job = { id: d.conversion_id, status: d.status || 'pending', error: null };
-                        this.startPolling();
-                    } else if (res.status === 403 && await this.isAuthRequired(res)) {
-                        // Гейт ai/video для гостя: не общая ошибка, а приглашение войти.
-                        this.error = '';
-                        this.authError = 'Войдите через Telegram для ai/video конвертаций.';
-                        this.startLogin();
-                    } else {
-                        this.error = await this.errorMessage(res);
-                    }
-                } catch (e) {
-                    this.error = 'Сетевая ошибка при отправке файла';
-                } finally {
-                    this.submitting = false;
-                }
-            },
-
-            // 403 c телом {error:"auth_required"} — гейт ai/video, а не общий отказ.
-            async isAuthRequired(res) {
-                try {
-                    const d = await res.clone().json();
-                    return d.error === 'auth_required';
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            async errorMessage(res) {
-                const map = {
-                    401: 'Сессия истекла, войдите заново.',
-                    413: 'Файл слишком большой (превышен лимит размера).',
-                    415: 'Неподдерживаемый тип файла.',
-                    422: 'Такая конвертация не поддерживается.',
-                    429: 'Превышена дневная квота или слишком много запросов.',
-                };
-                let detail = '';
-                try { const d = await res.json(); detail = d.error || ''; } catch (e) {}
-                return map[res.status] || (detail || ('Ошибка ' + res.status));
-            },
-
-            resetJob() {
-                if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
-                this._pollTries = 0;
-                this._pollGen++;    // инвалидирует любой in-flight цикл предыдущей задачи
-                this.job = { id: null, status: null, error: null };
-            },
-
-            startPolling() {
-                this._pollTries = 0;
-                this.poll(this._pollGen);
-            },
-
-            async poll(gen) {
-                // Устаревший цикл (началась новая задача) — молча выходим.
-                if (gen !== this._pollGen || !this.job.id) return;
-                this._pollTries++;
-                // Кап ~5 минут: 2с × 150 попыток
-                if (this._pollTries > 150) {
-                    this.job.status = 'failed';
-                    this.job.error = 'Превышено время ожидания результата';
-                    return;
-                }
-                try {
-                    const res = await this.authFetch('/api/v1/convert/' + this.job.id + '/status');
-                    if (gen !== this._pollGen) return;   // задача сменилась/сброшена во время запроса
-                    // 401 после refresh-and-retry: если сессия истекла — sessionExpired()
-                    // уже сбросил задачу и сменил gen (поймано выше). Если дошли сюда —
-                    // просто прекращаем поллинг без записи статуса/перепланирования.
-                    if (res.status === 401) return;
-                    if (res.ok) {
-                        const d = await res.json();
-                        if (gen !== this._pollGen) return;
-                        this.job.status = d.status;
-                        this.job.error = d.error;
-                        if (this.isTerminal(d.status)) {
-                            // Завершённая задача появляется в истории без ручного F5.
-                            this.loadHistory();
-                            return;
-                        }
-                    }
-                } catch (e) { /* сеть моргнула — повторим */ }
-                this._pollTimer = setTimeout(() => this.poll(gen), 2000);
-            },
-
-            async download() {
-                if (!this.job.id) return;
-                this.downloading = true;
-                try {
-                    await this.saveResult(this.job.id, this.toFormat);
-                } finally {
-                    this.downloading = false;
-                }
-            },
-
-            // Скачивание строки истории: свой per-row флаг (downloadingId), чтобы
-            // спиннер горел только на нажатой кнопке. Fallback-имя — из to_format
-            // этой строки, а не из текущей формы.
-            async downloadConversion(id, toFormat) {
-                if (this.downloadingId) return;
-                this.downloadingId = id;
-                try {
-                    await this.saveResult(id, toFormat);
-                } finally {
-                    this.downloadingId = null;
-                }
-            },
-
-            // Общее ядро скачивания: fetch → blob (плейн <a href> не отправит ни
-            // Bearer, ни нужные credentials): authFetch шлёт guest-cookie
-            // (credentials) либо Bearer. Имя файла — из Content-Disposition.
-            async saveResult(id, toFormat) {
-                try {
-                    const res = await this.authFetch('/api/v1/convert/' + id + '/download');
-                    // 401 после refresh-and-retry: если сессия истекла, sessionExpired()
-                    // уже показал уведомление и сбросил токен; просто выходим.
-                    if (res.status === 401) return;
-                    if (!res.ok) { this.error = 'Не удалось скачать результат'; return; }
-                    const blob = await res.blob();
-                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
-                        || ('result.' + (toFormat || 'bin'));
-                    this.downloadBlob(blob, name);
-                } catch (e) {
-                    this.error = 'Сетевая ошибка при скачивании';
-                }
-            },
-
-            // Скачивание исходника строки истории. 410 Gone = исходник авто-удалён
-            // через 24ч → помечаем sourceGone[id] (кнопка прячется, показываем текст),
-            // а не общую ошибку. Свой per-row флаг sourceLoadingId для спиннера.
-            async downloadSource(id, sourceName) {
-                if (this.sourceLoadingId) return;
-                this.sourceLoadingId = id;
-                try {
-                    const res = await this.authFetch('/api/v1/convert/' + id + '/source');
-                    if (res.status === 401) return;
-                    if (res.status === 410) { this.sourceGone[id] = true; return; }
-                    if (!res.ok) { this.error = 'Не удалось скачать исходник'; return; }
-                    const blob = await res.blob();
-                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
-                        || (sourceName || 'source');
-                    this.downloadBlob(blob, name);
-                } catch (e) {
-                    this.error = 'Сетевая ошибка при скачивании исходника';
-                } finally {
-                    this.sourceLoadingId = null;
-                }
-            },
-
-            // Общий триггер скачивания blob через временный <a download> (плейн
-            // <a href> не несёт Bearer/credentials, потому качаем fetch→blob).
-            downloadBlob(blob, name) {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = name;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-            },
-
-            // История залогиненного пользователя. Гость/аноним → 401, оставляем
-            // пусто (authFetch не делает refresh без токена). Тихий фейл: история —
-            // вспомогательный блок, не критична для конвертации.
-            async loadHistory() {
-                try {
-                    const res = await this.authFetch('/api/v1/convert/history');
-                    if (!res.ok) return;
-                    const d = await res.json();
-                    this.conversions = d.items || [];
-                } catch (e) { /* сеть моргнула — покажем при следующем обновлении */ }
-            },
-
-            // Профиль залогиненного пользователя. Тихий фейл: шапка остаётся с
-            // фолбэком «вы вошли», гость (401) сюда не доходит.
-            async loadMe() {
-                try {
-                    const res = await this.authFetch('/api/v1/me');
-                    if (!res.ok) return;
-                    this.user = await res.json();
-                } catch (e) { /* /me не критичен для работы UI */ }
-            },
-
-            // Инициал для плейсхолдер-аватара, когда avatar_url === null.
-            avatarInitial() {
-                return (this.user.name || '?').trim().charAt(0).toUpperCase();
-            },
-
-            // ISO-8601 → локальные дата+время (created_at из истории).
-            formatDate(iso) {
-                if (!iso) return '';
-                const d = new Date(iso);
-                return isNaN(d) ? iso : d.toLocaleString();
-            },
-
-            // Длительность обработки: <1с — в мс, иначе в секундах с 1 знаком.
-            formatDuration(ms) {
-                if (ms == null) return '';
-                if (ms < 1000) return Math.round(ms) + ' мс';
-                return (ms / 1000).toFixed(1) + ' с';
-            },
-
-            // Предпросмотр результата: text/plain ≤64 КиБ. Заголовок
-            // X-Preview-Truncated:1 → показать примечание об усечении. Текст
-            // рендерим ТОЛЬКО через x-text (untrusted content, без x-html).
-            async openPreview(id, toFormat) {
-                this.preview = { open: true, id, text: '', truncated: false, loading: true, toFormat };
-                try {
-                    const res = await this.authFetch('/api/v1/convert/' + id + '/preview');
-                    if (res.status === 401) { this.preview.open = false; return; }
-                    if (!res.ok) { this.preview.text = 'Не удалось загрузить предпросмотр'; return; }
-                    this.preview.truncated = res.headers.get('X-Preview-Truncated') === '1';
-                    this.preview.text = await res.text();
-                } catch (e) {
-                    this.preview.text = 'Сетевая ошибка при загрузке предпросмотра';
-                } finally {
-                    this.preview.loading = false;
-                }
-            },
-            closePreview() { this.preview.open = false; },
-            downloadPreview() {
-                if (this.preview.id) this.downloadConversion(this.preview.id, this.preview.toFormat);
-            },
-
-            filenameFrom(disposition) {
-                if (!disposition) return '';
-                const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-                if (utf) { try { return decodeURIComponent(utf[1]); } catch (e) {} }
-                const m = disposition.match(/filename="?([^";]+)"?/i);
-                return m ? m[1] : '';
-            },
-
-            clearAuth() {
-                this.auth = { token: null, username: null };
-                this.user = { name: null, avatar_url: null, profile_url: null };
-                localStorage.removeItem('jwt');
-            },
-
-            logout() {
-                this.clearAuth();
-                this.authError = '';
-                this.loginHint = false;
-                // Отзыв refresh-cookie на бэке (best-effort)
-                fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
-            },
-        };
-    }
-</script>
+{# ── converterApp() Alpine-компонент — partial (home-09), переиспользуется
+   conversion/pair.html.twig с ДРУГИМИ options (locked from/to), см.
+   partials/_converter_app_script.html.twig. ── #}
+{% include 'partials/_converter_app_script.html.twig' %}
 {% endblock %}

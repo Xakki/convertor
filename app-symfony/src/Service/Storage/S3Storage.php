@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Storage;
 
 use AsyncAws\S3\Exception\NoSuchKeyException;
+use AsyncAws\S3\Input\CopyObjectRequest;
 use AsyncAws\S3\Input\DeleteObjectRequest;
 use AsyncAws\S3\Input\GetObjectRequest;
 use AsyncAws\S3\Input\HeadObjectRequest;
@@ -62,6 +63,35 @@ final class S3Storage
     }
 
     /**
+     * Серверная копия объекта внутри S3 (source→dest) без прогона байтов через
+     * PHP. Используется seed-командой примеров: результат обычной конвертации
+     * (ключ `results/…`, привязан к FileStorage-строке и вычищается через 24ч)
+     * копируется в стабильный префикс `examples/…` (без FileStorage-строки →
+     * FileCleanupService его не трогает, живёт постоянно). CopySource требует
+     * URL-кодирования bucket/key. Форсируем resolve() — ошибки (NoSuchKey, auth)
+     * всплывают синхронно здесь.
+     */
+    public function copyObject(string $srcBucket, string $srcKey, string $dstBucket, string $dstKey, ?string $contentType = null): void
+    {
+        // CopySource = `bucket/key`. Наши bucket/key содержат только безопасный
+        // набор `[a-z0-9./_-]` (детерминированные ключи results/… и имена
+        // бакетов), поэтому URL-кодирование не требуется — а «/» кодировать
+        // НЕЛЬЗЯ (сломает разбор source на бакет+ключ).
+        $input = [
+            'Bucket'     => $dstBucket,
+            'Key'        => $dstKey,
+            'CopySource' => $srcBucket . '/' . $srcKey,
+        ];
+
+        if ($contentType !== null) {
+            $input['ContentType']       = $contentType;
+            $input['MetadataDirective'] = 'REPLACE';
+        }
+
+        $this->client->copyObject(new CopyObjectRequest($input))->resolve();
+    }
+
+    /**
      * DELETE an object из указанного бакета. Форсирует resolve() — как putObject —
      * чтобы ошибки (auth, недоступность S3) всплывали синхронно здесь. Удаление
      * несуществующего ключа для S3/MinIO идемпотентно (success, без NoSuchKey), так
@@ -92,6 +122,31 @@ final class S3Storage
             return true;
         } catch (NoSuchKeyException) {
             return false;
+        }
+    }
+
+    /**
+     * HEAD-метаданные объекта: размер (байты) и content-type. Для витрины
+     * примеров (home-04) — показать размер результата без чтения тела.
+     * NoSuchKeyException → null (объекта нет).
+     *
+     * @return array{size: int, contentType: ?string}|null
+     */
+    public function objectStat(string $bucket, string $key): ?array
+    {
+        try {
+            $head = $this->client->headObject(new HeadObjectRequest([
+                'Bucket' => $bucket,
+                'Key'    => $key,
+            ]));
+            $head->resolve();
+
+            return [
+                'size'        => (int) ($head->getContentLength() ?? 0),
+                'contentType' => $head->getContentType(),
+            ];
+        } catch (NoSuchKeyException) {
+            return null;
         }
     }
 
@@ -160,6 +215,32 @@ final class S3Storage
         $response->headers->set('Content-Disposition', self::contentDisposition($filename));
         // Не даём браузеру MIME-sniff'ить недоверенные байты входного файла в HTML.
         $response->headers->set('X-Content-Type-Options', 'nosniff');
+
+        return $response;
+    }
+
+    /**
+     * Публичная inline-отдача объекта (без auth): для примеров лендинга
+     * (home-04). В отличие от attachmentResponse — `Content-Disposition: inline`
+     * (браузер/вьюер показывает результат, а не качает) + длинный public-кеш
+     * (примеры статичны, пересобираются только seed-командой). resolve()
+     * форсируется: NoSuchKeyException всплывает здесь → контроллер вернёт 404.
+     * X-Content-Type-Options:nosniff — не даём MIME-sniff'ить байты результата.
+     */
+    public function inlineResponse(string $bucket, string $key, string $filename, string $mime): StreamedResponse
+    {
+        $output = $this->client->getObject(new GetObjectRequest([
+            'Bucket' => $bucket,
+            'Key'    => $key,
+        ]));
+
+        $output->resolve();
+
+        $response = $this->streamBody($output);
+        $response->headers->set('Content-Type', $mime);
+        $response->headers->set('Content-Disposition', self::contentDisposition($filename, HeaderUtils::DISPOSITION_INLINE));
+        $response->headers->set('X-Content-Type-Options', 'nosniff');
+        $response->headers->set('Cache-Control', 'public, max-age=86400');
 
         return $response;
     }

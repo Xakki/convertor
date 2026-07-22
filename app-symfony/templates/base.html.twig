@@ -2,11 +2,26 @@
 <html>
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{% block title %}Welcome!{% endblock %}</title>
+        {# home-09-seo-conversion-pages: meta description + canonical link для
+           страниц пар (conversion/pair.html.twig). Пустой по умолчанию —
+           остальные страницы блок не переопределяют. #}
+        {% block meta %}{% endblock %}
         <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 128 128%22><text y=%221.2em%22 font-size=%2296%22>⚫️</text><text y=%221.3em%22 x=%220.2em%22 font-size=%2276%22 fill=%22%23fff%22>sf</text></svg>">
+
+        {# Tailwind CDN + Alpine CDN + x-cloak — общие для всех страниц на этом
+           layout (`/`, `/login`, home-01-header-nav подняла их из
+           conversion/index.html.twig и auth/login.html.twig в base, т.к. оба
+           теперь используют общий header/footer-партиал. admin/base.html.twig —
+           отдельный самостоятельный layout (свой doctype, dark-тема, htmx), эту
+           базу не расширяет и не трогается. #}
+        <script src="https://cdn.tailwindcss.com"></script>
+        <style>[x-cloak]{display:none !important;}</style>
         {% block stylesheets %}
         {% endblock %}
 
+        <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
         {% block javascripts %}
         {% endblock %}
 
@@ -17,7 +32,19 @@
         <script src="https://cdn.jsdelivr.net/npm/frankenphp-hot-reload/+esm" type="module"></script>
         {% endif %}
     </head>
-    <body>
-        {% block body %}{% endblock %}
+    <body class="flex min-h-screen flex-col bg-slate-50 text-slate-800">
+        {% block header %}
+            {% include 'partials/_header.html.twig' %}
+        {% endblock %}
+
+        <div class="flex flex-1 flex-col">
+            {% block body %}{% endblock %}
+        </div>
+
+        {% block footer %}
+            {% include 'partials/_footer.html.twig' %}
+        {% endblock %}
+
+        {% include 'partials/_cookie_consent.html.twig' %}
     </body>
 </html>

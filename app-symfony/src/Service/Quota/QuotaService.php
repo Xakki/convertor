@@ -91,6 +91,10 @@ class QuotaService
     }
 
     /**
+     * Остаток + лимиты плана в одном ответе (для UI-виджета квот: home-13).
+     * `*_limit` — те же значения, что резолвит limitsFor() (-1 = безлимит) —
+     * без них фронт не может показать «использовано/лимит», только remaining.
+     *
      * @return array<string, int|string>
      */
     public function getRemainingQuota(User $user): array
@@ -106,7 +110,9 @@ class QuotaService
             'ai_conversions' => $limits['ai_conversions'] === -1
                 ? -1
                 : max(0, $limits['ai_conversions'] - $user->getDailyAiConversions()),
-            'plan' => $user->getPlan(),
+            'conversions_limit'    => $limits['conversions'],
+            'ai_conversions_limit' => $limits['ai_conversions'],
+            'plan'                 => $user->getPlan(),
         ];
     }
 

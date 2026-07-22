@@ -108,6 +108,10 @@ final class QuotaServiceTest extends TestCase
         $remaining = $service->getRemainingQuota($user);
         self::assertSame(2, $remaining['conversions']);
         self::assertSame(1, $remaining['ai_conversions']);
+        // home-13: getRemainingQuota() теперь отдаёт ещё и сырые лимиты плана
+        // (для виджета «остаток/лимит» на фронте), а не только остаток.
+        self::assertSame(2, $remaining['conversions_limit']);
+        self::assertSame(1, $remaining['ai_conversions_limit']);
     }
 
     // ----- (A2) prod-даунгрейд: warning, но НЕ throw --------------------------

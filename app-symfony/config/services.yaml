@@ -51,6 +51,10 @@ parameters:
     # docker-сети. В проде можно сузить до конкретного адреса фронта.
     env(TRUSTED_PROXIES): 'private_ranges'
 
+    # Username Telegram-бота (без @) для deep-link `t.me/<username>` в хедере
+    # (home-01-header-nav). Не секрет; используется и TelegramLoginController.
+    app.telegram_bot_username: '%env(TELEGRAM_BOT_USERNAME)%'
+
 services:
     _defaults:
         autowire: true

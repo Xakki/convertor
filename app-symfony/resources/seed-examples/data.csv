@@ -1,0 +1,5 @@
+format,category,engine
+txt,document,LibreOffice
+png,image,Pillow
+wav,audio,FFmpeg
+csv,data,pandas

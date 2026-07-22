@@ -60,19 +60,25 @@ class ConversionController extends AbstractController
     #[Route('/convert', methods: ['POST'])]
     #[OA\Tag(name: 'Conversion')]
     #[OA\Post(
-        summary: 'Поставить файл в очередь на конвертацию',
-        description: 'Загружает файл (multipart/form-data) и создаёт задачу конвертации. Списывает квоту и ставит задачу в очередь.',
+        summary: 'Поставить файл ИЛИ текст в очередь на конвертацию',
+        description: 'Принимает multipart/form-data с РОВНО ОДНИМ входом: либо `file` (загруженный файл), '
+            . 'либо `text` + `source_format` (вставленный текст без файла — сервер материализует его во '
+            . 'временный файл с расширением `source_format` и дальше ведёт по тому же пайплайну). '
+            . 'Оба сразу или ни одного — 400. Для text-входа `source_format` обязателен и должен быть '
+            . 'поддерживаемым текстовым источником реестра (не бинарный формат) — иначе 422.',
     )]
     #[OA\RequestBody(
         required: true,
         content: new OA\MediaType(
             mediaType: 'multipart/form-data',
             schema: new OA\Schema(
-                required: ['file', 'to_format'],
+                required: ['to_format'],
                 properties: [
-                    new OA\Property(property: 'file', type: 'string', format: 'binary', description: 'Исходный файл'),
+                    new OA\Property(property: 'file', type: 'string', format: 'binary', description: 'Исходный файл (взаимоисключимо с `text`)'),
+                    new OA\Property(property: 'text', type: 'string', description: 'Вставленный текст без файла (взаимоисключимо с `file`); требует `source_format`'),
+                    new OA\Property(property: 'source_format', type: 'string', example: 'md', description: 'Формат исходного текста (обязателен вместе с `text`; текстовый источник реестра)'),
                     new OA\Property(property: 'to_format', type: 'string', example: 'pdf', description: 'Целевой формат'),
-                    new OA\Property(property: 'ocr', type: 'boolean', default: false, description: 'Использовать OCR (для неоднозначных пар, напр. pdf→txt)'),
+                    new OA\Property(property: 'ocr', type: 'boolean', default: false, description: 'Использовать OCR (только для file-входа; для неоднозначных пар, напр. pdf→txt)'),
                 ],
             ),
         ),
@@ -85,12 +91,12 @@ class ConversionController extends AbstractController
             new OA\Property(property: 'status', type: 'string', example: 'pending'),
         ]),
     )]
-    #[OA\Response(response: 400, description: 'Некорректный запрос (нет файла / to_format)')]
+    #[OA\Response(response: 400, description: 'Некорректный запрос: нет ни file, ни text; ОБА file и text сразу; нет to_format/source_format')]
     #[OA\Response(response: 401, description: 'Требуется аутентификация')]
     #[OA\Response(response: 409, description: 'Конвертация отключена админом')]
-    #[OA\Response(response: 413, description: 'Файл превышает лимит размера')]
+    #[OA\Response(response: 413, description: 'Файл/текст превышает лимит размера')]
     #[OA\Response(response: 415, description: 'Неподдерживаемый тип содержимого')]
-    #[OA\Response(response: 422, description: 'Неподдерживаемая конвертация')]
+    #[OA\Response(response: 422, description: 'Неподдерживаемая конвертация (в т.ч. бинарный source_format в text-режиме)')]
     #[OA\Response(response: 429, description: 'Превышена квота / слишком много запросов')]
     public function convert(Request $request, #[CurrentUser] ?User $user): JsonResponse
     {
@@ -98,16 +104,50 @@ class ConversionController extends AbstractController
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
         }
 
-        $file     = $request->files->get('file');
-        $toFormat = $request->request->get('to_format');
-        $ocr      = $request->request->getBoolean('ocr');
+        $file         = $request->files->get('file');
+        $text         = $request->request->get('text');
+        $sourceFormat = $request->request->get('source_format');
+        $toFormat     = $request->request->get('to_format');
+        $ocr          = $request->request->getBoolean('ocr');
 
-        if ($file === null) {
-            return $this->json(['error' => 'File required'], Response::HTTP_BAD_REQUEST);
+        $hasFile = $file !== null;
+        // Пустой text (не отправлен ИЛИ пустая строка) неотличим от «нет text» —
+        // AC требует того же 400 «neither», что и для полного отсутствия входа.
+        $hasText = is_string($text) && $text !== '';
+
+        if ($hasFile && $hasText) {
+            return $this->json(['error' => 'Provide either file or text, not both'], Response::HTTP_BAD_REQUEST);
+        }
+
+        if (! $hasFile && ! $hasText) {
+            return $this->json(['error' => 'Either file or text is required'], Response::HTTP_BAD_REQUEST);
         }
 
         if (! $toFormat) {
             return $this->json(['error' => 'to_format required'], Response::HTTP_BAD_REQUEST);
+        }
+
+        $toFormatLower = strtolower((string) $toFormat);
+
+        // Text-вход: source_format обязателен и валидируется КАК ТЕКСТОВЫЙ
+        // источник реестра — ДО createConversion(), т.к. у пасченого текста
+        // нет MIME-sniff подстраховки (unlike a real upload), поэтому бинарный
+        // source_format (docx/pdf/картинки/аудио/видео) отклоняем здесь с 422,
+        // отдельно от общего 400 «unsupported pair» файлового пути.
+        $sourceFormatLower = null;
+        if ($hasText) {
+            if (! is_string($sourceFormat) || $sourceFormat === '') {
+                return $this->json(['error' => 'source_format required for text input'], Response::HTTP_BAD_REQUEST);
+            }
+
+            $sourceFormatLower = strtolower($sourceFormat);
+
+            if (! $this->registry->isTextSourceSupported($sourceFormatLower, $toFormatLower)) {
+                return $this->json(
+                    ['error' => "Unsupported text source_format: {$sourceFormatLower} → {$toFormatLower}"],
+                    Response::HTTP_UNPROCESSABLE_ENTITY,
+                );
+            }
         }
 
         // ROLE_USER = полный логин; гость его не имеет (role_hierarchy даёт
@@ -125,11 +165,24 @@ class ConversionController extends AbstractController
             }
         }
 
+        // Text-вход материализуется во временный файл (fromText()) и идёт по
+        // ТОЙ ЖЕ цепочке ConversionManager, что и файл — temp-файл подчищаем
+        // в finally независимо от исхода (см. ConversionRequestDTO::cleanupTempFile()).
+        if ($hasText) {
+            $conversionRequest = ConversionRequestDTO::fromText($user, (string) $text, (string) $sourceFormatLower, $toFormatLower, $privileged);
+        } elseif ($file !== null) {
+            $conversionRequest = new ConversionRequestDTO($user, $file, $toFormatLower, $ocr, $privileged);
+        } else {
+            // Недостижимо: hasFile/hasText провалидированы выше (ровно один
+            // вход присутствует) — узкая ветка только чтобы PHPStan видел
+            // $file как non-null в ConversionRequestDTO-конструкторе.
+            throw new \LogicException('Unreachable: neither file nor text present');
+        }
+
         try {
             // createConversion now enqueues (dispatch) + charges quota internally,
             // so the whole charge→submit→enqueue path is atomic in one place.
-            $conversionRequest = new ConversionRequestDTO($user, $file, strtolower((string) $toFormat), $ocr, $privileged);
-            $conversion        = $this->conversionManager->createConversion($conversionRequest);
+            $conversion = $this->conversionManager->createConversion($conversionRequest);
 
             return $this->json([
                 'conversion_id' => $conversion->getId(),
@@ -158,6 +211,8 @@ class ConversionController extends AbstractController
             // specific catches above already handled 422/429; this maps the
             // remaining HTTP exceptions to their own status code.
             return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } finally {
+            $conversionRequest->cleanupTempFile();
         }
     }
 
@@ -503,11 +558,14 @@ class ConversionController extends AbstractController
     #[OA\Get(summary: 'Остаток квоты пользователя')]
     #[OA\Response(
         response: 200,
-        description: 'Остаток дневной квоты',
+        description: 'Остаток дневной квоты + лимиты плана (home-13: данные для виджета квот на фронте)',
         content: new OA\JsonContent(properties: [
-            new OA\Property(property: 'conversions', type: 'integer', description: '-1 = безлимит', example: 42),
-            new OA\Property(property: 'ai_conversions', type: 'integer', description: '-1 = безлимит', example: 5),
+            new OA\Property(property: 'conversions', type: 'integer', description: 'Остаток на сегодня, -1 = безлимит', example: 42),
+            new OA\Property(property: 'ai_conversions', type: 'integer', description: 'Остаток на сегодня, -1 = безлимит', example: 5),
+            new OA\Property(property: 'conversions_limit', type: 'integer', description: 'Дневной лимит плана, -1 = безлимит', example: 50),
+            new OA\Property(property: 'ai_conversions_limit', type: 'integer', description: 'Дневной AI-лимит плана, -1 = безлимит', example: 5),
             new OA\Property(property: 'plan', type: 'string', example: 'free'),
+            new OA\Property(property: 'max_upload_bytes', type: 'integer', description: 'Макс. размер файла для загрузки (байт)', example: 52428800),
         ]),
     )]
     #[OA\Response(response: 401, description: 'Требуется аутентификация')]
@@ -530,13 +588,15 @@ class ConversionController extends AbstractController
             }
         }
 
-        $quota = $this->quotaService->getRemainingQuota($user);
+        $quota                     = $this->quotaService->getRemainingQuota($user);
+        $quota['max_upload_bytes'] = $this->quotaService->maxUploadBytes($user);
 
-        // Для гостя переопределяем: ai недоступен (0), план — "guest". Не полагаемся
-        // на User.plan гостя (free-fallback дал бы ai_conversions:1).
+        // Для гостя переопределяем: ai недоступен (0/0), план — "guest". Не полагаемся
+        // на User.plan гостя (free-fallback дал бы ai_conversions:1/лимит:1).
         if (! $this->isGranted('ROLE_USER')) {
-            $quota['ai_conversions'] = 0;
-            $quota['plan']           = 'guest';
+            $quota['ai_conversions']       = 0;
+            $quota['ai_conversions_limit'] = 0;
+            $quota['plan']                 = 'guest';
         }
 
         return $this->json($quota);

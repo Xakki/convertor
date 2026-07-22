@@ -1,0 +1,15 @@
+{# Переключатель языка (i18n-фундамент, home-07). Обычная GET-навигация на
+   App\Controller\Web\LocaleController — ставит cookie `locale` и редиректит
+   обратно. Подключается из общего partials/_header.html.twig
+   (home-01-header-nav). #}
+<div class="flex items-center gap-1 text-xs text-slate-400" data-testid="locale-switcher">
+    <a
+        href="{{ path('app_locale_switch', {locale: 'en'}) }}"
+        class="rounded px-1.5 py-0.5 {{ app.request.locale == 'en' ? 'font-semibold text-slate-700' : 'hover:text-slate-600' }}"
+    >{{ 'common.locale_switch_en'|trans }}</a>
+    <span>/</span>
+    <a
+        href="{{ path('app_locale_switch', {locale: 'ru'}) }}"
+        class="rounded px-1.5 py-0.5 {{ app.request.locale == 'ru' ? 'font-semibold text-slate-700' : 'hover:text-slate-600' }}"
+    >{{ 'common.locale_switch_ru'|trans }}</a>
+</div>

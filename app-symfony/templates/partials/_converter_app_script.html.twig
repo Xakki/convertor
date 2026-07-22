@@ -1,0 +1,1106 @@
+<script>
+    // Строки для инлайн-JS Alpine-компонента, рендерятся Twig по текущей
+    // locale (App\EventListener\LocaleCookieListener + Accept-Language, см.
+    // config/packages/framework.yaml). Ключи — namespace home.*/common.*
+    // (translations/messages.*.yaml); |e('js') экранирует для безопасной
+    // вставки внутрь JS-строкового литерала.
+    //
+    // home-09-seo-conversion-pages: этот <script> вынесен из
+    // conversion/index.html.twig в отдельный include, переиспользуемый и
+    // conversion/pair.html.twig — ОДНА функция converterApp(options) на обе
+    // страницы (не форк). options = {lockedFrom, lockedTo, lockedCategory} —
+    // на `/` вызывается без аргументов (см. converterApp() ниже,
+    // options = {} по умолчанию), поведение/состояние ИДЕНТИЧНО прежнему.
+    const I18N = {
+        showcase: {
+            heading: '{{ 'home.showcase_heading'|trans|e('js') }}',
+            subheading: '{{ 'home.showcase_subheading'|trans|e('js') }}',
+            aiBadge: '{{ 'home.showcase_ai_badge'|trans|e('js') }}',
+            more: '{{ 'home.showcase_more'|trans|e('js') }}',
+            category: {
+                document: '{{ 'home.category.document'|trans|e('js') }}',
+                image: '{{ 'home.category.image'|trans|e('js') }}',
+                audio: '{{ 'home.category.audio'|trans|e('js') }}',
+                video: '{{ 'home.category.video'|trans|e('js') }}',
+                data: '{{ 'home.category.data'|trans|e('js') }}',
+                archive: '{{ 'home.category.archive'|trans|e('js') }}',
+                markup: '{{ 'home.category.markup'|trans|e('js') }}',
+            },
+        },
+        status: {
+            pending: '{{ 'home.status.pending'|trans|e('js') }}',
+            processing: '{{ 'home.status.processing'|trans|e('js') }}',
+            completed: '{{ 'home.status.completed'|trans|e('js') }}',
+            failed: '{{ 'home.status.failed'|trans|e('js') }}',
+            expired: '{{ 'home.status.expired'|trans|e('js') }}',
+        },
+        units: {
+            bytes: '{{ 'home.units.bytes'|trans|e('js') }}',
+            kb: '{{ 'home.units.kb'|trans|e('js') }}',
+            mb: '{{ 'home.units.mb'|trans|e('js') }}',
+            ms: '{{ 'home.units.ms'|trans|e('js') }}',
+            sec: '{{ 'home.units.sec'|trans|e('js') }}',
+        },
+        durationPrefix: '{{ 'home.duration_prefix'|trans|e('js') }}',
+        errors: {
+            loginInvalidLink: '{{ 'home.error.login_invalid_link'|trans|e('js') }}',
+            formatsLoadFailed: '{{ 'home.error.formats_load_failed'|trans|e('js') }}',
+            sessionExpired: '{{ 'home.error.session_expired'|trans|e('js') }}',
+            uploadNetwork: '{{ 'home.error.upload_network'|trans|e('js') }}',
+            textRequired: '{{ 'home.error.text_required'|trans|e('js') }}',
+            textTooLarge: '{{ 'home.error.text_too_large'|trans|e('js') }}',
+            status401: '{{ 'home.error.status_401'|trans|e('js') }}',
+            status413: '{{ 'home.error.status_413'|trans|e('js') }}',
+            status415: '{{ 'home.error.status_415'|trans|e('js') }}',
+            status422: '{{ 'home.error.status_422'|trans|e('js') }}',
+            status429: '{{ 'home.error.status_429'|trans|e('js') }}',
+            genericStatus: '{{ 'home.error.generic_status'|trans|e('js') }}',
+            pollTimeout: '{{ 'home.error.poll_timeout'|trans|e('js') }}',
+            downloadFailed: '{{ 'home.error.download_failed'|trans|e('js') }}',
+            downloadNetwork: '{{ 'home.error.download_network'|trans|e('js') }}',
+            sourceDownloadFailed: '{{ 'home.error.source_download_failed'|trans|e('js') }}',
+            sourceDownloadNetwork: '{{ 'home.error.source_download_network'|trans|e('js') }}',
+            previewFailed: '{{ 'home.error.preview_failed'|trans|e('js') }}',
+            previewNetwork: '{{ 'home.error.preview_network'|trans|e('js') }}',
+        },
+        // home-05: инлайн-вьюеры результата (audio/video/image/pdf) — динамическая
+        // подпись тумблера плеера (единственная строка, реально меняющаяся в рантайме;
+        // остальные подписи вьюера — статичный Twig-текст прямо в разметке).
+        viewer: {
+            showPlayer: '{{ 'home.viewer.show_player'|trans|e('js') }}',
+            hidePlayer: '{{ 'home.viewer.hide_player'|trans|e('js') }}',
+        },
+        // home-13: виджет квот у формы — подписи плана из GET /api/v1/quota
+        // (значения plan ограничены сидом plans-таблицы + форс-override 'guest'
+        // для анонима, см. ConversionController::quota()).
+        quota: {
+            planNames: {
+                free: '{{ 'home.quota.plan_free'|trans|e('js') }}',
+                basic: '{{ 'home.quota.plan_basic'|trans|e('js') }}',
+                pro: '{{ 'home.quota.plan_pro'|trans|e('js') }}',
+                guest: '{{ 'home.quota.plan_guest'|trans|e('js') }}',
+            },
+        },
+    };
+    // home-13: символ безлимита в виджете квот — литерал, не переводимый текст
+    // (AC карточки требует именно «∞», не строку "unlimited").
+    const QUOTA_UNLIMITED_SYMBOL = '∞';
+    // Статусы задачи: активные (идёт обработка) и терминальные (менять не будут).
+    const ACTIVE_STATUSES = ['pending', 'processing'];
+    const TERMINAL_STATUSES = ['completed', 'failed', 'expired'];
+    const FAILED_STATUSES = ['failed', 'expired'];
+    // Алиасы расширений → канонические форматы реестра (реестр знает только их).
+    const EXT_ALIASES = {
+        jpeg: 'jpg', jpe: 'jpg',
+        tif: 'tiff',
+        htm: 'html',
+        yml: 'yaml',
+    };
+    // home-02: клиентский soft-limit для paste-текста (только UX-подсказка —
+    // сервер всё равно проверяет реальный лимит плана, см. status_413).
+    const TEXT_SOFT_LIMIT_MB    = 2;
+    const TEXT_SOFT_LIMIT_BYTES = TEXT_SOFT_LIMIT_MB * 1024 * 1024;
+    // Текстовый allowlist source-форматов — 1:1 с бэкендом
+    // (ConversionRegistry::TEXTUAL_SOURCE_FORMATS, app-symfony/src/Service/
+    // Conversion/ConversionRegistry.php). НЕ category-based: DB-матрица
+    // (/api/v1/formats) сегодня регистрирует md/html/rst под category=
+    // 'document' (нет отдельной 'markup' категории у реально зарегистрированных
+    // воркеров) — фильтр по category молча вырезал бы md/html из UI (проверено
+    // на живом стенде). Меняешь список тут — синхронно меняй и на бэкенде.
+    const TEXTUAL_SOURCE_FORMATS = [
+        'txt', 'md', 'rst', 'latex', 'wiki', 'html', 'csv', 'json', 'xml', 'yaml', 'toml',
+    ];
+    // home-05: клиентское зеркало ConversionController::PREVIEWABLE_FORMATS —
+    // целевые форматы, чей результат сервер считает текстовым превью (см. isPreviewable()
+    // в app-symfony/src/Controller/Api/ConversionController.php). Используется ТОЛЬКО как
+    // эвристика для только что завершённой задачи (job), у которой ещё нет серверного
+    // флага `previewable` (тот появляется в истории после loadHistory()) — история и
+    // примеры всегда используют настоящий серверный флаг, не эту эвристику. Меняешь
+    // список тут — синхронно меняй и на бэкенде.
+    const PREVIEWABLE_TARGET_FORMATS = ['md', 'txt', 'json', 'csv', 'html'];
+    // home-03: сколько представительных from→to пар показывать в карточке
+    // категории витрины (остаток — счётчиком "и ещё N").
+    const SHOWCASE_PAIRS_PER_CATEGORY = 4;
+    // home-03: порядок карточек-категорий в витрине — "продающий" (документы/
+    // изображения первыми — самые понятные новому пользователю), НЕ алфавит.
+    // Список категорий не хардкодит форматы: он лишь задаёт приоритет уже
+    // пришедших из /api/v1/formats значений FileCategory; неизвестная/новая
+    // категория просто уедет в конец через fallback-индекс.
+    const SHOWCASE_CATEGORY_ORDER = ['document', 'image', 'data', 'audio', 'video', 'markup', 'archive'];
+
+    // home-09: options = {lockedFrom, lockedTo, lockedCategory} — только на
+    // conversion/pair.html.twig (source/target зафиксированы из URL пары и не
+    // редактируются пользователем). На `/` (conversion/index.html.twig)
+    // вызывается БЕЗ аргументов — options = {}, lockedFrom/lockedTo/lockedCategory
+    // остаются null, и ВСЯ ветвящаяся по ним логика ниже становится no-op —
+    // поведение `/` не меняется.
+    function converterApp(options = {}) {
+        return {
+            lockedFrom: options.lockedFrom || null,
+            lockedTo: options.lockedTo || null,
+            lockedCategory: options.lockedCategory || null,
+            auth: { token: null, username: null },
+            authError: '',
+            formats: [],        // [{from, to, category, isAi, ocrCapable}]
+            examples: [],       // home-04: живые примеры из GET /api/v1/examples
+            inputMode: 'file',  // 'file' | 'text' — home-02 переключатель входа
+            file: null,
+            text: '',
+            // home-09: на странице пары source/target зафиксированы сразу — иначе
+            // (`/`) пусто, как и раньше (пользователь выбирает через showcase/select).
+            fromFormat: options.lockedFrom || '',
+            toFormat: options.lockedTo || '',
+            ocr: false,
+            submitting: false,
+            downloading: false,
+            error: '',
+            dragging: false,
+            job: { id: null, status: null, error: null },
+            // home-13: виджет квот у формы (гость + залогиненный) — из GET
+            // /api/v1/quota. loaded=false до первого ответа — виджет скрыт
+            // (x-if="quota.loaded"), чтобы не мигать нулями до фактических данных.
+            quota: {
+                conversions: 0, aiConversions: 0,
+                conversionsLimit: 0, aiConversionsLimit: 0,
+                plan: null, maxUploadBytes: 0, loaded: false,
+            },
+            conversions: [],    // история конвертаций залогиненного пользователя
+            downloadingId: null, // id строки истории, которая сейчас качается
+            sourceLoadingId: null, // id строки, чей исходник сейчас качается
+            sourceGone: {},     // id → true, когда исходник удалён (410 Gone)
+            preview: { open: false, id: null, text: '', truncated: false, loading: false, toFormat: null },
+            // home-05: попап-вьюер image/pdf. objectUrl — либо Blob-URL (собственный
+            // результат, авторизованный fetch), либо публичный example-URL напрямую
+            // (см. openViewer()) — в обоих случаях используется ТОЛЬКО как `src`
+            // ресурса (<img>/<embed>), никогда не как HTML-контент.
+            viewer: { open: false, type: null, objectUrl: null, loading: false, error: '' },
+            // home-05: инлайн audio/video плееры, лениво включаемые по клику.
+            // Ключ строки → { type, objectUrl, loading, error }. objectUrl — тем же
+            // принципом, что и viewer.objectUrl выше (Blob-URL либо публичный URL).
+            players: {},
+            _pollTimer: null,
+            _pollTries: 0,
+            _pollGen: 0,        // токен поколения поллинга: отсекает устаревшие циклы
+            // home-05-viewer-proxy-fix: identity-токены для openViewer()/togglePlayer().
+            // ПОЧЕМУ не object-identity (`this.viewer === placeholder`): Alpine оборачивает
+            // значения, присвоенные в x-data, в реактивный Proxy — сравнение объектной
+            // ссылки после присваивания ВСЕГДА false (сравниваешь proxy с сырым объектом),
+            // поэтому apply() никогда не срабатывал и viewer/players[key] замирали в
+            // loading:true навечно. Примитив (number) переживает Proxy — сравнение
+            // корректно и через прокси, и напрямую. См. _pollGen выше — тот же паттерн.
+            _viewerToken: 0,    // счётчик попыток openViewer() — новый вызов отменяет старый
+            _playerTokens: {},  // key → счётчик попыток togglePlayer(key, ...)
+
+            init() {
+                // Magic-ссылка из бота вернула сюда после провала → понятное сообщение.
+                if (new URLSearchParams(location.search).get('login_error') === '1') {
+                    this.authError = I18N.errors.loginInvalidLink;
+                    history.replaceState(null, '', location.pathname);
+                }
+
+                // home-12: реактивный мост от cookie-баннера (partials/
+                // _cookie_consent.html.twig → setConsent()) — если гость кликает
+                // «Принять»/«Отклонить» ПОСЛЕ первой загрузки страницы (без F5),
+                // гостевая история подгружается/скрывается сразу же, без
+                // перезагрузки. Для залогиненного (auth.token уже есть) событие
+                // игнорируем — его история не гейтится этой cookie.
+                window.addEventListener('cookie-consent-changed', (e) => {
+                    if (this.auth.token) return;
+                    if (e.detail.value === 'accepted') {
+                        this.loadHistory();
+                    } else {
+                        this.conversions = [];
+                    }
+                });
+
+                // Определяем залогиненное состояние по refresh-cookie: после 302 с
+                // /callback localStorage пуст, но refresh-cookie выставлена. Гость
+                // всегда получит 401 здесь — это норма, уходим в анонимный UI.
+                // Профиль (имя/аватар) показывает шапка (partials/_header.html.twig
+                // → headerNav(), свой независимый вызов /api/v1/me).
+                this.tryRefresh().then((ok) => {
+                    if (ok) {
+                        // Токен восстановлен → история грузится с Bearer (иначе 401).
+                        this.loadHistory();
+                    } else if (this.readConsent() === 'accepted') {
+                        // home-12: гость БЕЗ JWT — история грузится по guest-cookie
+                        // (authFetch() шлёт credentials:'include' сама), но ТОЛЬКО
+                        // если гость явно согласился в cookie-баннере. Без согласия
+                        // (declined/ещё не выбрано) — не запрашиваем и не показываем.
+                        this.loadHistory();
+                    }
+                    // home-13: квота — ПОСЛЕ tryRefresh(), иначе auth.token ещё
+                    // пуст и authFetch() ушёл бы гостевым запросом даже для
+                    // залогиненного (guest-cookie аутентифицирует, но план/лимиты
+                    // были бы гостевые, не реальные пользователя).
+                    this.loadQuota();
+                });
+
+                // Загружаем матрицу форматов (публичный эндпоинт)
+                fetch('/api/v1/formats')
+                    .then((r) => r.json())
+                    .then((d) => { this.formats = d.formats || []; })
+                    .catch(() => { this.error = I18N.errors.formatsLoadFailed; });
+
+                // home-04: живые примеры (публичный эндпоинт). Тихий фейл —
+                // блок примеров вспомогательный, не критичен для конвертации.
+                // home-09: на странице пары (lockedFrom/lockedTo заданы) сужаем
+                // список до примера ИМЕННО этой пары; если такого нет — до
+                // примеров категории пары (lockedCategory), как требует AC ("не
+                // блок «нет примера» как основного состояния"). На `/` (оба
+                // null) список остаётся полным — без изменения поведения.
+                fetch('/api/v1/examples')
+                    .then((r) => r.json())
+                    .then((d) => {
+                        let list = d.examples || [];
+                        if (this.lockedFrom && this.lockedTo) {
+                            const exact = list.filter((e) => e.from === this.lockedFrom && e.to === this.lockedTo);
+                            list = exact.length > 0 ? exact : list.filter((e) => e.category === this.lockedCategory);
+                        }
+                        this.examples = list;
+                    })
+                    .catch(() => { /* примеры не критичны — просто не покажем */ });
+            },
+
+            // home-12: читает cookie `cookie_consent`, которую ставит
+            // partials/_cookie_consent.html.twig (клиентски, document.cookie —
+            // не подписана, серверу не нужна). 'accepted'|'declined'|null
+            // (кука ещё не выставлена — баннер ещё не решён).
+            readConsent() {
+                const m = document.cookie.match(/(?:^|; )cookie_consent=([^;]*)/);
+                return m ? decodeURIComponent(m[1]) : null;
+            },
+
+            isActive(s) { return ACTIVE_STATUSES.includes(s); },
+            isTerminal(s) { return TERMINAL_STATUSES.includes(s); },
+            isFailed(s) { return FAILED_STATUSES.includes(s); },
+
+            get targets() {
+                if (!this.fromFormat) return [];
+                return this.formats
+                    .filter((f) => f.from === this.fromFormat)
+                    .map((f) => f.to)
+                    .filter((v, i, a) => a.indexOf(v) === i)
+                    .sort();
+            },
+
+            // Text-режим: ограниченное текстовое подмножество source-форматов —
+            // зеркалит серверный гейт ConversionRegistry::isTextSourceSupported()
+            // через TEXTUAL_SOURCE_FORMATS (allowlist, НЕ category — см. коммент
+            // у константы), пересечённый с ТЕМИ from, что реально пришли из
+            // /api/v1/formats (а не просто весь allowlist — источник должен
+            // существовать в текущей матрице воркеров).
+            get textSourceFormats() {
+                return this.formats
+                    .filter((f) => TEXTUAL_SOURCE_FORMATS.includes(f.from))
+                    .map((f) => f.from)
+                    .filter((v, i, a) => a.indexOf(v) === i)
+                    .sort();
+            },
+
+            // Байтовый размер (не JS-длина строки) — та же единица, что и лимит
+            // плана на сервере считает от Content-Length поля text.
+            get textByteSize() { return new TextEncoder().encode(this.text).length; },
+            get textTooLarge() { return this.textByteSize > TEXT_SOFT_LIMIT_BYTES; },
+
+            get showOcr() {
+                if (!this.fromFormat || !this.toFormat) return false;
+                const pair = this.formats.find(
+                    (f) => f.from === this.fromFormat && f.to === this.toFormat,
+                );
+                return pair?.ocrCapable === true;
+            },
+
+            // Требует логина: ai-флаг ИЛИ категория video. Совпадает с гейтом
+            // сервера (isAi === true || category === 'video'); служит подсказкой
+            // ДО отправки. Финальное решение — 403 auth_required от /convert.
+            get loginRequired() {
+                if (!this.fromFormat || !this.toFormat) return false;
+                const pair = this.formats.find(
+                    (f) => f.from === this.fromFormat && f.to === this.toFormat,
+                );
+                if (!pair) return false;
+                return pair.isAi === true || pair.category === 'video';
+            },
+
+            // home-03: витрина категорий/пар форматов ДО формы — целиком из
+            // this.formats (тот же /api/v1/formats fetch, второго не заводим).
+            // По каждой категории — до SHOWCASE_PAIRS_PER_CATEGORY уникальных
+            // from→to пар (первые встреченные в ответе API, без хардкода
+            // конкретных форматов) + счётчик остатка для "и ещё N".
+            //
+            // home-11: AI-пары (STT/TTS/embedding) физически идут ПОСЛЕ обычных
+            // пар той же категории в ответе API (напр. audio: mp3→aac..wav ×6
+            // прежде mp3→txt/srt/vtt) — при простом .slice(0, N) они никогда не
+            // попадали бы в витрину, и бейдж `pair.isAi` (уже реализован в
+            // index.html.twig) оставался бы мёртвым кодом. Гарантируем: если у
+            // категории есть хотя бы одна AI-пара — она обязательно среди
+            // показанных (подменяем последний слот, если не попала сама).
+            get showcaseCategories() {
+                const groups = {};
+                for (const f of this.formats) {
+                    if (!groups[f.category]) groups[f.category] = [];
+                    if (!groups[f.category].some((p) => p.from === f.from && p.to === f.to)) {
+                        groups[f.category].push(f);
+                    }
+                }
+                return Object.keys(groups)
+                    .sort((a, b) => {
+                        const ia = SHOWCASE_CATEGORY_ORDER.indexOf(a);
+                        const ib = SHOWCASE_CATEGORY_ORDER.indexOf(b);
+                        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+                    })
+                    .map((category) => {
+                        const all = groups[category];
+                        let pairs = all.slice(0, SHOWCASE_PAIRS_PER_CATEGORY);
+                        const firstAi = all.find((p) => p.isAi === true);
+                        if (firstAi && !pairs.includes(firstAi)) {
+                            pairs = pairs.slice(0, -1).concat(firstAi);
+                        }
+                        return {
+                            category,
+                            label: I18N.showcase.category[category] || category,
+                            pairs,
+                            more: Math.max(0, all.length - pairs.length),
+                        };
+                    });
+            },
+
+            // home-11: таблица «поддерживаемые форматы» инфо-блока — раньше
+            // была захардкожена в index.html.twig (не отражала реальную БД-
+            // матрицу, без AI-строк). Теперь строится целиком из this.formats:
+            // одна строка на (category, isAi) — не по 309 сырым парам (нечитаемо),
+            // а суммарные множества source/target форматов. AI-пары в реальной
+            // матрице всегда folded в свою исходную категорию (audio/document —
+            // см. ConversionRegistry::buildMatrixFromCapabilities(), нет
+            // отдельной category 'ai'), поэтому AI-строка появляется как
+            // дополнение к обычной строке той же категории, помеченное бейджем.
+            get formatMatrix() {
+                const groups = {};
+                for (const f of this.formats) {
+                    if (!groups[f.category]) groups[f.category] = { plain: [], ai: [] };
+                    (f.isAi ? groups[f.category].ai : groups[f.category].plain).push(f);
+                }
+                const uniqSorted = (pairs, key) => [...new Set(pairs.map((p) => p[key]))].sort();
+                const rows = [];
+                for (const category of Object.keys(groups).sort((a, b) => {
+                    const ia = SHOWCASE_CATEGORY_ORDER.indexOf(a);
+                    const ib = SHOWCASE_CATEGORY_ORDER.indexOf(b);
+                    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+                })) {
+                    const label = I18N.showcase.category[category] || category;
+                    const { plain, ai } = groups[category];
+                    if (plain.length > 0) {
+                        rows.push({
+                            key: category + '-plain',
+                            label,
+                            isAi: false,
+                            sources: uniqSorted(plain, 'from'),
+                            targets: uniqSorted(plain, 'to'),
+                        });
+                    }
+                    if (ai.length > 0) {
+                        rows.push({
+                            key: category + '-ai',
+                            label,
+                            isAi: true,
+                            sources: uniqSorted(ai, 'from'),
+                            targets: uniqSorted(ai, 'to'),
+                        });
+                    }
+                }
+                return rows;
+            },
+
+            // Клик по паре в витрине: best-effort предзаполнение формы (см.
+            // Decisions карточки home-03 — не обязано быть идеальным).
+            // Text-режим умеет предвыбрать source (select), file-режим — нет
+            // (fromFormat там всегда derived из реально выбранного файла), так
+            // что для файловых source просто переключаемся в файл-режим и
+            // скроллим — без иллюзии предвыбранного "исходного" формата.
+            useShowcasePair(from, to) {
+                if (TEXTUAL_SOURCE_FORMATS.includes(from)) {
+                    this.setMode('text');
+                    this.fromFormat = from;
+                    this.toFormat = this.targets.includes(to) ? to : '';
+                } else {
+                    this.setMode('file');
+                }
+                this.$nextTick(() => {
+                    document.getElementById('convert-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+            },
+
+            get canSubmit() {
+                // Блокируем сабмит, пока текущая задача не дошла до терминала —
+                // иначе in-flight polling задачи A перезапишет job задачей B.
+                // Токен НЕ обязателен: аноним конвертит по guest-cookie; ai/video
+                // режется сервером (403), а не UI.
+                const jobBusy = this.job.id !== null && !this.isTerminal(this.job.status);
+                if (this.submitting || jobBusy || !this.toFormat) return false;
+
+                if (this.inputMode === 'text') {
+                    return !!this.fromFormat && this.text.trim() !== '' && !this.textTooLarge;
+                }
+
+                return !!this.file;
+            },
+
+            // Переключение режима ввода сбрасывает состояние обоих режимов —
+            // иначе staleFromFormat/toFormat одного режима протекает в другой
+            // (напр. fromFormat='docx' от файла — невалидный выбор в text-select).
+            // home-09: на странице пары source/target зафиксированы — сброс
+            // возвращает их к locked-значениям, а не к пустой строке.
+            setMode(mode) {
+                if (this.inputMode === mode) return;
+                this.inputMode = mode;
+                this.file = null;
+                this.text = '';
+                this.fromFormat = this.lockedFrom || '';
+                this.toFormat = this.lockedTo || '';
+                this.ocr = false;
+                this.error = '';
+            },
+
+            onFilePick(e) { this.setFile(e.target.files[0]); },
+            onDrop(e) {
+                this.dragging = false;
+                this.setFile(e.dataTransfer.files[0]);
+            },
+            setFile(f) {
+                if (!f) return;
+                this.file = f;
+                // home-09: на странице пары source остаётся зафиксированным на
+                // паре из URL независимо от реального расширения файла (форма
+                // явно про эту пару — см. AC карточки); на `/` (lockedFrom=null)
+                // поведение не меняется — как и раньше, derived из имени файла.
+                this.fromFormat = this.lockedFrom || this.deriveFormat(f.name);
+                this.toFormat = this.lockedTo || '';
+                this.ocr = false;
+                this.error = '';
+            },
+
+            // Расширение → канонический формат. Без точки — формат неизвестен (''),
+            // чтобы UI не показывал мусор вместо исходного формата.
+            deriveFormat(name) {
+                if (!name || name.indexOf('.') === -1) return '';
+                const ext = name.split('.').pop().toLowerCase();
+                return EXT_ALIASES[ext] || ext;
+            },
+
+            humanSize(bytes) {
+                if (bytes < 1024) return bytes + ' ' + I18N.units.bytes;
+                if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' ' + I18N.units.kb;
+                return (bytes / 1048576).toFixed(1) + ' ' + I18N.units.mb;
+            },
+
+            statusLabel(s) { return I18N.status[s] || s; },
+
+            // home-05: категория целевого формата из уже загруженной матрицы
+            // /api/v1/formats (не второй запрос) — нужна для audio/video/image
+            // вьюеров у job/истории (у примеров категория уже приходит в самом
+            // JSON примера, см. exampleViewerType()).
+            categoryForFormat(toFormat) {
+                const hit = this.formats.find((f) => f.to === toFormat);
+                return hit ? hit.category : null;
+            },
+
+            // home-05 (D4, LIGHT MVP): выбор типа вьюера по целевому формату/категории.
+            // Порядок ветвей — по спецификации карточки: текст (наивысший приоритет —
+            // текстовые форматы вроде md/html технически лежат в category='document',
+            // но должны попасть в x-text-попап, а не «download only»), затем pdf
+            // (тоже category='document', НО у него есть браузерный inline-рендерер),
+            // затем audio/video/image по категории. Всё остальное — null (только
+            // кнопка «Скачать», без инлайн-рендера — docx/xlsx/pptx/odt/…).
+            // `previewable` — серверный флаг (история/примеры); для job (ещё нет в
+            // истории) передаём null → используется клиентская эвристика
+            // PREVIEWABLE_TARGET_FORMATS.
+            resolveViewerType(toFormat, category, previewable) {
+                const fmt = (toFormat || '').toLowerCase();
+                const isTextPreviewable = previewable != null
+                    ? previewable
+                    : PREVIEWABLE_TARGET_FORMATS.includes(fmt);
+                if (isTextPreviewable) return 'text';
+                if (fmt === 'pdf') return 'pdf';
+                if (category === 'audio') return 'audio';
+                if (category === 'video') return 'video';
+                if (category === 'image') return 'image';
+                return null;
+            },
+
+            // Тип вьюера для строки истории — использует настоящий серверный флаг
+            // c.previewable (ConversionController::serializeHistoryItem), не эвристику.
+            viewerTypeForHistory(c) {
+                return this.resolveViewerType(c.to_format, this.categoryForFormat(c.to_format), c.previewable);
+            },
+
+            // Тип вьюера для карточки примера (home-04) — category/previewable уже
+            // приходят прямо в JSON примера, доп. lookup не нужен.
+            exampleViewerType(ex) {
+                return this.resolveViewerType(ex.to, ex.category, ex.previewable);
+            },
+
+            // home-10: тип вьюера для ИСХОДНОГО файла примера. Сервер не присылает
+            // отдельный `previewable` для source (только для результата) — передаём
+            // null → клиентская эвристика PREVIEWABLE_TARGET_FORMATS, которая уже
+            // корректно покрывает все source-форматы каталога (txt/csv/md → 'text',
+            // png/wav/mp4 → по category, как и раньше).
+            exampleSourceViewerType(ex) {
+                return this.resolveViewerType(ex.from, ex.category, null);
+            },
+
+            // home-10: ключ иконки файла по (format, category) — используется ТОЛЬКО
+            // как значение для x-if-сравнения с фиксированной строкой в
+            // _converter_example_icons.html.twig (см. macro icon()); сам format/
+            // category НИКОГДА не вставляется в разметку — иконки статичный SVG.
+            exampleIconKey(format, category) {
+                const fmt = (format || '').toLowerCase();
+                if (fmt === 'pdf') return 'pdf';
+                if (fmt === 'json') return 'json';
+                if (fmt === 'csv') return 'csv';
+                if (['md', 'txt', 'html'].includes(fmt)) return 'text';
+                if (category === 'image') return 'image';
+                if (category === 'audio') return 'audio';
+                if (category === 'video') return 'video';
+                if (category === 'document') return 'document';
+                if (category === 'data') return 'data';
+                return 'generic';
+            },
+            sourceIconKey(ex) { return this.exampleIconKey(ex.from, ex.category); },
+            resultIconKey(ex) { return this.exampleIconKey(ex.to, ex.category); },
+
+            // home-10: уникальный ключ инлайн-плеера примера с учётом стороны
+            // (source/result) — у одного примера могут одновременно быть открыты
+            // ОБА плеера (напр. audio wav-исходник + mp3-результат), им нужны разные
+            // записи в players{}.
+            examplePlayerKey(ex, side) {
+                return 'ex-' + side + '-' + ex.category + '-' + ex.filename;
+            },
+
+            // home-10: единая точка клика по иконке примера (source/result).
+            // Previewable-формат → превью через уже существующие openViewer/
+            // togglePlayer/openPreviewFromUrl (isPublic=true — оба URL публичные
+            // inline-эндпоинты ExampleController: serve() для результата, source()
+            // для исходника); иначе — скачивание публичного URL без fetch/blob.
+            clickExampleIcon(ex, side) {
+                const isSource = side === 'source';
+                const url = isSource ? ex.source_url : ex.url;
+                const type = isSource ? this.exampleSourceViewerType(ex) : this.exampleViewerType(ex);
+
+                if (type === 'text') { this.openPreviewFromUrl(url); return; }
+                if (type === 'image' || type === 'pdf') { this.openViewer(type, url, true); return; }
+                if (type === 'audio' || type === 'video') {
+                    this.togglePlayer(this.examplePlayerKey(ex, side), type, url, true);
+                    return;
+                }
+
+                const name = isSource ? (ex.category + '-source.' + ex.from) : ex.filename;
+                this.downloadPublicUrl(url, name);
+            },
+
+            // home-10: скачивание ПУБЛИЧНОГО example-URL (source/result) — эндпоинт
+            // не требует Bearer/cookie, поэтому плейн <a download> справляется сам
+            // (в отличие от saveResult()/downloadSource() ниже, которым нужен
+            // authFetch → blob для авторизованных эндпоинтов).
+            downloadPublicUrl(url, name) {
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                a.rel = 'noopener';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+            },
+
+            // Тип вьюера для только что завершённой задачи (job) — единственное
+            // место без серверного `previewable`, отсюда previewable=null (эвристика).
+            get jobViewerType() {
+                if (this.job.status !== 'completed') return null;
+                return this.resolveViewerType(this.toFormat, this.categoryForFormat(this.toFormat), null);
+            },
+
+            // home-05: попап-вьюер для image/pdf. isPublic=true (пример) — src это
+            // публичный inline-URL примера напрямую, без fetch (нет Bearer/cookie —
+            // эндпоинт /api/v1/examples/file/... публичный). isPublic=false (свой
+            // результат) — авторизованный fetch → Blob → object URL, т.к. <embed>/
+            // <img> не могут отправить заголовок Authorization сами.
+            // XSS-safety: objectUrl используется ТОЛЬКО как `:src` у <img>/<embed> в
+            // модалке ниже — браузер декодирует байты как картинку/PDF через нативный
+            // рендерер, а не вставляет их как разметку страницы. Ни innerHTML, ни
+            // x-html здесь не участвуют.
+            async openViewer(type, url, isPublic) {
+                // token — identity-токен текущей попытки (примитив, не объектная ссылка —
+                // см. _viewerToken выше): закрыть/крестик/бэкдроп кликабельны и во время
+                // loading, так что пользователь может закрыть модалку или открыть другую
+                // ДО ответа fetch. Без проверки токена fetch, отвечающий уже ПОСЛЕ
+                // закрытия/переоткрытия, тихо перезаписал бы viewer.objectUrl висящим
+                // (никогда не отозванным) Blob-URL — та же гонка, что и в togglePlayer() ниже.
+                const token = ++this._viewerToken;
+                this.viewer = { open: true, type, objectUrl: null, loading: true, error: '' };
+                const apply = (patch) => {
+                    if (this._viewerToken !== token) {
+                        if (patch.objectUrl) URL.revokeObjectURL(patch.objectUrl);
+                        return;
+                    }
+                    this.viewer = { open: true, type, objectUrl: null, loading: false, error: '', ...patch };
+                };
+                try {
+                    if (isPublic) {
+                        apply({ objectUrl: url });
+                        return;
+                    }
+                    const res = await this.authFetch(url);
+                    if (res.status === 401) {
+                        if (this._viewerToken === token) this.viewer.open = false;
+                        return;
+                    }
+                    if (!res.ok) { apply({ error: I18N.errors.previewFailed }); return; }
+                    const blob = await res.blob();
+                    apply({ objectUrl: URL.createObjectURL(blob) });
+                } catch (e) {
+                    apply({ error: I18N.errors.previewNetwork });
+                }
+            },
+            closeViewer() {
+                // Инкремент токена перекрывает любой ещё летящий fetch openViewer() —
+                // его apply() увидит несовпадение и отзовёт свой objectUrl вместо того,
+                // чтобы «оживить» уже закрытую модалку.
+                this._viewerToken++;
+                // revokeObjectURL — no-op для НЕ-blob URL (публичный example-URL),
+                // так что безусловный вызов безопасен в обоих случаях (own result / example).
+                if (this.viewer.objectUrl) URL.revokeObjectURL(this.viewer.objectUrl);
+                this.viewer = { open: false, type: null, objectUrl: null, loading: false, error: '' };
+            },
+
+            // home-05: текстовый попап (существующая x-text модалка preview.*, БЕЗ
+            // изменений в способе рендера) для ПУБЛИЧНОГО example-URL — у примера нет
+            // conversion-id, поэтому /convert/{id}/preview не подходит, читаем сам
+            // example-URL напрямую (публичный, без Bearer). Тот же лимит ≤64KB, что и
+            // серверный /preview — усечение на клиенте, т.к. этот путь не проходит
+            // через Range-ограниченный readCapped() на бэке.
+            async openPreviewFromUrl(url) {
+                this.preview = { open: true, id: null, text: '', truncated: false, loading: true, toFormat: null };
+                const PREVIEW_MAX_CHARS = 65536;
+                try {
+                    const res = await fetch(url);
+                    if (!res.ok) { this.preview.text = I18N.errors.previewFailed; return; }
+                    const full = await res.text();
+                    this.preview.truncated = full.length > PREVIEW_MAX_CHARS;
+                    // x-text — единственный способ вставки в DOM (см. модалку ниже),
+                    // как и у существующего id-based пути openPreview().
+                    this.preview.text = full.slice(0, PREVIEW_MAX_CHARS);
+                } catch (e) {
+                    this.preview.text = I18N.errors.previewNetwork;
+                } finally {
+                    this.preview.loading = false;
+                }
+            },
+
+            // home-05: лениво включаемый инлайн audio/video плеер (AC требует именно
+            // ИНЛАЙН-элемент "на странице", не попап — в отличие от image/pdf выше).
+            // Повторный клик по той же строке — скрыть и отозвать object URL (не
+            // течём память). key — уникальный ключ строки ('job', 'h'+id, 'ex'+idx).
+            // XSS-safety: objectUrl/url идёт ТОЛЬКО в `:src` у <audio>/<video> —
+            // браузер декодирует как медиапоток, не как разметку/скрипт.
+            async togglePlayer(key, type, url, isPublic) {
+                if (this.players[key]) {
+                    if (this.players[key].objectUrl) URL.revokeObjectURL(this.players[key].objectUrl);
+                    delete this.players[key];
+                    // Инкремент токена этого key перекрывает любой ещё летящий fetch
+                    // togglePlayer(key, ...) — см. комментарий у apply() ниже.
+                    this._playerTokens[key] = (this._playerTokens[key] || 0) + 1;
+                    return;
+                }
+                // token — identity-токен текущей попытки для ЭТОГО key (примитив, не
+                // объектная ссылка — см. _playerTokens выше): если пользователь кликнет
+                // ещё раз, пока fetch в полёте (dismiss ДО ответа), ветка выше удалит
+                // players[key] И инкрементирует токен, так что apply() ниже не «оживит»
+                // удалённую запись и отзовёт свежесозданный object URL — без этого была бы
+                // гонка: скрытый плеер тихо появлялся бы снова, а его object URL никогда
+                // не отзывался (утечка).
+                const token = (this._playerTokens[key] = (this._playerTokens[key] || 0) + 1);
+                this.players[key] = { type, objectUrl: null, loading: true, error: '' };
+                const apply = (next) => {
+                    if (this._playerTokens[key] !== token) {
+                        if (next.objectUrl) URL.revokeObjectURL(next.objectUrl);
+                        return;
+                    }
+                    this.players[key] = next;
+                };
+                try {
+                    if (isPublic) {
+                        apply({ type, objectUrl: url, loading: false, error: '' });
+                        return;
+                    }
+                    const res = await this.authFetch(url);
+                    if (res.status === 401) {
+                        if (this._playerTokens[key] === token) delete this.players[key];
+                        return;
+                    }
+                    if (!res.ok) {
+                        apply({ type, objectUrl: null, loading: false, error: I18N.errors.previewFailed });
+                        return;
+                    }
+                    const blob = await res.blob();
+                    apply({ type, objectUrl: URL.createObjectURL(blob), loading: false, error: '' });
+                } catch (e) {
+                    apply({ type, objectUrl: null, loading: false, error: I18N.errors.previewNetwork });
+                }
+            },
+
+            // Единый транспорт: всегда credentials:'include' (guest-cookie несёт
+            // личность анонима), Bearer добавляем ТОЛЬКО при наличии токена (иначе
+            // не шлём 'Bearer null'). Одноразовый silent-refresh на 401 — лишь для
+            // залогиненного (был токен): guest-401 — не истечение сессии.
+            async authFetch(url, opts = {}) {
+                const withAuth = (o) => {
+                    const headers = { ...(o.headers || {}) };
+                    if (this.auth.token) headers['Authorization'] = 'Bearer ' + this.auth.token;
+                    return { ...o, headers, credentials: 'include' };
+                };
+                const hadToken = !!this.auth.token;
+                let res = await fetch(url, withAuth(opts));
+                if (res.status !== 401 || !hadToken) return res;
+
+                // Залогинен и словил 401 → ровно один тихий refresh + повтор.
+                const refreshed = await this.tryRefresh();
+                if (!refreshed) {
+                    this.sessionExpired();
+                    return res;
+                }
+                return fetch(url, withAuth(opts));
+            },
+
+            async tryRefresh() {
+                try {
+                    const res = await fetch('/api/v1/auth/refresh', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+                    if (!res.ok) return false;
+                    const d = await res.json();
+                    if (!d.token) return false;
+                    this.auth.token = d.token;
+                    localStorage.setItem('jwt', d.token);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            sessionExpired() {
+                this.clearAuth();
+                // Сбрасываем in-flight задачу: resetJob() бампает _pollGen (гасит
+                // текущий цикл поллинга) и обнуляет job.id, иначе jobBusy навсегда
+                // залипнет true и кнопка «Конвертировать» останется мёртвой даже
+                // после повторного входа. Экспирация ловится только на
+                // НЕтерминальном поле, так что готовый результат не теряем.
+                this.resetJob();
+                this.authError = I18N.errors.sessionExpired;
+            },
+
+            async submit() {
+                if (!this.canSubmit) return;
+                this.error = '';
+                this.submitting = true;
+                this.resetJob();
+
+                const fd = new FormData();
+                if (this.inputMode === 'text') {
+                    fd.append('text', this.text);
+                    fd.append('source_format', this.fromFormat);
+                } else {
+                    fd.append('file', this.file);
+                    if (this.showOcr && this.ocr) fd.append('ocr', '1');
+                }
+                fd.append('to_format', this.toFormat);
+
+                try {
+                    const res = await this.authFetch('/api/v1/convert', { method: 'POST', body: fd });
+                    if (res.status === 202) {
+                        const d = await res.json();
+                        this.job = { id: d.conversion_id, status: d.status || 'pending', error: null };
+                        this.startPolling();
+                    } else if (res.status === 403 && await this.isAuthRequired(res)) {
+                        // Гейт ai/video для гостя: 403 auth_required → ведём на /login
+                        // (обычная навигация, БЕЗ popup — D1 эпика home-00). Инлайн-
+                        // Telegram-флоу тут больше нет (см. home-01-header-nav).
+                        window.location.href = '/login';
+                    } else {
+                        this.error = await this.errorMessage(res);
+                    }
+                } catch (e) {
+                    this.error = I18N.errors.uploadNetwork;
+                } finally {
+                    this.submitting = false;
+                }
+            },
+
+            // 403 c телом {error:"auth_required"} — гейт ai/video, а не общий отказ.
+            async isAuthRequired(res) {
+                try {
+                    const d = await res.clone().json();
+                    return d.error === 'auth_required';
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            async errorMessage(res) {
+                const map = {
+                    401: I18N.errors.status401,
+                    413: I18N.errors.status413,
+                    415: I18N.errors.status415,
+                    422: I18N.errors.status422,
+                    429: I18N.errors.status429,
+                };
+                let detail = '';
+                try { const d = await res.json(); detail = d.error || ''; } catch (e) {}
+                return map[res.status] || (detail || I18N.errors.genericStatus.replace('%status%', res.status));
+            },
+
+            resetJob() {
+                if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
+                this._pollTries = 0;
+                this._pollGen++;    // инвалидирует любой in-flight цикл предыдущей задачи
+                // home-05: отзываем object URL инлайн-плеера предыдущей задачи — иначе
+                // при повторном сабмите он остаётся висеть в памяти вкладки (утечка).
+                if (this.players['job']?.objectUrl) URL.revokeObjectURL(this.players['job'].objectUrl);
+                delete this.players['job'];
+                this.job = { id: null, status: null, error: null };
+            },
+
+            startPolling() {
+                this._pollTries = 0;
+                this.poll(this._pollGen);
+            },
+
+            async poll(gen) {
+                // Устаревший цикл (началась новая задача) — молча выходим.
+                if (gen !== this._pollGen || !this.job.id) return;
+                this._pollTries++;
+                // Кап ~5 минут: 2с × 150 попыток
+                if (this._pollTries > 150) {
+                    this.job.status = 'failed';
+                    this.job.error = I18N.errors.pollTimeout;
+                    return;
+                }
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + this.job.id + '/status');
+                    if (gen !== this._pollGen) return;   // задача сменилась/сброшена во время запроса
+                    // 401 после refresh-and-retry: если сессия истекла — sessionExpired()
+                    // уже сбросил задачу и сменил gen (поймано выше). Если дошли сюда —
+                    // просто прекращаем поллинг без записи статуса/перепланирования.
+                    if (res.status === 401) return;
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (gen !== this._pollGen) return;
+                        this.job.status = d.status;
+                        this.job.error = d.error;
+                        if (this.isTerminal(d.status)) {
+                            // Завершённая задача появляется в истории без ручного F5 —
+                            // но только если история вообще показывается: залогинен,
+                            // либо гость с явным согласием (home-12). Без согласия
+                            // гостя не подгружаем и не накапливаем историю в фоне.
+                            if (this.auth.token || this.readConsent() === 'accepted') {
+                                this.loadHistory();
+                            }
+                            // home-13: счётчики квоты должны обновиться вживую сразу
+                            // после того, как конвертация реально списала квоту
+                            // (charge() на бэке происходит ДО ответа /convert, так что
+                            // к моменту terminal-статуса значение уже актуально).
+                            this.loadQuota();
+                            return;
+                        }
+                    }
+                } catch (e) { /* сеть моргнула — повторим */ }
+                this._pollTimer = setTimeout(() => this.poll(gen), 2000);
+            },
+
+            async download() {
+                if (!this.job.id) return;
+                this.downloading = true;
+                try {
+                    await this.saveResult(this.job.id, this.toFormat);
+                } finally {
+                    this.downloading = false;
+                }
+            },
+
+            // Скачивание строки истории: свой per-row флаг (downloadingId), чтобы
+            // спиннер горел только на нажатой кнопке. Fallback-имя — из to_format
+            // этой строки, а не из текущей формы.
+            async downloadConversion(id, toFormat) {
+                if (this.downloadingId) return;
+                this.downloadingId = id;
+                try {
+                    await this.saveResult(id, toFormat);
+                } finally {
+                    this.downloadingId = null;
+                }
+            },
+
+            // Общее ядро скачивания: fetch → blob (плейн <a href> не отправит ни
+            // Bearer, ни нужные credentials): authFetch шлёт guest-cookie
+            // (credentials) либо Bearer. Имя файла — из Content-Disposition.
+            async saveResult(id, toFormat) {
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/download');
+                    // 401 после refresh-and-retry: если сессия истекла, sessionExpired()
+                    // уже показал уведомление и сбросил токен; просто выходим.
+                    if (res.status === 401) return;
+                    if (!res.ok) { this.error = I18N.errors.downloadFailed; return; }
+                    const blob = await res.blob();
+                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
+                        || ('result.' + (toFormat || 'bin'));
+                    this.downloadBlob(blob, name);
+                } catch (e) {
+                    this.error = I18N.errors.downloadNetwork;
+                }
+            },
+
+            // Скачивание исходника строки истории. 410 Gone = исходник авто-удалён
+            // через 24ч → помечаем sourceGone[id] (кнопка прячется, показываем текст),
+            // а не общую ошибку. Свой per-row флаг sourceLoadingId для спиннера.
+            async downloadSource(id, sourceName) {
+                if (this.sourceLoadingId) return;
+                this.sourceLoadingId = id;
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/source');
+                    if (res.status === 401) return;
+                    if (res.status === 410) { this.sourceGone[id] = true; return; }
+                    if (!res.ok) { this.error = I18N.errors.sourceDownloadFailed; return; }
+                    const blob = await res.blob();
+                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
+                        || (sourceName || 'source');
+                    this.downloadBlob(blob, name);
+                } catch (e) {
+                    this.error = I18N.errors.sourceDownloadNetwork;
+                } finally {
+                    this.sourceLoadingId = null;
+                }
+            },
+
+            // Общий триггер скачивания blob через временный <a download> (плейн
+            // <a href> не несёт Bearer/credentials, потому качаем fetch→blob).
+            downloadBlob(blob, name) {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            },
+
+            // История залогиненного пользователя. Гость/аноним → 401, оставляем
+            // пусто (authFetch не делает refresh без токена). Тихий фейл: история —
+            // вспомогательный блок, не критична для конвертации.
+            async loadHistory() {
+                try {
+                    const res = await this.authFetch('/api/v1/convert/history');
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    this.conversions = d.items || [];
+                } catch (e) { /* сеть моргнула — покажем при следующем обновлении */ }
+            },
+
+            // home-13: виджет квот у формы — GET /api/v1/quota работает и для
+            // гостя (guest-cookie, ROLE_GUEST), и для залогиненного (Bearer),
+            // authFetch() шлёт нужный транспорт сам. Тихий фейл: виджет
+            // вспомогательный, не критичен для самой конвертации — при неудаче
+            // просто остаётся скрытым (quota.loaded не переключается в true) до
+            // следующего успешного refresh (после ре-инициализации/конвертации).
+            async loadQuota() {
+                try {
+                    const res = await this.authFetch('/api/v1/quota');
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    this.quota = {
+                        conversions: d.conversions,
+                        aiConversions: d.ai_conversions,
+                        conversionsLimit: d.conversions_limit,
+                        aiConversionsLimit: d.ai_conversions_limit,
+                        plan: d.plan,
+                        maxUploadBytes: d.max_upload_bytes,
+                        loaded: true,
+                    };
+                } catch (e) { /* сеть моргнула — покажем при следующем refresh */ }
+            },
+
+            // «использовано / лимит» (AC карточки home-13: «обычные конверсии
+            // сегодня (использовано/лимит)», буквально). API отдаёт ОСТАТОК
+            // (getRemainingQuota() — «сколько ЕЩЁ можно»), не «использовано» —
+            // used = limit - remaining, точная арифметика по двум реальным
+            // полям (не выдумываем число: check() гарантирует remaining ≤ limit,
+            // так что used всегда ≥ 0). Безлимит (-1) — символ ∞ (не
+            // переведённый текст: AC требует именно символ, не строку "unlimited").
+            quotaLine(remaining, limit) {
+                return limit === -1 ? QUOTA_UNLIMITED_SYMBOL : ((limit - remaining) + ' / ' + limit);
+            },
+
+            // Человекочитаемое имя плана — известные значения переведены
+            // (I18N.quota.planNames), неизвестное новое значение плана просто
+            // показываем как есть (не роняем виджет на будущем тарифе).
+            get quotaPlanLabel() {
+                return I18N.quota.planNames[this.quota.plan] || this.quota.plan || '';
+            },
+
+            // ISO-8601 → локальные дата+время (created_at из истории).
+            formatDate(iso) {
+                if (!iso) return '';
+                const d = new Date(iso);
+                return isNaN(d) ? iso : d.toLocaleString();
+            },
+
+            // Длительность обработки: <1с — в мс, иначе в секундах с 1 знаком.
+            formatDuration(ms) {
+                if (ms == null) return '';
+                if (ms < 1000) return Math.round(ms) + ' ' + I18N.units.ms;
+                return (ms / 1000).toFixed(1) + ' ' + I18N.units.sec;
+            },
+
+            // Предпросмотр результата: text/plain ≤64 КиБ. Заголовок
+            // X-Preview-Truncated:1 → показать примечание об усечении. Текст
+            // рендерим ТОЛЬКО через x-text (untrusted content, без x-html).
+            async openPreview(id, toFormat) {
+                this.preview = { open: true, id, text: '', truncated: false, loading: true, toFormat };
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/preview');
+                    if (res.status === 401) { this.preview.open = false; return; }
+                    if (!res.ok) { this.preview.text = I18N.errors.previewFailed; return; }
+                    this.preview.truncated = res.headers.get('X-Preview-Truncated') === '1';
+                    this.preview.text = await res.text();
+                } catch (e) {
+                    this.preview.text = I18N.errors.previewNetwork;
+                } finally {
+                    this.preview.loading = false;
+                }
+            },
+            closePreview() { this.preview.open = false; },
+            downloadPreview() {
+                if (this.preview.id) this.downloadConversion(this.preview.id, this.preview.toFormat);
+            },
+
+            filenameFrom(disposition) {
+                if (!disposition) return '';
+                const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+                if (utf) { try { return decodeURIComponent(utf[1]); } catch (e) {} }
+                const m = disposition.match(/filename="?([^";]+)"?/i);
+                return m ? m[1] : '';
+            },
+
+            // Сбрасывает ТОЛЬКО локальное JS-состояние логина (используется
+            // sessionExpired() при протухшем refresh). Полноценный логаут —
+            // кнопка в шапке (partials/_header.html.twig → headerNav().logout()):
+            // она же отзывает refresh-cookie на бэке и делает полный reload,
+            // так что все Alpine-компоненты страницы (в т.ч. этот) переинициали-
+            // зируются с нуля вместо ручной синхронизации нескольких копий auth.
+            clearAuth() {
+                this.auth = { token: null, username: null };
+                localStorage.removeItem('jwt');
+            },
+        };
+    }
+</script>

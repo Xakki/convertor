@@ -20,9 +20,10 @@
     {# Панели эпика admin-panel. Каждая несёт свой <section id="..."> с якорем
        боковой навигации (#overview/#users/#queues/#logs/#toggle) и свой
        Alpine-компонент; данные — client-side через shared window.admin.fetch. #}
-    {% include 'admin/stats.html.twig' %}   {# #overview — статистика #}
-    {% include 'admin/users.html.twig' %}   {# #users — пользователи #}
-    {% include 'admin/queues.html.twig' %}  {# #queues — очереди #}
-    {% include 'admin/logs.html.twig' %}    {# #logs — логи конвертаций #}
-    {% include 'admin/toggle.html.twig' %}  {# #toggle — тумблер конвертаций #}
+    {% include 'admin/stats.html.twig' %}    {# #overview — статистика #}
+    {% include 'admin/users.html.twig' %}    {# #users — пользователи #}
+    {% include 'admin/queues.html.twig' %}   {# #queues — очереди #}
+    {% include 'admin/logs.html.twig' %}     {# #logs — логи конвертаций #}
+    {% include 'admin/toggle.html.twig' %}   {# #toggle — тумблер конвертаций #}
+    {% include 'admin/examples.html.twig' %} {# #examples — живые примеры лендинга #}
 {% endblock %}

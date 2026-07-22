@@ -1,0 +1,10 @@
+# i18n-фундамент (home-07). `default_locale` — общий для роутера/локали,
+# задаётся в framework.yaml (framework.default_locale), НЕ здесь: у ключа
+# `translator` в config/reference.php своего default_locale нет — он читает
+# его из framework.default_locale автоматически (проверено по
+# app-symfony/config/reference.php и FrameworkExtension::registerTranslatorConfiguration).
+framework:
+    translator:
+        enabled: true
+        default_path: '%kernel.project_dir%/translations'
+        fallbacks: ['en']

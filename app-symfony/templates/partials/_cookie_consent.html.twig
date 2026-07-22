@@ -1,0 +1,89 @@
+{# Cookie-consent баннер (home-06-legal-docs, изменено в home-12-guest-history-consent).
+   Подключается из base.html.twig — общий для всех страниц на этом layout
+   (как _header.html.twig/_footer.html.twig).
+
+   Все cookie, которые сервис реально выставляет — `guest_id`
+   (App\Service\Auth\GuestCookieFactory), `locale`
+   (App\EventListener\LocaleCookieListener), `tg_login_nonce`
+   (App\Service\Auth\TelegramLoginNonceCookieFactory), refresh-cookie
+   (App\Service\Auth\RefreshCookieFactory) и сам `cookie_consent` ниже —
+   strictly необходимы для работы сервиса (идентификация гостя/сессии, язык,
+   сам факт согласия) и НЕ зависят от выбора в этом баннере. Стороннего
+   трекинга/аналитики в проекте нет (grep по analytics/gtag/hotjar/mixpanel/…
+   — пусто), поэтому по GDPR явный blocking opt-in для самого сервиса не
+   требуется.
+
+   home-12: баннер теперь явный выбор Принять/Отклонить (было — один
+   информационный «Понятно»), т.к. выбор реально на что-то влияет — гейтит
+   показ гостевой истории конвертаций под формой (converterApp() в
+   _converter_app_script.html.twig читает эту cookie через readConsent()).
+   Сама конвертация и её функциональность от выбора НЕ зависят — `guest_id`
+   ставится всегда, независимо от accepted/declined.
+
+   Cookie `cookie_consent` ставится КЛИЕНТСКИ (document.cookie), не через
+   контроллер: значение (`accepted`/`declined`) не подписывается и не
+   читается сервером (в отличие от `guest_id`/`locale`) — читает его только
+   клиентский JS (этот баннер + converterApp()). #}
+<div
+    x-data="cookieConsent()"
+    x-init="init()"
+    x-cloak
+    x-show="!choiceMade"
+    x-transition
+    class="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 px-4 py-4 shadow-[0_-2px_8px_rgba(0,0,0,0.06)] backdrop-blur-sm"
+    role="region"
+    aria-label="{{ 'cookie_consent.message'|trans|e('html_attr') }}"
+    data-testid="cookie-consent-banner"
+>
+    <div class="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 sm:flex-row">
+        <p class="text-sm text-slate-600">
+            {{ 'cookie_consent.message'|trans }}
+            <a href="{{ path('app_legal_privacy') }}" class="text-sky-600 hover:underline">{{ 'cookie_consent.privacy_link'|trans }}</a>
+        </p>
+        <div class="flex shrink-0 items-center gap-2">
+            <button
+                @click="setConsent('declined')"
+                type="button"
+                class="rounded border border-slate-300 px-4 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
+                data-testid="cookie-consent-decline"
+            >{{ 'cookie_consent.decline'|trans }}</button>
+            <button
+                @click="setConsent('accepted')"
+                type="button"
+                class="rounded bg-sky-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-600"
+                data-testid="cookie-consent-accept"
+            >{{ 'cookie_consent.accept'|trans }}</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    function cookieConsent() {
+        return {
+            choiceMade: true, // до init() баннер скрыт (x-cloak) — не мигаем им, пока не проверили cookie.
+            init() {
+                // home-12: раньше (home-06) единственная кнопка «Понятно» писала
+                // `cookie_consent=1` — у уже посетивших пользователей эта кука ещё
+                // жива (год жизни). Считаем «выбор сделан» ТОЛЬКО при реальном
+                // accepted/declined — иначе такой пользователь навсегда застрял бы
+                // без истории (readConsent() тоже не узнаёт '1') и без возможности
+                // переголосовать, т.к. баннер больше не показался бы.
+                this.choiceMade = document.cookie.split('; ').some((c) => {
+                    const [k, v] = c.split('=');
+                    return k === 'cookie_consent' && (v === 'accepted' || v === 'declined');
+                });
+            },
+            // home-12: value — 'accepted'|'declined', обе ветки прячут баннер
+            // (это ВЫБОР, не только "принято"). Событие cookie-consent-changed
+            // — реактивный мост к converterApp() (_converter_app_script.html.twig):
+            // если гость кликнул «Принять» БЕЗ перезагрузки страницы, гостевая
+            // история подгружается сразу же, а не только при следующем F5.
+            setConsent(value) {
+                const oneYear = 60 * 60 * 24 * 365;
+                document.cookie = `cookie_consent=${value}; path=/; max-age=${oneYear}; SameSite=Lax`;
+                this.choiceMade = true;
+                window.dispatchEvent(new CustomEvent('cookie-consent-changed', { detail: { value } }));
+            },
+        };
+    }
+</script>

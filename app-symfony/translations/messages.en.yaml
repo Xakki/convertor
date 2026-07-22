@@ -1,0 +1,260 @@
+# i18n-фундамент (home-07). Namespace по страницам: common.* (общее для
+# нескольких страниц — брендинг, magic-link вход), home.* (conversion/index),
+# login.* (auth/login), nav.* (общий хедер, home-01), footer.* (общий футер,
+# home-01). Остальные подзадачи эпика заводят свои ключи сюда же по мере
+# реализации (не пересоздавать файл — дописывать).
+common:
+    brand: 'File Converter'
+    login_telegram: 'Log in via Telegram'
+    login_telegram_opening: 'Opening Telegram…'
+    login_hint: 'Continue in Telegram: tap “Log in”, then open the link it sends you on this same device.'
+    logout: 'Log out'
+    you_are_logged_in: 'signed in'
+    close: 'Close'
+    download: 'Download'
+    loading: 'Loading…'
+    locale_switch_en: 'EN'
+    locale_switch_ru: 'RU'
+
+home:
+    title: 'File Converter — upload and convert'
+    # home-03: category/format-pair showcase built from /api/v1/formats, above the form.
+    showcase_heading: 'What the service can convert'
+    showcase_subheading: 'Pick a format pair — it will be filled into the form below'
+    showcase_ai_badge: 'AI'
+    showcase_more: 'and %count% more'
+    category:
+        document: 'Documents'
+        image: 'Images'
+        audio: 'Audio'
+        video: 'Video'
+        data: 'Data'
+        archive: 'Archives'
+        markup: 'Markup'
+    # home-04/home-11: format matrix (client-driven from /api/v1/formats,
+    # see formatMatrix getter) + limits/pricing info block.
+    formats:
+        heading: 'Supported formats'
+        subheading: 'Conversion matrix available in the MVP (Stage 1)'
+        col_category: 'Category'
+        col_source: 'Source formats'
+        col_target: 'Target formats'
+    # home-13: live per-user quota widget above the form (GET /api/v1/quota),
+    # visible to both guest and signed-in users — distinct from the static
+    # limits/pricing table below (that one compares plans, this one is live data).
+    quota:
+        plan_label: 'Plan'
+        conversions_label: 'Conversions today'
+        ai_label: 'AI today'
+        max_file_label: 'Max file size'
+        ai_guest_note: 'sign in required'
+        plan_free: 'Free'
+        plan_basic: 'Basic'
+        plan_pro: 'Pro'
+        plan_guest: 'Guest'
+    limits:
+        heading: 'Limits and pricing'
+        subheading: 'What the service actually enforces per plan today'
+        # The fine-grained 4-tier daily+monthly model from ROADMAP is not yet
+        # implemented; QuotaService enforces only these daily counters + max size.
+        proposal_note: 'Per-tier daily/monthly quotas are a future proposal (plan-quota-daily-monthly); the values below are what the service enforces today.'
+        col_param: 'Parameter'
+        conversions_day: 'Conversions / day'
+        ai_day: 'AI conversions / day'
+        max_file: 'Max file size'
+        price_month: 'Price / month'
+        unlimited: 'Unlimited'
+    # home-04: live examples produced by the real pipeline, stored in S3.
+    # home-10: view/download removed — replaced by clickable file icons
+    # (preview or download on click, see _converter_examples.html.twig).
+    examples:
+        heading: 'Live conversion examples'
+        subheading: 'Real results produced by the conversion pipeline — no upload needed'
+    # home-01: /login предлагает несколько провайдеров (Telegram — один из
+    # них), поэтому текст больше не называет Telegram явно.
+    ai_gate_message: 'Sign in is required for AI/video conversions.'
+    dropzone_hint: 'Drag a file here or click to choose one'
+    source_format_label: 'Source format'
+    target_format_label: 'Target format'
+    format_placeholder: '— select a format —'
+    # home-02: input-mode toggle (File / Text) above the form.
+    input_mode_file: 'File'
+    input_mode_text: 'Text'
+    text_placeholder: 'Paste text to convert…'
+    ocr_label: 'Recognize text (OCR)'
+    submit_button: 'Convert'
+    submit_sending: 'Uploading…'
+    job_prefix: 'Job #'
+    job_processing: 'Processing…'
+    download_result: 'Download result'
+    error_expired: 'The result has expired'
+    error_failed: 'Conversion failed'
+    history_heading: 'My conversions'
+    # home-12: guest (not signed in) history heading/note — distinct wording,
+    # honestly explains it's NOT a synced server-side account history but a
+    # cookie-scoped list on this device/browser (only shown while
+    # cookie_consent is accepted).
+    history_heading_guest: 'History on this device'
+    history_guest_note: 'Only visible in this browser via a cookie — not saved across other devices.'
+    history_source: 'Source'
+    history_source_gone: 'source deleted'
+    history_preview: 'Preview'
+    duration_prefix: ''
+    preview_title: 'Result preview'
+    preview_truncated: 'Showing the first 64 KB — download to see the full file.'
+    # home-05: inline audio/video player — the toggle label changes at runtime.
+    viewer:
+        show_player: 'Show player'
+        hide_player: 'Hide player'
+    status:
+        pending: 'Queued'
+        processing: 'Processing'
+        completed: 'Completed'
+        failed: 'Failed'
+        expired: 'Expired'
+    error:
+        login_invalid_link: 'This link is no longer valid — please sign in again.'
+        formats_load_failed: 'Failed to load the format list'
+        telegram_start_failed: 'Failed to start Telegram sign-in (%status%).'
+        telegram_network: 'Network error while starting Telegram sign-in.'
+        session_expired: 'Session expired — please sign in again. The job was reset, retry after signing in.'
+        upload_network: 'Network error while uploading the file'
+        # home-02: text-mode client soft-validation (server still enforces the
+        # plan size limit — see status_413).
+        text_required: 'Enter text to convert'
+        text_too_large: 'Text is too large (%mb% MB limit exceeded)'
+        status_401: 'Session expired — please sign in again.'
+        status_413: 'File is too large (size limit exceeded).'
+        status_415: 'Unsupported file type.'
+        status_422: 'This conversion is not supported.'
+        status_429: 'Daily quota exceeded or too many requests.'
+        generic_status: 'Error %status%'
+        poll_timeout: 'Timed out waiting for the result'
+        download_failed: 'Failed to download the result'
+        download_network: 'Network error while downloading'
+        source_download_failed: 'Failed to download the source file'
+        source_download_network: 'Network error while downloading the source file'
+        preview_failed: 'Failed to load the preview'
+        preview_network: 'Network error while loading the preview'
+    units:
+        bytes: 'B'
+        kb: 'KB'
+        mb: 'MB'
+        ms: 'ms'
+        sec: 's'
+
+login:
+    title: 'Sign in — File Converter'
+    heading: 'Sign in'
+    provider_vk: 'Log in with VK'
+    provider_yandex: 'Log in with Yandex'
+    provider_google: 'Log in with Google'
+    provider_github: 'Log in with GitHub'
+    divider_or: 'or'
+    error:
+        state: 'Your sign-in session has expired or is invalid. Please try again.'
+        exchange: 'Failed to confirm sign-in with the provider. Please try again.'
+        internal: 'Internal error while signing in. Please try again later.'
+        fallback: 'Failed to sign in. Please try again.'
+
+# Общий хедер (home-01-header-nav), partials/_header.html.twig.
+nav:
+    aria_label: 'Main navigation'
+    # Дропдаун со списком курируемых пар (home-09-seo-conversion-pages),
+    # группы — home.category.*, пары — /convert/{from}-to-{to}.
+    conversions: 'Conversions'
+    docs: 'Docs'
+    bot: 'Bot'
+    admin: 'Admin'
+    login: 'Log in'
+
+# Общий футер (home-01-header-nav), partials/_footer.html.twig. Легал-ссылки
+# (privacy/terms) ведут на legal.* страницы (home-06-legal-docs).
+footer:
+    tagline: 'Fast, reliable file conversion for any format.'
+    product_heading: 'Product'
+    conversion_link: 'Conversion'
+    formats_heading: 'Formats'
+    formats_documents: 'Documents (PDF, DOCX)'
+    formats_media: 'Media (MP4, MP3)'
+    formats_images: 'Images (PNG, JPG)'
+    formats_data: 'Data (JSON, CSV)'
+    legal_heading: 'Legal'
+    privacy: 'Privacy Policy'
+    terms: 'Terms of Use'
+    copyright: 'All rights reserved.'
+
+# home-06-legal-docs: /privacy и /terms (templates/legal/*.html.twig) +
+# cookie-consent баннер (partials/_cookie_consent.html.twig). Контент сверен
+# со skill redesign-auth-access-contract — описывает только реально
+# собираемые данные, ничего не выдумываем.
+legal:
+    updated_on: 'Last updated: July 21, 2026.'
+    privacy:
+        title: 'Privacy Policy — File Converter'
+        heading: 'Privacy Policy'
+        intro: 'This page explains what data File Converter collects when you use the file-conversion service, why, and who else can see it.'
+        data_heading: 'What we collect'
+        data_guest_cookie: '`guest_id` cookie — an httpOnly, signed identifier that lets you use the conversion service anonymously (as a guest) without creating an account, and lets us associate your conversions and history with that anonymous identity.'
+        data_locale_cookie: '`locale` cookie — remembers your chosen interface language (English/Russian).'
+        data_consent_cookie: '`cookie_consent` cookie — remembers your choice ("Accept"/"Decline") in the cookie notice. The cookie itself is strictly necessary (it only stores the choice you made), but the optional convenience it unlocks — showing your conversion history on this device below the form on the homepage — only works if you choose "Accept". Choosing "Decline" simply hides that history; converting files itself does not depend on this choice and works identically either way.'
+        data_oauth: 'Account profile data — if you sign in via Telegram or an OAuth provider (Google, GitHub, Yandex, VK), we receive and store basic profile information from that provider: your Telegram ID/username or, for OAuth, a verified email address, display name, username and avatar (exact fields depend on the provider). We also set an httpOnly session/refresh-token cookie to keep you signed in.'
+        data_session_cookie: 'Sign-in session cookies — a short-lived `tg_login_nonce` cookie during Telegram sign-in, and an httpOnly refresh-token cookie after a successful sign-in, both strictly necessary to complete and maintain the login.'
+        data_files: 'Uploaded files and conversion results — stored temporarily in our S3-compatible object storage while your conversion is processed and available for download, then automatically deleted (as soon as 24 hours for anonymous/guest use; longer, depending on your plan, for signed-in accounts).'
+        data_no_tracking: 'We do not use analytics, advertising or third-party tracking cookies. All cookies listed above are strictly necessary to operate the conversion service itself.'
+        purpose_heading: 'Why we process this data'
+        purpose_text: 'Solely to provide the file-conversion service: identifying your conversions (as a guest or a signed-in user), keeping you signed in, remembering your language choice, storing your files while they are converted, and enforcing usage limits.'
+        processors_heading: 'Who else processes this data'
+        processors_text: 'Uploaded files and results are stored in our S3/MinIO-compatible object storage. If you sign in via Telegram, the Telegram Bot API is used to deliver the sign-in link. If you sign in via an OAuth provider, that provider (Google, GitHub, Yandex or VK) processes the sign-in exchange on its side. We do not sell or share your data with any other third party.'
+        retention_heading: 'How long we keep data'
+        retention_text: 'Uploaded files and conversion results are deleted automatically — within 24 hours for anonymous/guest usage, and after a longer period (up to 30 days) for signed-in accounts, depending on your plan. Sign-in cookies expire automatically (`guest_id` — 30 days after it is issued; the Telegram sign-in nonce — 5 minutes).'
+        rights_heading: 'Your rights'
+        rights_text: 'At this stage (MVP) the product does not yet offer a self-service page to export or delete your account and data. To request access to, or deletion of, your data, please contact us — see Contact below — and we will handle it manually.'
+        contact_heading: 'Contact'
+        contact_text: 'Questions about this policy, or requests regarding your data — message our Telegram bot:'
+    terms:
+        title: 'Terms of Use — File Converter'
+        heading: 'Terms of Use'
+        intro: 'These terms govern your use of File Converter. By using the service — with or without an account — you agree to them.'
+        service_heading: 'The service'
+        service_text: 'File Converter lets you upload a file (or, for some formats, paste text) and convert it to another format. Some conversions can be used anonymously as a guest; conversions that use AI processing or produce video require signing in.'
+        limits_heading: 'Limits and plans'
+        limits_text: 'The service enforces daily conversion quotas and a maximum upload size per plan (free vs. paid); current values are shown on the home page under “Limits and pricing”. We may adjust these limits as the service evolves.'
+        acceptable_use_heading: 'Acceptable use'
+        acceptable_use_text: 'You agree not to:'
+        acceptable_use_item_illegal: 'Upload content that is illegal, infringes someone else’s rights, or that you do not have the right to process.'
+        acceptable_use_item_abuse: 'Attempt to bypass usage limits, automate mass usage of the service outside of the documented API contract, or interfere with the service’s operation.'
+        acceptable_use_item_rights: 'Use the service to violate the privacy, intellectual property or other rights of any third party.'
+        no_warranty_heading: 'No warranty'
+        no_warranty_text: 'The service is provided “as is”, without warranties of any kind, express or implied. We do not guarantee uninterrupted availability or that every conversion will produce a perfect result. To the maximum extent permitted by law, we are not liable for any damages arising from your use of the service.'
+        changes_heading: 'Changes'
+        changes_text: 'This is an early-stage (MVP) product; the service and these terms may change as it evolves. Material changes will be reflected on this page.'
+        contact_heading: 'Contact'
+        contact_text: 'Questions about these terms — message our Telegram bot:'
+
+# home-06-legal-docs: informational cookie-consent banner (partials/
+# _cookie_consent.html.twig) / home-12-guest-history-consent. Every cookie the
+# service sets (guest_id, locale, consent, sign-in session) is strictly
+# necessary to run the service — see legal.privacy — and is set regardless of
+# the choice made here. The accepted/declined choice gates ONLY an optional
+# convenience: showing your guest conversion history on this device (see
+# converterApp() readConsent()).
+cookie_consent:
+    message: 'We use cookies that are strictly necessary to run this service (identifying your session, remembering your language). We separately ask for your consent to show your conversion history on this device — if you decline, converting files still works exactly the same.'
+    privacy_link: 'Learn more in our Privacy Policy'
+    accept: 'Accept'
+    decline: 'Decline'
+
+# home-09-seo-conversion-pages: SEO landing per conversion pair
+# (templates/conversion/pair.html.twig, App\Controller\Web\ConversionPageController,
+# route app_conversion_pair). %from%/%to% are interpolated with the pair's
+# format codes (uppercased) from the URL — structural SEO only, no keyword
+# copywriting tuning (that is an explicit follow-up, see the card).
+pair:
+    title: 'Convert %from% to %to% online — %brand%'
+    meta_description: 'Convert %from% to %to% online for free, right in your browser. Fast, secure and no installation required — drop your file (or paste text, if supported) below to get started.'
+    h1: 'Convert %from% to %to%'
+    subheading: 'Free online %from% → %to% converter. Upload a file (or paste text, if the format supports it) below and download the result in seconds.'
+    about_heading: 'About %from% to %to% conversion'
+    about_body: 'This converter turns %from% files into %to% format through the same conversion pipeline as the rest of the service — no separate tool, no quality loss beyond what the format change itself requires. It works for guests too (AI-powered and video conversions are the only exception — those require signing in), so you can try it right away.'
+    back_to_home: '← All conversions'
