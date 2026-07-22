@@ -109,9 +109,7 @@ generalized router the static matrix can't express.
   `StreamConsumerBase.__init__`, and start only AFTER `[[s1-11-onserver-workers-migrate]]` (else it
   targets a seam S1 is deleting). Best-effort/non-fatal rule unchanged.
 
-**Status:** Phase 2 отгрумена 2026-07-22, разбита на `registry-02`…`registry-07`, эпик в работе
-(карточка перемещена в `progress/`); Phase 3 остаётся здесь до своей очереди (нужен дизайн
-multi-candidate router).
+**Status:** ready — Phase 2 полностью реализована (registry-02…07 все в ready/), интеграционный гейт пройден; ждёт приёмки пользователя. Phase 3 остаётся здесь до своей очереди.
 - **Phase 1 выделен в todo → done** → `[[registry-01-worker-register]]` (2026-07-07, после
   приземления s1-11). Seam register() уточнён: хук в `WsClient` на `ready` (единообразно для всех
   воркеров), а не старый `StreamConsumerBase.__init__`. Register-контракт закреплён в карточке Phase 1.
@@ -138,3 +136,25 @@ multi-candidate router).
    `[[registry-05-drop-hardcode]]`.
 4. Блокер `php-ai-virtual-key-submit-resolution` СНЯТ (карточка в `done/`) — AI-матрица плоская
    и в PHP, и в Python, golden-фикстура `conversion_matrix.golden.txt` уже без `_stt`/`_tts`.
+
+## Хэнд-офф Phase 2 (2026-07-22)
+
+Все 6 подзадач реализованы, отревьюены (вердикт CLEAN по каждой) и лежат в `ready/`; интеграционный гейт эпика пройден.
+
+**Что сделано:**
+- `registry-02` — ключ `(workerType, instanceId)` + нативный upsert (снят TOCTOU), `isAi` из CAPABILITIES.
+- `registry-03` — seed-миграция снапшота матрицы; при груминге выявлено и исправлено, что seed СРАЗУ переключает рантайм на путь из БД (не с registry-05), и тихая регрессия маршрутизации pdf→document/OCR — решена тай-брейком приоритета не-AI типов.
+- `registry-04` — восстановлен `bin/dump-matrix.php`, drift-тест переписан на register-round-trip и больше НЕ скипается, golden переведён на seeded DB; drift вписан в `test-php-live`.
+- `registry-05` — хардкод-матрица удалена, БД — единственный источник; найден и закрыт риск кэширования пустого результата при сбое БД (`&$save`).
+- `registry-06` — liveness push gateway→PHP, `status`-колонка, long-TTL GC (никогда не трогает seed-строки).
+- `registry-07` — админ-страница `/admin/workers`.
+
+**Интеграционный гейт (пройден):** обе Б(`convertor`, `convertor-test`) пересозданы с нуля, 14/14 миграций в последовательности; PHP 470 зелёных (incl. drift), Python 463 зелёных; матрица непустая — 6 типов, 309 пар.
+
+**ТРЕБУЕТ РУЧНОЙ ПРИЁМКИ ПЕРЕД `done/`:**
+1. Открыть `/admin#workers` в браузере — код-ревью не проверяет реактивность Alpine, раскрытие матрицы по клику, 15-сек поллинг и вёрстку Tailwind (единственная непроверенная кодом поверхность).
+2. В дереве ветки лежит НЕ относящаяся к эпику незакоммиченная работа другой сессии (`.env.local_example`, `docs/workers-remote-deploy.md`) + её секция уже попала в коммит `8c53cc1` (gateway) — разрулить перед merge эпика.
+
+**Побочные находки эпика (заведены в grooming, не блокеры):** `worker-type-lists-hardcode`, `migrate-diff-schema-drift`, `phpstan-skips-migrations` (+`bin/`), `formats-catalogue-shrink`, `no-ci-pipeline`, `drift-test-targets-dev-db`, `liveness-orphaned-capability-reregister`.
+
+**Phase 3** (generalized candidate+intent router) — остаётся в этой карточке до своей очереди.
