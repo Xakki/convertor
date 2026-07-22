@@ -137,6 +137,58 @@ final class ConversionRegistryFallbackTest extends TestCase
         self::assertFalse($registry->isAi('jpg', 'png'), 'non-AI worker must win over AI for the same pair');
     }
 
+    /**
+     * registry-03 ревью-фикс: pdf→docx/md/txt легитимно объявлены ОБОИМИ
+     * non-AI воркерами — document (plain poppler/pandoc text extraction) и
+     * image (OCR-ветка, тоже принимает pdf source); флаг `ocr` выбирает
+     * воркер/stream на бэке, оба воркера честно декларируют пару. Реальный
+     * баг был в том, что победитель зависел от порядка рядов из БД —
+     * проверяем оба порядка и требуем document.
+     */
+    public function testDocumentWinsOverImageForOverlappingPdfPairs(): void
+    {
+        $documentBlob = [
+            'workerType'  => 'document',
+            'isAi'        => false,
+            'streams'     => ['document'],
+            'routingKeys' => ['document'],
+            'matrix'      => ['pdf' => ['docx', 'md', 'txt']],
+        ];
+        $imageBlob = [
+            'workerType'  => 'image',
+            'isAi'        => false,
+            'streams'     => ['image'],
+            'routingKeys' => ['image'],
+            'matrix'      => ['pdf' => ['docx', 'md', 'txt']],
+        ];
+
+        $capDocument = $this->createStub(WorkerCapability::class);
+        $capDocument->method('getWorkerType')->willReturn('document');
+        $capDocument->method('getCapabilities')->willReturn($documentBlob);
+
+        $capImage = $this->createStub(WorkerCapability::class);
+        $capImage->method('getWorkerType')->willReturn('image');
+        $capImage->method('getCapabilities')->willReturn($imageBlob);
+
+        foreach ([[$capDocument, $capImage], [$capImage, $capDocument]] as $order) {
+            $repo = $this->createStub(WorkerCapabilityRepository::class);
+            $repo->method('findAllCapabilities')->willReturn($order);
+
+            $registry = new ConversionRegistry($repo);
+
+            foreach (['docx', 'md', 'txt'] as $to) {
+                self::assertTrue($registry->isSupported('pdf', $to));
+                self::assertSame(
+                    'document',
+                    $registry->getCategory('pdf', $to)->value,
+                    "pdf→{$to} must route to document regardless of DB row order",
+                );
+                self::assertFalse($registry->isAi('pdf', $to));
+                self::assertSame('document', $registry->streamFor('pdf', $to));
+            }
+        }
+    }
+
     /** БД содержит AI-воркер — matrix_categories используется для определения FileCategory. */
     public function testBuildsAiPairsFromDbWhenAiWorkerRegistered(): void
     {

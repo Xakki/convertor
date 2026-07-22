@@ -44,6 +44,20 @@ class ConversionRegistry
     private const OCR_RASTER  = ['jpg', 'png', 'tiff'];
 
     /**
+     * INTERIM (Phase 2) tie-break for a from→to pair legitimately declared by
+     * TWO non-AI worker types (registry-03 review: pdf→docx/md/txt is claimed
+     * by both `document`, plain poppler/pandoc text extraction, and `image`,
+     * whose OCR branch also accepts a pdf source — the `ocr` flag picks the
+     * worker/stream, so both are honest to declare it). Index = priority rank,
+     * lower wins. Applied ONLY between two non-AI candidates for the SAME pair
+     * (the existing non-AI-beats-AI rule is unrelated and stays as-is); result
+     * is independent of DB row/insertion order — see {@see nonAiPrecedenceRank()}.
+     * Superseded by the epic's Phase 3 multi-candidate router (pdf→txt
+     * document-extract vs image-OCR is its named reference case).
+     */
+    private const NON_AI_PRECEDENCE = ['document', 'data', 'audio', 'video', 'image'];
+
+    /**
      * Explicit textual-source allowlist for {@see isTextSourceSupported()}
      * (home-02-text-input) — Документы(txt) + Разметка(md/rst/latex/html/wiki)
      * + Данные(csv/json/xml/yaml/toml), per ROADMAP.md «Матрица поддерживаемых
@@ -293,7 +307,12 @@ class ConversionRegistry
 
     /**
      * Строит матрицу из зарегистрированных в БД возможностей воркеров.
-     * Политика коллизий: non-AI побеждает AI; при одинаковом isAi — last-write.
+     * Политика коллизий: non-AI побеждает AI (независимо от порядка — non-AI
+     * всегда обрабатываются раньше по сортировке ниже); коллизия МЕЖДУ двумя
+     * non-AI воркерами на одну пару разрешается через {@see NON_AI_PRECEDENCE}
+     * (registry-03 tie-break, детерминированно, не зависит от порядка строк из
+     * БД); при равном ранге (тот же workerType, несколько инстансов) —
+     * last-write, как раньше.
      *
      * `$capabilities` — плоский список рядов, по ряду на пару (workerType,
      * instanceId) (registry-02: ключ БД составной, несколько инстансов одного
@@ -301,7 +320,7 @@ class ConversionRegistry
      * группирует по workerType — он проходит по рядам как есть и накапливает
      * пары в общий `$matrix`, поэтому несколько рядов одного workerType уже
      * объединяются (union) построчно; повторяющиеся пары дедуплицируются самой
-     * структурой ассоциативного массива (последняя запись побеждает).
+     * структурой ассоциативного массива по правилу ранга выше.
      *
      * @param WorkerCapability[] $capabilities
      * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
@@ -309,6 +328,9 @@ class ConversionRegistry
     private function buildMatrixFromCapabilities(array $capabilities): array
     {
         $matrix = [];
+        // Ранг non-AI победителя текущей пары (registry-03 tie-break, см.
+        // NON_AI_PRECEDENCE) — параллельно $matrix, не часть возвращаемой формы.
+        $nonAiRank = [];
 
         // Сортировка: non-AI обрабатываются раньше, AI — только для незанятых пар
         usort($capabilities, static fn (WorkerCapability $a, WorkerCapability $b): int
@@ -354,12 +376,22 @@ class ConversionRegistry
                     ]);
                     continue;
                 }
+                $rank = self::nonAiPrecedenceRank($stream);
                 foreach ($rawMatrix as $from => $targets) {
                     foreach ($targets as $to) {
                         if ($from === $to) {
                             continue;
                         }
-                        $matrix[$from][$to] = ['category' => $category, 'isAi' => false];
+                        $existingRank = $nonAiRank[$from][$to] ?? null;
+                        if ($existingRank !== null && $existingRank < $rank) {
+                            // Пара уже занята non-AI воркером СТРОГО более высокого
+                            // приоритета (registry-03 tie-break) — не перезаписываем.
+                            // При равном ранге (тот же/сопоставимый workerType, напр.
+                            // несколько инстансов) сохраняется прежнее last-write.
+                            continue;
+                        }
+                        $matrix[$from][$to]    = ['category' => $category, 'isAi' => false];
+                        $nonAiRank[$from][$to] = $rank;
                     }
                 }
             }
@@ -551,5 +583,18 @@ class ConversionRegistry
             'document' => FileCategory::Document,
             default    => null,
         };
+    }
+
+    /**
+     * Priority rank for {@see NON_AI_PRECEDENCE} — lower wins. Unknown/unlisted
+     * worker types (shouldn't happen for real registrations) get the lowest
+     * priority (never win a tie) instead of throwing, matching the
+     * graceful-degradation style of the rest of this build path.
+     */
+    private static function nonAiPrecedenceRank(string $workerType): int
+    {
+        $rank = array_search($workerType, self::NON_AI_PRECEDENCE, true);
+
+        return $rank === false ? PHP_INT_MAX : $rank;
     }
 }

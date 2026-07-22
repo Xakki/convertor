@@ -144,3 +144,36 @@
   статическим анализом). `make cs` → `make cs-check` — 0 файлов на исправление.
   `make test-php-live` — 426/426 зелёных (1 pre-existing notice, тот же, что и
   в registry-02, не regression). Миграция применена на dev через `make migrate`.
+
+**Ревью-фикс #2 (2026-07-22): DB-путь включился уже здесь, не в registry-05, и
+вскрыл mis-routing pdf→document.** `buildRoutingPairs()` уходит на hardcoded
+fallback ТОЛЬКО когда список capability-рядов из БД пуст; seed делает его
+непустым — значит `buildMatrixFromHardcode()`/`workerCapabilities()`
+фактически МЁРТВЫ на рантайме на любом смигрированном окружении уже с этой
+карточки, а не с `[[registry-05-drop-hardcode]]`, как предполагалось при
+груминге эпика (сам код удалять здесь всё равно не стали — вне зоны).
+Full pair-set diff (hardcode vs засеянная БД) регрессий по «пропавшим парам»
+не нашёл, но нашёл ОДИН реальный баг: `pdf→docx/md/txt` стали резолвиться в
+category/stream `image` вместо `document` — обе seed-строки (`document` и
+`image`) честно объявляют эту пару (libreoffice — plain poppler-извлечение
+текста; image-воркер — OCR-ветка, тоже принимает pdf source), а
+`buildMatrixFromCapabilities()` умела разруливать только non-AI vs AI,
+между двумя non-AI коллизии не было — побеждал тот, чья строка обработана
+последней (зависело от порядка `findAllCapabilities()`, т.е. от PK/порядка
+БД). Итог до фикса: любое обычное (без флага `ocr`) `pdf→txt` уезжало на
+OCR-воркер — вопреки собственному докблоку класса (OCR — только по флагу).
+**USER DECISION: фиксить tie-break'ом в `ConversionRegistry`, не трогая то,
+что декларируют воркеры** (воркеры остаются flag-agnostic и честно
+объявляют возможности; бэк выбирает флаг/stream). Добавлена
+`NON_AI_PRECEDENCE = ['document','data','audio','video','image']` (индекс =
+ранг, меньше = выше приоритет) + `nonAiPrecedenceRank()`; в
+`buildMatrixFromCapabilities()` при коллизии между двумя non-AI строками
+побеждает строго более высокий ранг, независимо от порядка строк (при
+равном ранге — как раньше, last-write, для мульти-инстансов одного типа).
+Явно помечено как INTERIM — снимается Phase 3 multi-candidate router эпика,
+где `pdf→txt` (document-extract vs image-OCR) — эталонный кейс. Тест
+`testDocumentWinsOverImageForOverlappingPdfPairs` — оба порядка рядов дают
+`document`. Живая проверка на dev (`GET /formats`): `pdf→docx/md/txt` теперь
+`"category":"document"` (было `"image"` до фикса), `ocrCapable:true`
+сохранился (флаг-путь на OCR не тронут, отдельная ветка `streamFor(ocr=true)`).
+QA: phpstan/cs-check чисто, `test-php-live` 428/428 зелёных.
