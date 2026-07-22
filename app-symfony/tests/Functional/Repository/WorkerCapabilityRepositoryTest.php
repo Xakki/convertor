@@ -85,4 +85,40 @@ final class WorkerCapabilityRepositoryTest extends KernelTestCase
             ->findBy(['workerType' => 'test-wc-ai']);
         self::assertCount(2, $all, 'two distinct instanceId of the same workerType must coexist as two rows');
     }
+
+    /**
+     * registry-03: seed-миграция заливает строки с instance_id='__seed__'. Реальный
+     * register того же worker_type (другой instanceId — Python-воркер никогда не
+     * шлёт '__seed__') должен апсертиться отдельной строкой рядом с seed, не падая
+     * на составном UNIQUE(worker_type, instance_id).
+     */
+    public function testRealRegisterUpsertsAlongsideSeedRowWithoutUniqueViolation(): void
+    {
+        self::bootKernel();
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $seed             = $repo->upsert('test-wc-seeded', '__seed__', ['isAi' => false, 'matrix' => ['jpg' => ['png']], 'version' => 'seed']);
+        $live             = $repo->upsert('test-wc-seeded', 'host-a:worker-1', ['isAi' => false, 'matrix' => ['jpg' => ['png', 'webp']], 'version' => '1.2.3']);
+        $this->toRemove[] = $seed;
+        $this->toRemove[] = $live;
+
+        self::assertNotSame($seed->getId(), $live->getId());
+        self::assertSame('__seed__', $seed->getInstanceId());
+        self::assertSame('host-a:worker-1', $live->getInstanceId());
+
+        $all = static::getContainer()->get(EntityManagerInterface::class)
+            ->getRepository(WorkerCapability::class)
+            ->findBy(['workerType' => 'test-wc-seeded']);
+        self::assertCount(2, $all, 'live register must coexist with the seed row, not collide on the composite unique key');
+
+        // Повторный upsert по тому же seed-ключу (напр. повторный прогон seed-миграции)
+        // по-прежнему обновляет seed-строку in place, не трогая live-строку.
+        $reSeed = $repo->upsert('test-wc-seeded', '__seed__', ['isAi' => false, 'matrix' => ['jpg' => ['png']], 'version' => 'seed']);
+        self::assertSame($seed->getId(), $reSeed->getId());
+
+        $allAfter = static::getContainer()->get(EntityManagerInterface::class)
+            ->getRepository(WorkerCapability::class)
+            ->findBy(['workerType' => 'test-wc-seeded']);
+        self::assertCount(2, $allAfter, 're-seeding must not duplicate rows');
+    }
 }
