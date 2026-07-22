@@ -1,0 +1,387 @@
+<script>
+    // dashboard-page-01: строки для инлайн-JS Alpine-компонента dashboardApp(),
+    // рендерятся Twig по текущей locale (см. аналогичный комментарий в
+    // partials/_converter_app_script.html.twig). Часть ключей ПЕРЕИСПОЛЬЗУЕТ
+    // существующий namespace home.*/common.* (совпадают по смыслу буквально —
+    // статусы конверсии, единицы измерения, сетевые ошибки), новые ключи —
+    // только под dashboard.*/nav.dashboard.
+    //
+    // ВАЖНО: этот скрипт — МИНИМАЛЬНОЕ, намеренно ДУБЛИРОВАННОЕ подмножество
+    // authFetch()/tryRefresh()/filenameFrom()/humanSize() из converterApp()
+    // (partials/_converter_app_script.html.twig), а не общий рефакторинг —
+    // страница `/` не трогается вовсе (задача явно запрещает рискованный
+    // рефакторинг главной). Кабинет — VIEW-ONLY (без формы загрузки, без
+    // image/pdf-вьюера и audio/video-плеера — previewable из истории по
+    // построению текстовый, см. ConversionController::isPreviewable()), поэтому
+    // сюда НЕ тянутся formats-матрица, viewer/players и связанные с ними
+    // геттеры — они дашборду не нужны.
+    const I18N = {
+        errors: {
+            sessionExpired: '{{ 'home.error.session_expired'|trans|e('js') }}',
+            downloadFailed: '{{ 'home.error.download_failed'|trans|e('js') }}',
+            downloadNetwork: '{{ 'home.error.download_network'|trans|e('js') }}',
+            sourceDownloadFailed: '{{ 'home.error.source_download_failed'|trans|e('js') }}',
+            sourceDownloadNetwork: '{{ 'home.error.source_download_network'|trans|e('js') }}',
+            previewFailed: '{{ 'home.error.preview_failed'|trans|e('js') }}',
+            previewNetwork: '{{ 'home.error.preview_network'|trans|e('js') }}',
+            // dashboard-page-01: точечные сообщения для 410/409/415 у /preview —
+            // вместо общего previewFailed, AC карточки требует «понятное
+            // переведённое сообщение вместо сломанного скачивания».
+            previewExpired: '{{ 'dashboard.history.error.expired'|trans|e('js') }}',
+            previewNotReady: '{{ 'dashboard.history.error.not_ready'|trans|e('js') }}',
+            previewUnsupported: '{{ 'dashboard.history.error.unsupported'|trans|e('js') }}',
+        },
+        status: {
+            pending: '{{ 'home.status.pending'|trans|e('js') }}',
+            processing: '{{ 'home.status.processing'|trans|e('js') }}',
+            completed: '{{ 'home.status.completed'|trans|e('js') }}',
+            failed: '{{ 'home.status.failed'|trans|e('js') }}',
+            expired: '{{ 'home.status.expired'|trans|e('js') }}',
+        },
+        units: {
+            bytes: '{{ 'home.units.bytes'|trans|e('js') }}',
+            kb: '{{ 'home.units.kb'|trans|e('js') }}',
+            mb: '{{ 'home.units.mb'|trans|e('js') }}',
+            ms: '{{ 'home.units.ms'|trans|e('js') }}',
+            sec: '{{ 'home.units.sec'|trans|e('js') }}',
+        },
+        durationPrefix: '{{ 'home.duration_prefix'|trans|e('js') }}',
+        quota: {
+            planNames: {
+                free: '{{ 'home.quota.plan_free'|trans|e('js') }}',
+                basic: '{{ 'home.quota.plan_basic'|trans|e('js') }}',
+                pro: '{{ 'home.quota.plan_pro'|trans|e('js') }}',
+                guest: '{{ 'home.quota.plan_guest'|trans|e('js') }}',
+            },
+        },
+        // Квоты: -1 = безлимит. AC карточки требует ИМЕННО переведённое слово
+        // "unlimited"/«без лимита», НЕ "-1" и НЕ символ ∞ (в отличие от
+        // виджета на главной, quotaLine() который печатает литерал ∞).
+        unlimited: '{{ 'home.limits.unlimited'|trans|e('js') }}',
+    };
+    const ACTIVE_STATUSES = ['pending', 'processing'];
+    const FAILED_STATUSES = ['failed', 'expired'];
+
+    function dashboardApp() {
+        return {
+            auth: { token: null },
+            error: '',
+            // authResolved — становится true ПОСЛЕ попытки tryRefresh()+/me
+            // (успешной или нет). Гейтит рендер account-карточки/приглашения
+            // входа через <template x-if>, чтобы ни то ни другое не мигало до
+            // фактического ответа сети (в отличие от x-cloak — узел вообще
+            // отсутствует в DOM, пока флаг не выставлен).
+            authResolved: false,
+            loggedIn: false,
+            me: { name: null, username: null, profileUrl: null, avatarUrl: null, plan: null },
+
+            quota: {
+                conversions: 0, aiConversions: 0,
+                conversionsLimit: 0, aiConversionsLimit: 0,
+                plan: null, maxUploadBytes: 0, loaded: false,
+            },
+
+            conversions: [],
+            historyLoading: true,
+            historyLoadingMore: false,
+            historyOffset: 0,
+            historyLimit: 20,
+            historyMore: false,
+            downloadingId: null,
+            sourceLoadingId: null,
+            sourceGone: {},
+            preview: { open: false, id: null, text: '', truncated: false, loading: false, toFormat: null },
+
+            init() {
+                this.tryRefresh().then(async (ok) => {
+                    if (ok) {
+                        await this.loadMe();
+                        await this.loadHistory(true);
+                    } else if (this.readConsent() === 'accepted') {
+                        // home-12: то же правило, что и на `/` — гостевая история
+                        // (по guest-cookie) грузится только при явном согласии
+                        // в cookie-баннере (partials/_cookie_consent.html.twig,
+                        // общий для всех страниц через base.html.twig).
+                        await this.loadHistory(true);
+                    } else {
+                        this.historyLoading = false;
+                    }
+                    // home-13: квота — ПОСЛЕ tryRefresh(), иначе auth.token ещё
+                    // пуст и authFetch() ушёл бы гостевым запросом даже для
+                    // залогиненного (guest-cookie аутентифицирует, но план/лимиты
+                    // были бы гостевые, не реальные пользователя) — тот же баг-
+                    // трап, что и в converterApp(), тот же фикс: внутри .then().
+                    this.loadQuota();
+                    this.authResolved = true;
+                });
+
+                // Тот же мост, что и в converterApp() — гость может принять/
+                // отклонить согласие ПОСЛЕ первой загрузки страницы.
+                window.addEventListener('cookie-consent-changed', (e) => {
+                    if (this.auth.token) return;
+                    if (e.detail.value === 'accepted') {
+                        this.loadHistory(true);
+                    } else {
+                        this.conversions = [];
+                        this.historyMore = false;
+                    }
+                });
+            },
+
+            readConsent() {
+                const m = document.cookie.match(/(?:^|; )cookie_consent=([^;]*)/);
+                return m ? decodeURIComponent(m[1]) : null;
+            },
+
+            // Профиль текущего пользователя. Guest/аноним → 401 — НЕ состояние
+            // ошибки (см. MeController::me()), просто остаёмся loggedIn=false.
+            async loadMe() {
+                try {
+                    const res = await this.authFetch('/api/v1/me');
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    this.me = {
+                        name: d.name,
+                        username: d.username,
+                        profileUrl: d.profile_url,
+                        avatarUrl: d.avatar_url,
+                        plan: d.plan,
+                    };
+                    this.loggedIn = true;
+                } catch (e) { /* сеть моргнула — остаёмся в состоянии "не вошли" */ }
+            },
+
+            avatarInitial() {
+                return (this.me.name || '?').trim().charAt(0).toUpperCase();
+            },
+
+            async loadQuota() {
+                try {
+                    const res = await this.authFetch('/api/v1/quota');
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    this.quota = {
+                        conversions: d.conversions,
+                        aiConversions: d.ai_conversions,
+                        conversionsLimit: d.conversions_limit,
+                        aiConversionsLimit: d.ai_conversions_limit,
+                        plan: d.plan,
+                        maxUploadBytes: d.max_upload_bytes,
+                        loaded: true,
+                    };
+                } catch (e) { /* сеть моргнула — виджет останется скрытым */ }
+            },
+
+            get quotaPlanLabel() {
+                return I18N.quota.planNames[this.quota.plan] || this.quota.plan || '';
+            },
+
+            get mePlanLabel() {
+                return I18N.quota.planNames[this.me.plan] || this.me.plan || '';
+            },
+
+            // «использовано / лимит»; -1 → переведённое "unlimited" (НЕ "-1",
+            // НЕ ∞ — см. комментарий у I18N.unlimited выше). API отдаёт ОСТАТОК
+            // (getRemainingQuota), used = limit - remaining только при limit !== -1.
+            quotaLine(remaining, limit) {
+                if (limit === -1) return I18N.unlimited;
+                return (limit - remaining) + ' / ' + limit;
+            },
+
+            maxFileLabel(bytes) {
+                return bytes === -1 ? I18N.unlimited : this.humanSize(bytes);
+            },
+
+            humanSize(bytes) {
+                if (bytes == null) return '';
+                if (bytes < 1024) return bytes + ' ' + I18N.units.bytes;
+                if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' ' + I18N.units.kb;
+                return (bytes / 1048576).toFixed(1) + ' ' + I18N.units.mb;
+            },
+
+            formatDate(iso) {
+                if (!iso) return '';
+                const d = new Date(iso);
+                return isNaN(d) ? iso : d.toLocaleString();
+            },
+
+            formatDuration(ms) {
+                if (ms == null) return '';
+                if (ms < 1000) return Math.round(ms) + ' ' + I18N.units.ms;
+                return (ms / 1000).toFixed(1) + ' ' + I18N.units.sec;
+            },
+
+            statusLabel(s) { return I18N.status[s] || s; },
+            isActive(s) { return ACTIVE_STATUSES.includes(s); },
+            isFailed(s) { return FAILED_STATUSES.includes(s); },
+
+            // Пагинация: «Загрузить ещё» по limit/offset (API не отдаёт total —
+            // см. карточку). reset=true — первая загрузка/повторная (после
+            // логина или смены cookie-согласия), reset=false — «Загрузить ещё»
+            // (аппендит, offset двигаем на РЕАЛЬНОЕ кол-во пришедших записей).
+            async loadHistory(reset) {
+                if (reset) {
+                    this.historyOffset = 0;
+                    this.conversions = [];
+                    this.historyMore = false;
+                }
+                const loadingKey = reset ? 'historyLoading' : 'historyLoadingMore';
+                this[loadingKey] = true;
+                try {
+                    const res = await this.authFetch(
+                        '/api/v1/convert/history?limit=' + this.historyLimit + '&offset=' + this.historyOffset,
+                    );
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    const items = d.items || [];
+                    this.conversions = this.conversions.concat(items);
+                    this.historyOffset += items.length;
+                    this.historyMore = items.length === this.historyLimit;
+                } catch (e) {
+                    /* тихий фейл — история не критична, повторный успех обновит список */
+                } finally {
+                    this[loadingKey] = false;
+                }
+            },
+
+            async downloadConversion(id, toFormat) {
+                if (this.downloadingId) return;
+                this.downloadingId = id;
+                try {
+                    await this.saveResult(id, toFormat);
+                } finally {
+                    this.downloadingId = null;
+                }
+            },
+
+            async saveResult(id, toFormat) {
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/download');
+                    if (res.status === 401) return;
+                    if (!res.ok) { this.error = I18N.errors.downloadFailed; return; }
+                    const blob = await res.blob();
+                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
+                        || ('result.' + (toFormat || 'bin'));
+                    this.downloadBlob(blob, name);
+                } catch (e) {
+                    this.error = I18N.errors.downloadNetwork;
+                }
+            },
+
+            // 410 Gone = исходник авто-удалён по ретеншену (24ч гость / дольше
+            // юзер) — помечаем sourceGone[id], кнопка прячется, показываем текст.
+            async downloadSource(id, sourceName) {
+                if (this.sourceLoadingId) return;
+                this.sourceLoadingId = id;
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/source');
+                    if (res.status === 401) return;
+                    if (res.status === 410) { this.sourceGone[id] = true; return; }
+                    if (!res.ok) { this.error = I18N.errors.sourceDownloadFailed; return; }
+                    const blob = await res.blob();
+                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
+                        || (sourceName || 'source');
+                    this.downloadBlob(blob, name);
+                } catch (e) {
+                    this.error = I18N.errors.sourceDownloadNetwork;
+                } finally {
+                    this.sourceLoadingId = null;
+                }
+            },
+
+            downloadBlob(blob, name) {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            },
+
+            // Текстовое превью (partials/_converter_preview_modal.html.twig,
+            // переиспользован как есть — читает preview.*/closePreview()/
+            // downloadPreview()). Кнопка «Просмотр» в строке истории гейтится
+            // на c.previewable — тот флаг УЖЕ требует status===completed И
+            // текстовый формат результата (ConversionController::
+            // serializeHistoryItem/isPreviewable), поэтому 409/415 сюда почти
+            // не долетают на свежих данных, но страница могла простоять
+            // открытой — гейтим все коды явно, а не полагаемся только на
+            // клиентский previewable.
+            async openPreview(id, toFormat) {
+                this.preview = { open: true, id, text: '', truncated: false, loading: true, toFormat };
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/preview');
+                    if (res.status === 401) { this.preview.open = false; return; }
+                    if (res.status === 410) { this.preview.text = I18N.errors.previewExpired; return; }
+                    if (res.status === 409) { this.preview.text = I18N.errors.previewNotReady; return; }
+                    if (res.status === 415) { this.preview.text = I18N.errors.previewUnsupported; return; }
+                    if (!res.ok) { this.preview.text = I18N.errors.previewFailed; return; }
+                    this.preview.truncated = res.headers.get('X-Preview-Truncated') === '1';
+                    this.preview.text = await res.text();
+                } catch (e) {
+                    this.preview.text = I18N.errors.previewNetwork;
+                } finally {
+                    this.preview.loading = false;
+                }
+            },
+            closePreview() { this.preview.open = false; },
+            downloadPreview() {
+                if (this.preview.id) this.downloadConversion(this.preview.id, this.preview.toFormat);
+            },
+
+            filenameFrom(disposition) {
+                if (!disposition) return '';
+                const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+                if (utf) { try { return decodeURIComponent(utf[1]); } catch (e) {} }
+                const m = disposition.match(/filename="?([^";]+)"?/i);
+                return m ? m[1] : '';
+            },
+
+            // Единый транспорт: всегда credentials:'include' (guest-cookie),
+            // Bearer только при наличии токена, один тихий silent-refresh на
+            // 401 для залогиненного (тот же паттерн, что и в converterApp()).
+            async authFetch(url, opts = {}) {
+                const withAuth = (o) => {
+                    const headers = { ...(o.headers || {}) };
+                    if (this.auth.token) headers['Authorization'] = 'Bearer ' + this.auth.token;
+                    return { ...o, headers, credentials: 'include' };
+                };
+                const hadToken = !!this.auth.token;
+                let res = await fetch(url, withAuth(opts));
+                if (res.status !== 401 || !hadToken) return res;
+
+                const refreshed = await this.tryRefresh();
+                if (!refreshed) {
+                    this.sessionExpired();
+                    return res;
+                }
+                return fetch(url, withAuth(opts));
+            },
+
+            async tryRefresh() {
+                try {
+                    const res = await fetch('/api/v1/auth/refresh', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+                    if (!res.ok) return false;
+                    const d = await res.json();
+                    if (!d.token) return false;
+                    this.auth.token = d.token;
+                    localStorage.setItem('jwt', d.token);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            sessionExpired() {
+                this.auth = { token: null };
+                this.loggedIn = false;
+                this.error = I18N.errors.sessionExpired;
+            },
+        };
+    }
+</script>

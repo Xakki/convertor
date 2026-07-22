@@ -143,6 +143,29 @@ home:
         ms: 'ms'
         sec: 's'
 
+# Личный кабинет (dashboard-page-01), view-only: templates/dashboard/index.html.twig
+# + partials/_dashboard_app_script.html.twig. Reuses home.quota.*/home.units.*/
+# home.status.*/home.error.*/home.history_source*/home.history_preview/
+# common.* where the meaning matches exactly — new keys live here only for
+# what is genuinely dashboard-specific.
+dashboard:
+    title: 'Dashboard — File Converter'
+    heading: 'Dashboard'
+    login_prompt: 'Sign in to see your account details and your full conversion history.'
+    account:
+        heading: 'Account'
+    quota:
+        heading: 'Quota'
+    history:
+        heading: 'Conversion history'
+        empty: 'No conversions yet.'
+        ai_badge: 'AI'
+        load_more: 'Load more'
+        error:
+            expired: 'This result has expired and is no longer available.'
+            not_ready: 'This conversion is not completed yet.'
+            unsupported: 'This result cannot be previewed.'
+
 login:
     title: 'Sign in — File Converter'
     heading: 'Sign in'
@@ -166,6 +189,9 @@ nav:
     docs: 'Docs'
     bot: 'Bot'
     admin: 'Admin'
+    # dashboard-page-01: link to the served /dashboard page, shown only for
+    # signed-in users (x-show="loggedIn" в partials/_header.html.twig).
+    dashboard: 'Dashboard'
     login: 'Log in'
 
 # Общий футер (home-01-header-nav), partials/_footer.html.twig. Легал-ссылки

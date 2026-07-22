@@ -84,6 +84,9 @@ security:
         # /me доступен гостю на уровне firewall, чтобы контроллер вернул чистый 401
         # (а не firewall-403) для гостя/анонима — у них нет TG-профиля.
         - { path: ^/api/v1/me$, roles: PUBLIC_ACCESS }
+        # Swagger UI/JSON (NelmioApiDocBundle) — публичная документация API,
+        # ДОЛЖНО стоять ДО общего ^/api, иначе анонима встречает 401.
+        - { path: ^/api/doc, roles: PUBLIC_ACCESS }
         - { path: ^/api, roles: ROLE_USER }
 
 when@test:

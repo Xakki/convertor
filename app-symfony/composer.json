@@ -18,6 +18,7 @@
         "league/oauth2-google": "^5.0",
         "lexik/jwt-authentication-bundle": "^3.0",
         "nelmio/api-doc-bundle": "^4.19",
+        "symfony/asset": "7.*",
         "symfony/console": "^7.0",
         "symfony/doctrine-messenger": "^7.0",
         "symfony/dotenv": "^7.0",
