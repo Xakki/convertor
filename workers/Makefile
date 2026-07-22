@@ -199,6 +199,37 @@ worker-ai-down: ## Stop & remove the on-server AI worker
 worker-ai-logs: ## Tail the on-server AI worker logs
 	$(WORKER_AI_DC) logs -f worker-ai
 
+##@ Remote worker host (WS-клиент-only хост: без php/mariadb/nginx/keydb/ws-gateway/metrics-exporter)
+
+# 6 remote-capable сервисов (5 non-AI + AI) — общий список для up/recreate/down/logs
+# ниже. ws-gateway и metrics-exporter НЕ входят — остаются только на главном сервере.
+REMOTE_WORKER_SVCS = worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
+
+.PHONY: build-workers-remote
+build-workers-remote: build-libreoffice build-ffmpeg build-image build-data build-ai-cpu ## Build images для remote CPU-хоста (5 non-AI + AI:cpu); переиспользует build-* / build-ai-cpu, без дублирования docker build
+
+# --no-deps + fluent-bit ЯВНО в списке сервисов: без этого --no-deps не поднимет
+# sidecar для worker-ai — у него НЕТ depends_on: fluent-bit (логгинг инлайнится прямо
+# в docker-compose.worker-ai.yml, см. шапку файла), в отличие от 5 non-AI воркеров
+# (depends_on прописан в docker/fluent-logging.yml). logrotate НЕ поднимаем: он
+# ротирует файловые логи (mysql slowlog + JSON-volume) — на воркер-only хосте их
+# никто не пишет, воркеры логируют только в stdout через fluentd log-driver.
+.PHONY: remote-workers-up
+remote-workers-up: ## Up ТОЛЬКО 6 remote-воркеров + fluent-bit (без php/mariadb/nginx/keydb/ws-gateway/metrics-exporter)
+	$(WORKER_AI_DC) up -d --no-deps fluent-bit $(REMOTE_WORKER_SVCS)
+
+.PHONY: remote-workers-recreate
+remote-workers-recreate: ## Force-recreate 6 remote-воркеров (подхватить свежесобранные образы; fluent-bit не трогает)
+	$(WORKER_AI_DC) up -d --force-recreate --no-deps $(REMOTE_WORKER_SVCS)
+
+.PHONY: remote-workers-down
+remote-workers-down: ## Stop & remove 6 remote-воркеров + fluent-bit
+	$(WORKER_AI_DC) rm -sf fluent-bit $(REMOTE_WORKER_SVCS)
+
+.PHONY: remote-workers-logs
+remote-workers-logs: ## Tail логи 6 remote-воркеров + fluent-bit
+	$(WORKER_AI_DC) logs -f fluent-bit $(REMOTE_WORKER_SVCS)
+
 ##@ Queue / Workers
 
 .PHONY: worker-logs
@@ -277,7 +308,7 @@ test-gateway: build-data-test ## WS-Gateway KeyDB-слой на РЕАЛЬНОМ
 	    -e REDIS_DB=3 \
 	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
 	    $(COMPOSE_PROJECT_NAME)/worker-data:test \
-	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_dlq_consumer.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
+	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_liveness_push.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_dlq_consumer.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
 
 .PHONY: test-e2e
 test-e2e: build-workers build-ffmpeg-test ## Real S3 in/out e2e for ffmpeg + data workers (run `make up` first)

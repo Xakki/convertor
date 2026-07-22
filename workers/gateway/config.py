@@ -118,6 +118,16 @@ class Config:
     ws_reconnect_backoff_max_s: float = 30.0
     ws_reconnect_backoff_factor: float = 2.0
 
+    # --- Liveness push (registry-06) — see workers/gateway/liveness.py ---
+    # Batch-push interval to PHP's internal `/liveness` endpoint. Independent of
+    # worker-side WS_PING_INTERVAL_S (~20s default, s1-08): batching trades a bit
+    # of staleness for far fewer PHP writes — the epic's own Decisions are
+    # explicit that liveness is long-TTL monitoring, not tight gating, so a
+    # coarser interval is intentional, not a compromise. 30s ≈ 1.5 worker pings
+    # per cycle for a worker on the default ping interval — reasonably fresh
+    # without pushing on every single ping.
+    liveness_push_interval_s: float = 30.0
+
 
 def load_config() -> Config:
     """Собрать Config из окружения. Чистое чтение — не валидирует и не бросает."""
@@ -149,4 +159,5 @@ def load_config() -> Config:
         reclaim_idle_ms_video=_getenv_int("RECLAIM_IDLE_MS_VIDEO", 600_000),
         reclaim_idle_ms_data=_getenv_int("RECLAIM_IDLE_MS_DATA", 180_000),
         reclaim_idle_ms_ai=_getenv_int("RECLAIM_IDLE_MS_AI", 300_000),
+        liveness_push_interval_s=_getenv_float("LIVENESS_PUSH_INTERVAL_S", 30.0),
     )

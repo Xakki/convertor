@@ -14,6 +14,7 @@ from workers.common.logging_config import configure_logging
 from workers.gateway.config import load_config
 from workers.gateway.dlq_consumer import run_dlq_consumer_loop
 from workers.gateway.keydb import WORKER_TYPES, KeyDbGateway, build_client
+from workers.gateway.liveness import run_liveness_push_loop
 from workers.gateway.reclaim import run_reclaim_loop
 from workers.gateway.relay import RelayClient
 from workers.gateway.ws_server import WsGateway
@@ -28,12 +29,15 @@ async def main() -> None:
     client = build_client(cfg)
     keydb = KeyDbGateway(client)
     gateway = WsGateway(cfg, keydb)
-    # Отдельный relay-клиент для DLQ-consumer'а (не тот, что лениво создаёт
-    # WsGateway для result/fail-relay — независимый жизненный цикл/aclose).
+    # Отдельные relay-клиенты для DLQ-consumer'а и liveness-push (не тот, что
+    # лениво создаёт WsGateway для result/fail-relay) — независимые жизненные
+    # циклы/aclose, без общего connection-pool с ack-путём result/fail.
     dlq_relay = RelayClient(cfg.symfony_internal_url, cfg.gateway_internal_token)
+    liveness_relay = RelayClient(cfg.symfony_internal_url, cfg.gateway_internal_token)
 
     reclaim_task: asyncio.Task | None = None
     dlq_task: asyncio.Task | None = None
+    liveness_task: asyncio.Task | None = None
     try:
         await client.ping()
         # Idle-reclaim (s1-06): запускаем после ping — KeyDB точно доступен.
@@ -47,6 +51,13 @@ async def main() -> None:
             run_dlq_consumer_loop(keydb, dlq_relay, cfg),
             name="dlq-consumer",
         )
+        # Liveness-push (registry-06): батчи agregированных ping'ов → PHP
+        # internal endpoint, см. workers/gateway/liveness.py. Best-effort/
+        # non-fatal — сбой push НИКОГДА не роняет gateway (телеметрия).
+        liveness_task = asyncio.create_task(
+            run_liveness_push_loop(gateway.get_liveness_aggregator(), liveness_relay, cfg),
+            name="liveness-push",
+        )
         logger.info(
             "ws-gateway starting",
             extra={
@@ -57,19 +68,21 @@ async def main() -> None:
                 "wsBlockMs": cfg.ws_block_ms,
                 "reclaimIntervalS": cfg.reclaim_interval_s,
                 "dlqConsumerBlockMs": cfg.dlq_consumer_block_ms,
+                "livenessPushIntervalS": cfg.liveness_push_interval_s,
                 "streams": [f"conv.{t}" for t in WORKER_TYPES],
             },
         )
         await gateway.serve_forever()
     finally:
-        for task in (reclaim_task, dlq_task):
+        for task in (reclaim_task, dlq_task, liveness_task):
             if task is not None:
                 task.cancel()
-        for task in (reclaim_task, dlq_task):
+        for task in (reclaim_task, dlq_task, liveness_task):
             if task is not None:
                 with suppress(asyncio.CancelledError):
                     await task
         await dlq_relay.aclose()
+        await liveness_relay.aclose()
         await client.aclose()
 
 

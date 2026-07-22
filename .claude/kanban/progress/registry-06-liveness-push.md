@@ -154,3 +154,86 @@
   `/dlq-fail`) в карту эндпоинтов скилла `api-design`.
 - Расхождений с зафиксированным тимлидом контрактом не найдено — оба форка
   (status/metrics) реализованы ровно так, как согласовано в переписке.
+
+#### Python-зона
+
+Файлы: `workers/common/ws_client.py` (ready-фрейм), `workers/gateway/ws_server.py`,
+`workers/gateway/liveness.py` (новый), `workers/gateway/relay.py`, `workers/gateway/config.py`,
+`workers/gateway/__main__.py`, `workers/Makefile` (добавил новый тест-файл в `test-gateway`),
+`workers/tests/test_gateway_liveness_push.py` (новый). `app-symfony/` не трогал.
+
+- **Блокер `instanceId` — STOP-вопрос тимлиду ДО реализации.** Проверил код: gateway
+  (`ws_server.py::_handshake()`) до этой карты НЕ знал `instanceId` вообще — `ready`-фрейм нёс
+  только `workerId/workerType/slots/version/cpu/mem/load`, `ping` — только `cpu/mem/load`;
+  единственное место, где `instanceId` вообще существовал — HTTP `POST /worker/register`
+  (registry-02, `ws_client.py::_build_register_body()`), gateway в этом HTTP-обмене не участвует.
+  Предложил тимлиду: расширить `ready`-фрейм полем `instanceId` = ТА ЖЕ `_instance_id()`, что уже
+  используется в `_build_register_body()` — без отдельной деривации, гарантированно то же
+  значение. Тимлид подтвердил («Extend ready frame»). Реализовано: `_send_ready()` шлёт
+  `instanceId`, `_handshake()` его читает (аддитивно — `frame.get("instanceId")`, невалидное/
+  отсутствующее → `None`, СТАРЫЙ воркер без этого поля продолжает работать как раньше, просто
+  не трекается для liveness; job-диспетч от этого поля не зависит НИКАК).
+- **Агрегация** — новый модуль `workers/gateway/liveness.py::LivenessAggregator`, ключ
+  `(workerType, instanceId)`. `record_connect()` на успешный handshake, `record_ping()` на
+  каждый `ping`-фрейм (обновляет cpu/mem/load + `lastSeenAt`), `record_disconnect()` в
+  `finally` блока `handle()` (после teardown reader/dispatcher). Санитизация/валидация
+  `instanceId` ПОВТОРЕНА на стороне gateway (тот же charset-regex, что в `ws_client.py`) —
+  причина: PHP-эндпоинт (см. PHP-зону выше) отклоняет ВЕСЬ батч 400-кой на ОДНОЙ невалидной
+  записи — один битый/старый воркер не должен топить liveness-репортинг всех остальных в этом
+  же push-цикле.
+- **Push НЕ per-ping — батч на интервале.** `LIVENESS_PUSH_INTERVAL_S` (новый env, дефолт
+  **30с**, `Config.liveness_push_interval_s`) — отдельная asyncio-задача
+  `run_liveness_push_loop()`, запущена в `__main__.py` рядом с reclaim-loop/dlq-consumer.
+  Обоснование дефолта: воркерский `WS_PING_INTERVAL_S` = 20с (s1-08) — 30с даёт ~1.5 пинга на
+  цикл, разумная свежесть без пуша на каждый одиночный ping (собственно смысл батчинга).
+- **Endpoint/авторизация** — сверено с УЖЕ РЕАЛИЗОВАННЫМ PHP-эндпоинтом (см. PHP-зону выше,
+  готова к моменту моей реализации): `POST /api/v1/internal/worker/liveness`, тело
+  `{"instances":[...]}`, ответ `{"updated":int,"unknown":[...]}` — контракт совпал 1:1 с тем,
+  что дал тимлид, PHP ничего не пришлось перепроверять читкой кода отдельно (уже подтверждено
+  их Execution Log). Новый метод `RelayClient.post_liveness()` — база URL/токен те же
+  env-driven `SYMFONY_INTERNAL_URL`/`GATEWAY_INTERNAL_TOKEN`, что у result/fail/dlq-fail (ничего
+  нового не хардкожено). Отдельный `liveness_relay` instance в `__main__.py` (не тот, что
+  лениво создаёт `WsGateway` для result/fail, не `dlq_relay`) — независимый lifecycle/aclose.
+- **`unknown` — НЕ игнорируется, но и НЕ форсит re-register.** Gateway не может удалённо
+  заставить воркера перерегистрироваться — `register()` вызывается САМИМ воркером на его
+  собственный connect (`ws_client.py::_register()`), у gateway нет канала это спровоцировать
+  без насильного разрыва соединения этого воркера — а это прервало бы его in-flight задачу
+  ради чисто телеметрийной проблемы, худший trade-off, чем один цикл с устаревшей
+  capability-строкой. Решение: громкий `logger.error()` на каждую `unknown`-запись (workerType +
+  instanceId) — минимальная планка по ТЗ, задокументировано в докстринге `_push_once()`.
+- **Резилиенс (это то, что тимлид просил больше всего):**
+  - Push — ОТДЕЛЬНАЯ asyncio-задача, не на пути диспетча job'ов: медленный/подвисший PHP
+    задерживает только СЛЕДУЮЩИЙ liveness-цикл (await уступает event loop кооперативно),
+    WS-обработку других соединений не блокирует.
+    `LIVENESS_TIMEOUT_S=10.0` (короче `RELAY_TIMEOUT_S=30.0` result/fail-пути — телеметрия,
+    маленький JSON, не обязана ждать так же долго).
+  - Любой сбой (сеть, таймаут, не-2xx, не-JSON тело, тело не dict) — `RelayClient.post_liveness()`
+    возвращает `(False, None)`, НИКОГДА не бросает; `run_liveness_push_loop` дополнительно
+    оборачивает весь цикл в `try/except Exception` — цикл переживёт любую неожиданность.
+  - **Политика на сбой:** DROP+retry-next-cycle, БЕЗ backoff. Alive-записи не нужно
+    «ретраить» — они пересобираются заново из текущего состояния на КАЖДОМ цикле (следующий
+    push всё равно отправит свежие метрики). Pending-disconnect маркеры остаются в очереди
+    (ограниченной, см. ниже) и уходят в следующий цикл как есть — retry автоматический,
+    отдельного backoff не делал (интервал push и так 30с — уже достаточный натуральный
+    троттлинг; агрессивный backoff усложнил бы код ради сценария, где push и так почти
+    бесплатный маленький батч).
+  - **Ограничение памяти на churn (явно запрошено тимлидом):** `_alive` НЕ может расти
+    неограниченно — bounded реальным ресурсом (число одновременно открытых WS-соединений с
+    валидным instanceId); запись УДАЛЯЕТСЯ из `_alive` на disconnect (переезжает в
+    one-shot-маркер), не накапливается. `_pending_disconnects` — единственная структура,
+    которая теоретически могла бы расти неограниченно (если PHP недоступен долго при высоком
+    churn) → жёсткий кап `_MAX_PENDING_DISCONNECTS=2000`, при переполнении дропается САМЫЙ
+    старый маркер (лог warning) — телеметрия, не критичные данные, роутинг не затронут.
+    Дренится ПОЛНОСТЬЮ на каждый успешный push (`mark_pushed`) — disconnected-маркер шлётся
+    ОДИН раз, не вечно, alive-записи остаются и рефрешатся каждый цикл.
+- **Судьба ready-фрейма для СТАРЫХ воркеров** — аддитивное поле, обратная совместимость
+  проверена тестом `test_ws_ready_without_instance_id_backward_compat_not_tracked`: handshake/
+  ping/pong работают как раньше, просто инстанс не появляется в liveness-снапшоте.
+- **Тесты**: новый `workers/tests/test_gateway_liveness_push.py` (19 тестов, 4 уровня —
+  `LivenessAggregator` unit, `RelayClient.post_liveness` HTTP-форма, `run_liveness_push_loop`/
+  `_push_once` сквозной резилиенс, WS-уровень ready/ping/disconnect + backward-compat).
+  Добавил файл в список `workers/Makefile::test-gateway` — иначе он бы существовал, но
+  НИКОГДА не запускался в CI-пути (тот самый паттерн «guard, который никто не гоняет» из
+  предыдущей карты — не повторяю его здесь). Прогон: `make test-gateway` — 156 passed, 1
+  skipped (тот же, pre-existing, image/pdf2image); `make test-python` — все per-worker сьюты
+  (данные ниже в разделе QA/report team-lead'у).

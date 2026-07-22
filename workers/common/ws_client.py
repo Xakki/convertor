@@ -628,12 +628,21 @@ class WsClient:
             logger.warning("register failed (non-fatal)", extra={"error": str(exc)})
 
     async def _send_ready(self, ws) -> None:
-        """Handshake-фрейм ready (§4): идентичность + маршрутизация + версия + снимок."""
+        """Handshake-фрейм ready (§4): идентичность + маршрутизация + версия + снимок.
+
+        `instanceId` (registry-06): та же `_instance_id()`, что уже шлётся в теле
+        `register()` (registry-02) — НЕ отдельная деривация. Даёт gateway ключ
+        `(workerType, instanceId)` для агрегации liveness-пингов без нового
+        HTTP-round-trip'а; поле аддитивное — старый gateway её просто игнорирует,
+        а gateway, ожидающий её и не получивший (старый воркер), не трекает
+        liveness для этого соединения, но продолжает диспетчить задачи как обычно.
+        """
         cpu, mem, load = _load_snapshot()
         await ws.send(json.dumps({
             "type": "ready",
             "workerId": self._cfg.worker_id,
             "workerType": self._cfg.worker_type,
+            "instanceId": self._instance_id(),
             "slots": self._cfg.slots,
             "version": self._cfg.version,
             "cpu": cpu,
