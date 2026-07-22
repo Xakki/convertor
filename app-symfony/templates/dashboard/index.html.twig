@@ -1,0 +1,225 @@
+{% extends 'base.html.twig' %}
+
+{# dashboard-page-01: личный кабинет (view-only) — аккаунт + квоты + история.
+   Открытая оболочка (см. App\Controller\Web\DashboardController), auth-
+   состояние целиком клиентское (dashboardApp(), тот же паттерн, что и
+   headerNav()/converterApp() на `/`, см. комментарий в partials/
+   _header.html.twig). Повтор/удаление конверсий — вне скоупа. #}
+
+{% block title %}{{ 'dashboard.title'|trans }}{% endblock %}
+
+{% block body %}
+<div
+    x-data="dashboardApp()"
+    x-init="init()"
+    class="flex flex-1 flex-col"
+>
+    <main class="mx-auto w-full max-w-3xl px-4 py-8">
+        <h1 class="mb-6 text-2xl font-semibold text-slate-800">{{ 'dashboard.heading'|trans }}</h1>
+
+        <template x-if="error">
+            <div class="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="error"></div>
+        </template>
+
+        {# ── Приглашение войти — гость и аноним (authResolved гейтит появление
+           узла ТОЛЬКО после первой попытки refresh+/me, чтобы не мигать). ── #}
+        <template x-if="authResolved && !loggedIn">
+            <div class="mb-6 flex flex-wrap items-center gap-3 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <span>{{ 'dashboard.login_prompt'|trans }}</span>
+                <a
+                    href="/login"
+                    class="rounded bg-sky-500 px-3 py-1 text-xs font-medium text-white hover:bg-sky-600"
+                >{{ 'nav.login'|trans }}</a>
+            </div>
+        </template>
+
+        {# ── Аккаунт — только для реального пользователя (GET /api/v1/me). ── #}
+        <template x-if="authResolved && loggedIn">
+            <section class="mb-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 class="mb-3 text-sm font-semibold text-slate-600">{{ 'dashboard.account.heading'|trans }}</h2>
+                <div class="flex items-center gap-3">
+                    <template x-if="me.avatarUrl">
+                        <img :src="me.avatarUrl" alt="" class="h-12 w-12 rounded-full object-cover">
+                    </template>
+                    <template x-if="!me.avatarUrl">
+                        <span
+                            class="flex h-12 w-12 items-center justify-center rounded-full bg-slate-200 text-lg font-medium text-slate-600"
+                            x-text="avatarInitial()"
+                        ></span>
+                    </template>
+                    <div class="min-w-0">
+                        <p class="truncate text-sm font-medium text-slate-800">
+                            <a
+                                x-show="me.profileUrl"
+                                :href="me.profileUrl"
+                                target="_blank"
+                                rel="noopener"
+                                class="hover:underline"
+                                x-text="me.name"
+                            ></a>
+                            <span x-show="!me.profileUrl" x-text="me.name"></span>
+                        </p>
+                        <p x-show="me.username" class="truncate text-xs text-slate-500" x-text="'@' + me.username"></p>
+                        <p class="text-xs text-slate-400">
+                            <span class="font-medium text-slate-500">{{ 'home.quota.plan_label'|trans }}:</span>
+                            <span x-text="mePlanLabel"></span>
+                        </p>
+                    </div>
+                </div>
+            </section>
+        </template>
+
+        {# ── Квоты/лимиты — работает и для гостя, и для залогиненного. -1 =
+           безлимит, показываем переведённым словом (см. I18N.unlimited в
+           partials/_dashboard_app_script.html.twig), а не "-1" и не ∞. ── #}
+        <template x-if="quota.loaded">
+            <section class="mb-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 class="mb-3 text-sm font-semibold text-slate-600">{{ 'dashboard.quota.heading'|trans }}</h2>
+                <dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+                    <div>
+                        <dt class="text-xs text-slate-400">{{ 'home.quota.plan_label'|trans }}</dt>
+                        <dd class="font-medium text-slate-700" x-text="quotaPlanLabel"></dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs text-slate-400">{{ 'home.quota.conversions_label'|trans }}</dt>
+                        <dd class="font-medium text-slate-700" x-text="quotaLine(quota.conversions, quota.conversionsLimit)"></dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs text-slate-400">{{ 'home.quota.ai_label'|trans }}</dt>
+                        <dd class="font-medium text-slate-700" x-text="quotaLine(quota.aiConversions, quota.aiConversionsLimit)"></dd>
+                        <template x-if="quota.plan === 'guest'">
+                            <p class="text-xs text-slate-400">{{ 'home.quota.ai_guest_note'|trans }}</p>
+                        </template>
+                    </div>
+                    <div>
+                        <dt class="text-xs text-slate-400">{{ 'home.quota.max_file_label'|trans }}</dt>
+                        <dd class="font-medium text-slate-700" x-text="maxFileLabel(quota.maxUploadBytes)"></dd>
+                    </div>
+                </dl>
+            </section>
+        </template>
+
+        {# ── История конвертаций. Залогиненный — по JWT. Гость/аноним — по
+           guest-cookie, ТОЛЬКО при принятом cookie_consent (home-12, тот же
+           механизм, что и на `/` — см. init() в _dashboard_app_script.html.twig).
+           Пагинация — «Загрузить ещё» (limit/offset), total API не отдаёт. ── #}
+        <section class="mb-6">
+            <template x-if="loggedIn">
+                <h2 class="mb-3 text-sm font-semibold text-slate-600">{{ 'dashboard.history.heading'|trans }}</h2>
+            </template>
+            <template x-if="!loggedIn">
+                <div class="mb-3">
+                    <h2 class="text-sm font-semibold text-slate-600">{{ 'home.history_heading_guest'|trans }}</h2>
+                    <p class="mt-0.5 text-xs text-slate-400">{{ 'home.history_guest_note'|trans }}</p>
+                </div>
+            </template>
+
+            <template x-if="historyLoading">
+                <p class="text-sm text-slate-500">{{ 'common.loading'|trans }}</p>
+            </template>
+
+            <template x-if="!historyLoading && conversions.length === 0">
+                <p class="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
+                    {{ 'dashboard.history.empty'|trans }}
+                </p>
+            </template>
+
+            <template x-if="!historyLoading && conversions.length > 0">
+                <div>
+                    <div class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm">
+                        <template x-for="c in conversions" :key="c.id">
+                            <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                                <div class="min-w-0">
+                                    <p class="text-sm font-medium text-slate-700">
+                                        <span x-text="c.from_format || '—'"></span>
+                                        <span class="text-slate-400"> → </span>
+                                        <span x-text="c.to_format"></span>
+                                        <template x-if="c.is_ai">
+                                            <span class="ml-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">{{ 'dashboard.history.ai_badge'|trans }}</span>
+                                        </template>
+                                    </p>
+                                    <p class="truncate text-xs text-slate-500">
+                                        <span x-text="c.source_name"></span>
+                                        <span class="text-slate-400" x-text="'· ' + humanSize(c.source_size)"></span>
+                                        <template x-if="c.result_size != null">
+                                            <span class="text-slate-400" x-text="'→ ' + humanSize(c.result_size)"></span>
+                                        </template>
+                                    </p>
+                                    <p class="text-xs text-slate-400">
+                                        <span x-text="formatDate(c.created_at)"></span>
+                                        <template x-if="c.processing_ms != null">
+                                            <span x-text="'· ' + I18N.durationPrefix + formatDuration(c.processing_ms)"></span>
+                                        </template>
+                                    </p>
+                                </div>
+                                <div class="flex flex-wrap items-center justify-end gap-2">
+                                    <span
+                                        class="rounded-full px-3 py-1 text-xs font-medium"
+                                        :class="{
+                                            'bg-slate-100 text-slate-600': isActive(c.status),
+                                            'bg-green-100 text-green-700': c.status === 'completed',
+                                            'bg-red-100 text-red-700': isFailed(c.status),
+                                        }"
+                                        x-text="statusLabel(c.status)"
+                                    ></span>
+                                    <template x-if="!sourceGone[c.id]">
+                                        <button
+                                            @click="downloadSource(c.id, c.source_name)"
+                                            :disabled="sourceLoadingId === c.id"
+                                            class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                                        >
+                                            <span x-show="sourceLoadingId !== c.id">{{ 'home.history_source'|trans }}</span>
+                                            <span x-show="sourceLoadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
+                                        </button>
+                                    </template>
+                                    <template x-if="sourceGone[c.id]">
+                                        <span class="text-xs text-slate-400">{{ 'home.history_source_gone'|trans }}</span>
+                                    </template>
+                                    <template x-if="c.previewable">
+                                        <button
+                                            @click="openPreview(c.id, c.to_format)"
+                                            class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+                                        >{{ 'home.history_preview'|trans }}</button>
+                                    </template>
+                                    <template x-if="c.status === 'completed'">
+                                        <button
+                                            @click="downloadConversion(c.id, c.to_format)"
+                                            :disabled="downloadingId === c.id"
+                                            class="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:bg-slate-300"
+                                        >
+                                            <span x-show="downloadingId !== c.id">{{ 'common.download'|trans }}</span>
+                                            <span x-show="downloadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <template x-if="historyMore">
+                        <div class="mt-3 text-center">
+                            <button
+                                @click="loadHistory(false)"
+                                :disabled="historyLoadingMore"
+                                class="rounded-lg border border-slate-300 px-4 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                            >
+                                <span x-show="!historyLoadingMore">{{ 'dashboard.history.load_more'|trans }}</span>
+                                <span x-show="historyLoadingMore" x-cloak>{{ 'common.loading'|trans }}</span>
+                            </button>
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </section>
+    </main>
+
+    {# ── Модалка текстового предпросмотра — тот же partial, что и на `/`
+       (home-09), переиспользован как есть (читает preview.*/closePreview()/
+       downloadPreview() — состав идентичен converterApp()). Image/pdf-вьюер и
+       audio/video-плеер НЕ подключены — previewable из истории по построению
+       текстовый (см. комментарий в _dashboard_app_script.html.twig). ── #}
+    {% include 'partials/_converter_preview_modal.html.twig' %}
+</div>
+
+{% include 'partials/_dashboard_app_script.html.twig' %}
+{% endblock %}

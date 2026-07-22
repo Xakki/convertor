@@ -140,6 +140,29 @@ home:
         ms: 'мс'
         sec: 'с'
 
+# Личный кабинет (dashboard-page-01), только просмотр: templates/dashboard/
+# index.html.twig + partials/_dashboard_app_script.html.twig. Переиспользует
+# home.quota.*/home.units.*/home.status.*/home.error.*/home.history_source*/
+# home.history_preview/common.* там, где смысл совпадает буквально — новые
+# ключи здесь только для того, что специфично именно для кабинета.
+dashboard:
+    title: 'Личный кабинет — Конвертер файлов'
+    heading: 'Личный кабинет'
+    login_prompt: 'Войдите, чтобы видеть данные аккаунта и полную историю конвертаций.'
+    account:
+        heading: 'Аккаунт'
+    quota:
+        heading: 'Квоты'
+    history:
+        heading: 'История конвертаций'
+        empty: 'Пока нет конвертаций.'
+        ai_badge: 'AI'
+        load_more: 'Загрузить ещё'
+        error:
+            expired: 'Срок хранения результата истёк, он больше недоступен.'
+            not_ready: 'Эта конвертация ещё не завершена.'
+            unsupported: 'Этот результат нельзя предпросмотреть.'
+
 login:
     title: 'Вход — Конвертер файлов'
     heading: 'Вход'
@@ -163,6 +186,9 @@ nav:
     docs: 'Документация'
     bot: 'Бот'
     admin: 'Админка'
+    # dashboard-page-01: ссылка на страницу /dashboard, видна только
+    # залогиненным (x-show="loggedIn" в partials/_header.html.twig).
+    dashboard: 'Кабинет'
     login: 'Войти'
 
 # Общий футер (home-01-header-nav), partials/_footer.html.twig. Легал-ссылки
