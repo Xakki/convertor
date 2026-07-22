@@ -46,6 +46,12 @@ parameters:
     env(FILE_RETENTION_HOURS_TARIFF_PAID): '720'      # ось tariff: paid, 720 = 30 суток
     env(FILE_RETENTION_HOURS_CATEGORY_VIDEO): '48'    # ось category: video
 
+    # Long-TTL GC worker_capabilities (registry-06, Symfony Scheduler, ежечасно).
+    # Часы; строки с last_seen старше — удаляются, КРОМЕ seed (instance_id=
+    # '__seed__', см. WorkerCapabilityGcService). 168 = 7 суток — "long-TTL":
+    # заведомо больше любого разумного окна простоя/деплоя воркера.
+    env(WORKER_CAPABILITY_GC_TTL_HOURS): '168'
+
     # Доверенные прокси для getClientIp() (guest rate-limit по IP). По умолчанию —
     # приватные диапазоны (Symfony keyword `private_ranges`): доверяем nginx в
     # docker-сети. В проде можно сузить до конкретного адреса фронта.
@@ -234,3 +240,8 @@ services:
 
     App\Repository\WorkerCapabilityRepository:
         public: true
+
+    # Long-TTL GC worker_capabilities по расписанию (Scheduler) — registry-06.
+    App\Service\Worker\WorkerCapabilityGcService:
+        arguments:
+            $ttlHours: '%env(int:WORKER_CAPABILITY_GC_TTL_HOURS)%'

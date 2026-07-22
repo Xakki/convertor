@@ -66,3 +66,91 @@
 **Эпик:** `[[registry-00-self-registration]]`
 
 **Status:** in progress
+
+## Execution Log
+
+#### PHP-зона (backend-php)
+
+- **Auth-контракт сверен с кодом, дрейфа не найдено:** firewall `internal_api`
+  (`^/api/v1/internal`), `GatewayInternalAuthenticator` читает
+  `GATEWAY_INTERNAL_TOKEN`, `access_control` требует `IS_AUTHENTICATED_FULLY`,
+  неверный/отсутствующий/чужой (worker_api) токен → 401. Эндпоинт добавлен в
+  существующий `InternalWorkerController` (`#[Route('/api/v1/internal/worker')]`).
+- **`POST /api/v1/internal/worker/liveness`** — батч-пуш `{"instances":[...]}`,
+  ответ `{"updated":<int>,"unknown":[...]}`. UPDATE ONLY —
+  `WorkerCapabilityRepository::updateLiveness()` никогда не вставляет строку
+  (см. ниже). Malformed-batch policy: ЛЮБАЯ невалидная запись отклоняет ВЕСЬ
+  батч 400-кой (не partial-apply) — обосновано и задокументировано в
+  докблоке контроллера: внутренний доверенный контракт gateway↔PHP, не
+  публичный API; малформед-запись почти всегда сигнализирует версийный
+  рассинхрон gateway, а long-TTL GC (дни) делает разовый отклонённый батч
+  несущественным.
+- **`updateLiveness()` — 2 запроса, НЕ полагается на affected-rows UPDATE**
+  (SELECT существующих ключей → CASE-batched UPDATE только по найденным).
+  Реализовано так намеренно (не наивный affected-rows подсчёт): MySQL/MariaDB
+  по умолчанию считают ИЗМЕНЁННЫЕ, а не СОВПАВШИЕ строки — идемпотентный
+  повторный пуш с тем же `lastSeenAt` дал бы affected=0 и ложно попал бы в
+  `unknown`, вынуждая gateway форсировать re-register на пустом месте.
+- **`status` (a) — ХРАНИТСЯ**, как согласовано: новая колонка
+  `worker_capabilities.status` (`App\Enum\WorkerLivenessStatus`:
+  Alive/Disconnected/Unknown), миграция `Version20260722212523` (hand-written,
+  тот же повод не использовать `migrate-diff`, что registry-02). НЕ гейтит
+  роутинг — `ConversionRegistry::buildMatrixFromCapabilities()` никогда не
+  читает `getStatus()`, явный защитный докблок на месте + отдельный тест
+  `ConversionRegistryLivenessStatusTest::testDisconnectedInstanceStillServesItsPairs`
+  (disconnected-инстанс продолжает отдавать свои пары до GC). GC тоже не
+  смотрит на `status` — доказано парой тестов в обе стороны
+  (`testDisconnectedButFreshInstanceSurvivesGc`,
+  `testAliveButAncientInstanceIsDeleted`).
+  - Seed-строки получают `unknown` (НЕ `alive`/`disconnected` — обе были бы
+    нечестными: seed не живой процесс и никогда не получает liveness-пуш).
+    DEFAULT колонки = `'unknown'`, поэтому это работает автоматически на
+    КАЖДОМ прогоне миграций с нуля (registry-03 INSERT предшествует этой
+    ALTER'е и ничего не знает о колонке) — историческая миграция не
+    редактировалась.
+  - `WorkerCapabilityRepository::upsert()` (т.е. `register()`) теперь
+    безусловно сбрасывает `status` в `alive` и на INSERT, и на
+    ON DUPLICATE KEY UPDATE — реконнект воркера это живое соединение, даже
+    если до этого он был помечен `disconnected`. Покрыто тестом
+    `testRegisterResetsStatusToAliveOnReconnect`.
+- **`metrics` (b) — ACCEPT-AND-IGNORE**, как согласовано: форма валидируется
+  (malformed → 400, часть общей batch-policy), не персистится. Схема НЕ
+  тронута — ни колонки, ни второй миграции. Причина и явный "это не баг"
+  маркер — в докблоке `liveness()`: ни один текущий потребитель (в т.ч.
+  `[[registry-07-admin-workers-page]]`) метрики не читает.
+- **GC** — `WorkerCapabilityGcService` + `WorkerCapabilityGcMessage`/Handler,
+  ежечасный тик через тот же Scheduler-транспорт, что `FileCleanupMessage`
+  (`src/Schedule.php`). TTL — `WORKER_CAPABILITY_GC_TTL_HOURS` (дефолт 168ч =
+  7 суток). Seed-строки исключены безусловно (`instance_id != '__seed__'` в
+  WHERE) — 4 живых теста против convertor-test, включая смешанный батч
+  (seed+non-seed в одном прогоне), доказывающий что исключение per-row, а не
+  случайный skip-всего-при-наличии-seed. При `deleted > 0` вызывает
+  `ConversionRegistry::invalidateMatrix()` — без этого удалённые пары могли
+  бы оставаться в `/formats` до часа (registry-05 cache TTL) вместо
+  немедленного исчезновения.
+- **Деградация `/formats`/submit при GC последнего живого инстанса
+  workerType** (запрошено тимлидом явно):
+  - Для ВСЕХ 6 сегодняшних registry-03 seed-типов (document/image/audio/
+    video/data/ai) — матрица деградирует к статичному seed-снапшоту, НЕ к
+    пустой: `buildMatrixFromCapabilities()` объединяет все оставшиеся ряды
+    (включая seed), так что seed-пары продолжают обслуживать submit/formats
+    как временный fallback.
+  - Для гипотетического будущего workerType БЕЗ seed-строки — его пары
+    исчезают из матрицы полностью: `/formats` их не покажет, submit отдаст
+    честный 400. Это НЕ регрессия, а ровно то поведение, которое
+    `[[registry-05-drop-hardcode]]` сделало намеренным.
+- **Находка при прогоне (операционная, не баг карты):** `test-drift`
+  (`workers/tests/test_routing_drift.py`) гоняет `dump-matrix.php` БЕЗ
+  `APP_ENV=test` — т.е. против DEV-базы, не `convertor-test`. Новая миграция
+  была нужна в ОБЕИХ БД (`make test-db-setup` для test + `make migrate` для
+  dev) — без второго прогона `make test-php-live` падал с "Unknown column
+  't0.status'" на dev-стороне. Стоит иметь в виду для будущих карт со
+  схемой: одного `test-db-setup` недостаточно.
+- **QA:** `make phpstan` — `[OK] No errors`; `make cs` → `make cs-check` —
+  чисто; `make test-php-live` — `OK (449 tests, 1826 assertions)`, drift 2/2;
+  golden-фикстура сверена `diff` — без изменений (status не влияет на
+  `getSupportedFormats()`/`streamFor()`).
+- **Доп. drift-фикс:** добавил `/liveness` (и отсутствовавший ранее
+  `/dlq-fail`) в карту эндпоинтов скилла `api-design`.
+- Расхождений с зафиксированным тимлидом контрактом не найдено — оба форка
+  (status/metrics) реализованы ровно так, как согласовано в переписке.

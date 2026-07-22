@@ -384,6 +384,17 @@ class ConversionRegistry
      * объединяются (union) построчно; повторяющиеся пары дедуплицируются самой
      * структурой ассоциативного массива по правилу ранга выше.
      *
+     * registry-06: {@see WorkerCapability::getStatus()} (liveness alive/
+     * disconnected/unknown) is DELIBERATELY never read here. Liveness is a
+     * monitoring signal, not a routing input (epic Decisions: "Eviction =
+     * long-TTL GC, NOT short liveness gating") — a `disconnected` instance
+     * keeps serving its declared pairs until GC actually removes its row
+     * (see {@see \App\Service\Worker\WorkerCapabilityGcService}). Do NOT add
+     * a `$cap->getStatus() === Disconnected → skip` filter to this loop; that
+     * is exactly the regression `[[registry-06-liveness-push]]` warns future
+     * changes against, and it is covered by a dedicated test
+     * (`ConversionRegistryLivenessStatusTest`).
+     *
      * @param WorkerCapability[] $capabilities
      * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
      */

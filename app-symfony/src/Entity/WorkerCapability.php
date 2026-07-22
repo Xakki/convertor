@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Enum\WorkerLivenessStatus;
 use App\Repository\WorkerCapabilityRepository;
 use Doctrine\ORM\Mapping as ORM;
 
@@ -58,6 +59,20 @@ class WorkerCapability
     private \DateTimeImmutable $lastSeen;
 
     /**
+     * Liveness-статус (registry-06) — ОТДЕЛЬНЫЙ факт от {@see $lastSeen}, см.
+     * {@see WorkerLivenessStatus}. НЕ входит в критерии выбора воркера для
+     * маршрутизации — {@see \App\Service\Conversion\ConversionRegistry}
+     * никогда не читает это поле. Дефолт `Alive` — намеренно НЕ конструкторный
+     * параметр (см. {@see setStatus()}): реальная строка создаётся нативным
+     * SQL в {@see WorkerCapabilityRepository::upsert()}, минуя этот
+     * конструктор целиком; дефолт здесь имеет значение только для кода,
+     * который строит `WorkerCapability` напрямую в PHP (тестовые фикстуры),
+     * а не для реальных БД-строк — их статус всегда приходит из колонки.
+     */
+    #[ORM\Column(type: 'string', length: 20, enumType: WorkerLivenessStatus::class)]
+    private WorkerLivenessStatus $status = WorkerLivenessStatus::Alive;
+
+    /**
      * @param array<string, mixed> $capabilities
      */
     public function __construct(string $workerType, string $instanceId, array $capabilities)
@@ -94,5 +109,17 @@ class WorkerCapability
     public function getLastSeen(): \DateTimeImmutable
     {
         return $this->lastSeen;
+    }
+
+    public function getStatus(): WorkerLivenessStatus
+    {
+        return $this->status;
+    }
+
+    public function setStatus(WorkerLivenessStatus $status): self
+    {
+        $this->status = $status;
+
+        return $this;
     }
 }
