@@ -15,10 +15,17 @@ declare(strict_types=1);
  * Rewritten (registry-04) to build the matrix through the real DI container
  * (`App\Kernel`), reading `ConversionRegistry` backed by the LIVE
  * `WorkerCapabilityRepository`/DB — deliberately NOT `new ConversionRegistry()`
- * with no constructor args, which would resurrect the hardcoded fallback path
- * (dead at runtime on any migrated environment since the registry-03 seed
- * migration made the capability table non-empty) and make this tool validate
- * nothing while still printing a plausible-looking snapshot.
+ * with no constructor args. At the time this reasoning was written, that would
+ * have resurrected the hardcoded fallback path (dead at runtime on any migrated
+ * environment since the registry-03 seed migration made the capability table
+ * non-empty) and made this tool validate nothing while still printing a
+ * plausible-looking snapshot. registry-05 later deleted that fallback outright
+ * — repository=null now yields an EMPTY matrix — so the same no-args call
+ * would instead make every downstream check below (`$capabilities === []`,
+ * `$formats === []`) fire immediately; the outcome (refuse to print, exit 1)
+ * is the same, but going through the container is still correct: it's the
+ * only way this script exercises the REAL DB state instead of a guaranteed-empty
+ * stub.
  *
  * `ConversionRegistry`/`WorkerCapabilityRepository` are marked `public: true`
  * in `config/services.yaml` specifically so this CLI script can fetch them —

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Service\Conversion;
 
 use App\Service\Conversion\ConversionRegistry;
+use App\Tests\Support\SeedsConversionRegistry;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -19,11 +20,13 @@ use PHPUnit\Framework\TestCase;
  */
 final class ConversionRegistryTextSourceTest extends TestCase
 {
+    use SeedsConversionRegistry;
+
     private ConversionRegistry $registry;
 
     protected function setUp(): void
     {
-        $this->registry = new ConversionRegistry();
+        $this->registry = $this->newSeedRegistry();
     }
 
     public function testMarkupSourceIsAllowed(): void

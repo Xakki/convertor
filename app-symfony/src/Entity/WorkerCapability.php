@@ -14,10 +14,11 @@ use Doctrine\ORM\Mapping as ORM;
  * с одинаковым воркером, или ffmpeg, регистрирующий audio- и video-стрим раздельно
  * под разными workerType, но с общим instanceId процесса).
  *
- * Используется ConversionRegistry для построения матрицы конвертаций из БД
- * вместо hardcoded workerCapabilities() (Phase 1: с fallback на hardcode при
- * пустой/недоступной БД). lastSeen — только для мониторинга; liveness не
- * используется для маршрутизации в Phase 1.
+ * Используется ConversionRegistry для построения матрицы конвертаций — БД
+ * единственный источник (registry-05: hardcoded-фолбэк удалён; пустая/
+ * недоступная БД отдаёт честную пустую матрицу, не подставное значение).
+ * lastSeen — только для мониторинга; liveness не используется для
+ * маршрутизации в Phase 1.
  */
 #[ORM\Entity(repositoryClass: WorkerCapabilityRepository::class)]
 #[ORM\Table(name: 'worker_capabilities')]

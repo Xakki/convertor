@@ -20,11 +20,12 @@ use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
  * proving the capability-config refactor (and the OCR additions) introduce no
  * unintended route regressions for audio/video/document/data/markup/stt/tts.
  *
- * registry-04: moved off `new ConversionRegistry()` (repository=null → ALWAYS
- * the hardcoded fallback, dead at runtime on any migrated environment since
- * the registry-03 seed migration). Now built from the REAL DB-backed
- * repository, through the container (KernelTestCase — requires convertor-test,
- * migrated), like production does.
+ * registry-04: moved off `new ConversionRegistry()` (repository=null was
+ * ALWAYS the hardcoded fallback then, dead at runtime on any migrated
+ * environment since the registry-03 seed migration — and since registry-05
+ * deleted that fallback entirely, repository=null now yields an EMPTY matrix
+ * instead). Built from the REAL DB-backed repository, through the container
+ * (KernelTestCase — requires convertor-test, migrated), like production does.
  *
  * DB rows are filtered to `instanceId === '__seed__'` (the registry-03 seed,
  * see Version20260722150301) rather than trusting "whatever else happens to

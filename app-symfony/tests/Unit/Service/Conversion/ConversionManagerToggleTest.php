@@ -11,12 +11,12 @@ use App\Exception\ConversionDisabledException;
 use App\Repository\ConversionRepository;
 use App\Repository\ConversionToggleRepository;
 use App\Service\Conversion\ConversionManager;
-use App\Service\Conversion\ConversionRegistry;
 use App\Service\Conversion\ConversionToggleService;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
+use App\Tests\Support\SeedsConversionRegistry;
 use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
@@ -35,6 +35,8 @@ use Symfony\Component\Messenger\MessageBusInterface;
  */
 final class ConversionManagerToggleTest extends TestCase
 {
+    use SeedsConversionRegistry;
+
     public function testDisabledPairRejectedBeforeSideEffects(): void
     {
         // jpg→txt отключена админом → режется до любых эффектов.
@@ -92,7 +94,7 @@ final class ConversionManagerToggleTest extends TestCase
         }
 
         return new ConversionManager(
-            new ConversionRegistry(),
+            $this->newSeedRegistry(),
             $this->createStub(ConversionRepository::class),
             $quota,
             $em,

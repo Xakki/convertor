@@ -8,65 +8,102 @@ use App\Entity\WorkerCapability;
 use App\Enum\FileCategory;
 use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionRegistry;
+use App\Tests\Support\ConversionRegistrySeedFixture;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\Cache\Adapter\ArrayAdapter;
 
 /**
- * Проверяет логику выбора источника матрицы в ConversionRegistry:
- *   - БД пустая → hardcoded fallback;
- *   - БД недоступна (exception) → hardcoded fallback;
- *   - БД содержит записи → матрица строится из БД.
+ * Проверяет логику выбора источника матрицы в ConversionRegistry.
+ *
+ * registry-05: hardcoded fallback (`workerCapabilities()`/`buildMatrixFromHardcode()`)
+ * удалён — БД единственный источник. Три вырожденных пути (repository=null,
+ * DB-исключение, БД пуста) отдают ЧЕСТНУЮ пустую матрицу, НЕ подставное
+ * значение — см. класс-докблок {@see ConversionRegistry::buildRoutingPairs()}.
+ * Непустая БД по-прежнему строит матрицу как раньше — эти тесты не изменились.
  */
 final class ConversionRegistryFallbackTest extends TestCase
 {
-    /** БД пустая — должен использоваться hardcoded fallback. */
-    public function testUsesHardcodedFallbackWhenDbEmpty(): void
+    /** repository = null (тестовый конструктор без DI) — пустая матрица, без лога. */
+    public function testEmptyMatrixWhenNoRepository(): void
     {
-        $repo = $this->createStub(WorkerCapabilityRepository::class);
-        $repo->method('findAllCapabilities')->willReturn([]);
+        $registry = new ConversionRegistry();
 
-        $registry = new ConversionRegistry($repo);
-
-        // Пары из hardcoded matrix присутствуют
-        self::assertTrue($registry->isSupported('jpg', 'png'));
-        self::assertTrue($registry->isSupported('mp3', 'wav'));
-        self::assertTrue($registry->isSupported('docx', 'pdf'));
-        // AI-пары теперь плоские: mp3→txt (STT, isAi=true, category=audio)
-        self::assertTrue($registry->isSupported('mp3', 'txt'));
-        self::assertTrue($registry->isAi('mp3', 'txt'));
-        self::assertSame('audio', $registry->getCategory('mp3', 'txt')->value);
-        // TTS: txt→mp3 (isAi=true, category=document)
-        self::assertTrue($registry->isSupported('txt', 'mp3'));
-        self::assertTrue($registry->isAi('txt', 'mp3'));
-        self::assertSame('document', $registry->getCategory('txt', 'mp3')->value);
-        // Виртуальные ключи удалены
-        self::assertFalse($registry->isSupported('mp3_stt', 'txt'), 'virtual STT key must not exist');
-        self::assertFalse($registry->isSupported('txt_tts', 'mp3'), 'virtual TTS key must not exist');
+        self::assertSame([], $registry->getSupportedFormats());
+        self::assertFalse($registry->isSupported('mp4', 'avi'));
     }
 
-    /** БД недоступна (exception) — должен использоваться hardcoded fallback. */
-    public function testUsesHardcodedFallbackWhenDbUnreachable(): void
+    /** БД недоступна (exception) — пустая матрица + громкий error-лог, не throw. */
+    public function testEmptyMatrixAndLoudErrorWhenDbUnreachable(): void
     {
         $repo = $this->createStub(WorkerCapabilityRepository::class);
         $repo->method('findAllCapabilities')->willThrowException(new \RuntimeException('Connection refused'));
 
-        $registry = new ConversionRegistry($repo);
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())
+            ->method('error')
+            ->with($this->stringContains('worker_capabilities'), $this->arrayHasKey('error'));
 
-        self::assertTrue($registry->isSupported('jpg', 'png'));
-        self::assertSame('image', $registry->streamFor('jpg', 'png'));
-        self::assertSame('document', $registry->streamFor('docx', 'pdf'));
+        $registry = new ConversionRegistry($repo, null, $logger);
+
+        self::assertSame([], $registry->getSupportedFormats());
+        self::assertFalse($registry->isSupported('jpg', 'png'));
     }
 
-    /** repository = null (unit test без DI) — должен использоваться hardcoded fallback. */
-    public function testUsesHardcodedFallbackWithNoRepository(): void
+    /** БД пуста (таблица без строк) — пустая матрица + громкий error-лог, не throw. */
+    public function testEmptyMatrixAndLoudErrorWhenDbEmpty(): void
     {
-        $registry = new ConversionRegistry();
+        $repo = $this->createStub(WorkerCapabilityRepository::class);
+        $repo->method('findAllCapabilities')->willReturn([]);
 
-        self::assertTrue($registry->isSupported('mp4', 'avi'));
-        self::assertSame('video', $registry->streamFor('mp4', 'avi'));
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())
+            ->method('error')
+            ->with($this->stringContains('worker_capabilities'));
+
+        $registry = new ConversionRegistry($repo, null, $logger);
+
+        self::assertSame([], $registry->getSupportedFormats());
+        self::assertFalse($registry->isSupported('docx', 'pdf'));
     }
 
-    /** БД содержит данные — матрица строится из БД, не из hardcode. */
+    /**
+     * Кеш не должен замораживать пустой/ошибочный результат (advisor review):
+     * без этого guard'а кратковременный DB blip на "холодном" кеше заморозил
+     * бы честную пустую матрицу на весь TTL (1ч) — секундный сбой превращался
+     * бы в часовой отказ `/formats`. Две отдельные инстанции ConversionRegistry
+     * с ОБЩИМ кеш-пулом симулируют два HTTP-запроса: первый ловит blip
+     * (не кешируется), второй должен снова обратиться к БД и увидеть уже
+     * восстановленные данные — а не застрявший пустой снапшот.
+     */
+    public function testCacheDoesNotPersistEmptyOrErrorResult(): void
+    {
+        $cache     = new ArrayAdapter();
+        $callCount = 0;
+
+        $repo = $this->createStub(WorkerCapabilityRepository::class);
+        $repo->method('findAllCapabilities')->willReturnCallback(function () use (&$callCount): array {
+            ++$callCount;
+            if ($callCount === 1) {
+                throw new \RuntimeException('transient DB blip');
+            }
+
+            return ConversionRegistrySeedFixture::capabilities();
+        });
+
+        // "Запрос 1": холодный кеш, БД временно недоступна → пустая матрица.
+        $registryA = new ConversionRegistry($repo, $cache);
+        self::assertFalse($registryA->isSupported('jpg', 'png'));
+        self::assertSame(1, $callCount);
+
+        // "Запрос 2": тот же кеш-пул, БД уже восстановилась → матрица ДОЛЖНА
+        // быть перестроена (не унаследовать замороженный пустой снапшот).
+        $registryB = new ConversionRegistry($repo, $cache);
+        self::assertTrue($registryB->isSupported('jpg', 'png'));
+        self::assertSame(2, $callCount, 'blip must NOT have been cached — DB must be re-queried');
+    }
+
+    /** БД содержит данные — матрица строится из БД. */
     public function testBuildsMatrixFromDbWhenNonEmpty(): void
     {
         $blob = [
@@ -257,57 +294,6 @@ final class ConversionRegistryFallbackTest extends TestCase
         self::assertFalse($registry->isSupported('mp3_stt', 'txt'));
     }
 
-    /** AI-пары из DB-пути идентичны AI-парам из hardcoded fallback. */
-    public function testDbPathAiPairsMatchHardcodedFallback(): void
-    {
-        $aiBlob = [
-            'workerType'  => 'ai',
-            'isAi'        => true,
-            'streams'     => ['conv.ai'],
-            'routingKeys' => ['ai'],
-            'matrix'      => [
-                'mp3'  => ['txt', 'srt', 'vtt'],
-                'wav'  => ['txt', 'srt', 'vtt'],
-                'ogg'  => ['txt', 'srt', 'vtt'],
-                'm4a'  => ['txt', 'srt', 'vtt'],
-                'opus' => ['txt', 'srt', 'vtt'],
-                'flac' => ['txt', 'srt', 'vtt'],
-                'txt'  => ['mp3', 'wav', 'ogg', 'json'],
-                'md'   => ['mp3', 'wav', 'ogg'],
-            ],
-            'matrix_categories' => [
-                'mp3'  => 'audio',
-                'wav'  => 'audio',
-                'ogg'  => 'audio',
-                'm4a'  => 'audio',
-                'opus' => 'audio',
-                'flac' => 'audio',
-                'txt'  => 'document',
-                'md'   => 'document',
-            ],
-        ];
-
-        $capAi = $this->createStub(WorkerCapability::class);
-        $capAi->method('getWorkerType')->willReturn('ai');
-        $capAi->method('getCapabilities')->willReturn($aiBlob);
-
-        $repo = $this->createStub(WorkerCapabilityRepository::class);
-        $repo->method('findAllCapabilities')->willReturn([$capAi]);
-
-        $dbRegistry  = new ConversionRegistry($repo);
-        $hardcodeReg = new ConversionRegistry();
-
-        $key      = static fn (array $e): string => "{$e['from']}→{$e['to']}|{$e['category']}";
-        $aiFilter = static fn (array $e): bool => $e['isAi'];
-
-        $dbKeys       = array_map($key, array_values(array_filter($dbRegistry->getSupportedFormats(), $aiFilter)));
-        $hardcodeKeys = array_map($key, array_values(array_filter($hardcodeReg->getSupportedFormats(), $aiFilter)));
-        sort($dbKeys);
-        sort($hardcodeKeys);
-
-        self::assertSame($hardcodeKeys, $dbKeys, 'AI pairs from DB path must match hardcoded fallback');
-    }
-
     /**
      * AI-воркер зарегистрирован, но blob лишён matrix_categories:
      *   - пары этого источника отбрасываются (не попадают в матрицу);
@@ -430,15 +416,17 @@ final class ConversionRegistryFallbackTest extends TestCase
     public function testInvalidateMatrixResetsPerRequestCache(): void
     {
         $callCount = 0;
-        $repo      = $this->createMock(WorkerCapabilityRepository::class);
+        $repo      = $this->createStub(WorkerCapabilityRepository::class);
         $repo->method('findAllCapabilities')->willReturnCallback(function () use (&$callCount): array {
             ++$callCount;
 
-            return [];
+            return ConversionRegistrySeedFixture::capabilities();
         });
 
         $registry = new ConversionRegistry($repo);
 
+        // (capabilities() непустой намеренно — с пустым результатом каждый вызов
+        // сейчас логировал бы error(); здесь важен только счётчик обращений к БД.)
         // Первый доступ — строит матрицу (1 вызов к БД)
         $registry->isSupported('jpg', 'png');
         self::assertSame(1, $callCount);

@@ -18,7 +18,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class ConversionRegistryCapabilityWarningsTest extends TestCase
 {
-    /** Нет репозитория (unit-тест без DI, hardcoded fallback) — warnings пустой. */
+    /** Нет репозитория (unit-тест без DI) — warnings пустой. */
     public function testNoWarningsWithoutRepository(): void
     {
         $registry = new ConversionRegistry();
