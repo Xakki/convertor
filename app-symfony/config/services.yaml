@@ -245,3 +245,9 @@ services:
     App\Service\Worker\WorkerCapabilityGcService:
         arguments:
             $ttlHours: '%env(int:WORKER_CAPABILITY_GC_TTL_HOURS)%'
+
+    # Обзор воркеров admin-панели (registry-07) — TTL ТОТ ЖЕ env, что реальный
+    # GC выше (WorkerCapabilityGcService), намеренно не второй литерал.
+    App\Service\Admin\WorkerStatsProvider:
+        arguments:
+            $ttlHours: '%env(int:WORKER_CAPABILITY_GC_TTL_HOURS)%'
