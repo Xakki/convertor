@@ -224,3 +224,13 @@ services:
     App\Controller\Admin\Api\ConversionLogController:
         arguments:
             $graylogUrl: '%env(GRAYLOG_URL)%'
+
+    # registry-04: `public: true` ТОЛЬКО для CLI-тулинга `bin/dump-matrix.php` —
+    # это standalone-скрипт (не App\Command\*), который сам грузит Kernel и
+    # достаёт сервисы напрямую из контейнера, а не через autowire-конструктор.
+    # Application-код эти сервисы никогда так не получает — везде обычный DI.
+    App\Service\Conversion\ConversionRegistry:
+        public: true
+
+    App\Repository\WorkerCapabilityRepository:
+        public: true
