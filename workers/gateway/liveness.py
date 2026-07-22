@@ -257,8 +257,17 @@ async def _push_once(aggregator: LivenessAggregator, relay: RelayClient) -> None
         # ::_register()); forcibly disconnecting the worker to provoke a
         # reconnect would interrupt any in-flight job it's processing purely
         # for a telemetry housekeeping concern, which is a worse trade-off than
-        # a stale capability row for one push cycle. Loud ERROR log is the
-        # deliberate minimum bar here — see registry-06 Execution Log.
+        # letting this persist. NOT bounded to one push cycle: if PHP GCs a
+        # worker's row while its WS connection stays open, NOTHING re-creates
+        # that row until the connection eventually drops and reconnects for an
+        # unrelated reason — `unknown` can keep firing for the rest of that
+        # connection's life, not just once. Loud ERROR log is the deliberate
+        # minimum bar here (real fix — escalate after N consecutive cycles, or
+        # a periodic self-register — is a separate grooming card, not this
+        # one). Note: the identical log also fires for a benign one-off race
+        # (a ping lands before this worker's own register() HTTP call has
+        # landed) — the log alone can't tell the two apart; see registry-06
+        # Execution Log for both cases.
         for entry in unknown:
             logger.error(
                 "liveness push: PHP has no capability row for this instance "
