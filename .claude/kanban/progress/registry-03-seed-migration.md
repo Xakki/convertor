@@ -97,6 +97,14 @@
 - **`instance_id = '__seed__'`** — проверено против контракта registry-02
   (`^[A-Za-z0-9._:-]+$`, непустая, ≤128 символов): `_` разрешён явно в
   charset-классе контроллера, `__seed__` проходит.
+- **Ревью-фикс:** `__seed__` не был зарезервирован — реальный воркер мог
+  случайно/явно (`WORKER_INSTANCE_ID=__seed__`) занять этот instanceId, и его
+  строку молча снёс бы `down()` этой миграции (удаляет строго по литералу).
+  `WorkerController::validateRegisterPayload()` теперь отклоняет
+  `instanceId === '__seed__'` 400-кой (`RESERVED_SEED_INSTANCE_ID` — литерал
+  задублирован в миграции с комментарием, миграция намеренно не зависит от
+  кода приложения); добавлен тест `reserved instanceId` в
+  `WorkerRegisterControllerTest::invalidPayloadProvider`.
 - **Идемпотентность** — `INSERT IGNORE` на составном `UNIQUE(worker_type,
   instance_id)`. Проверено вживую на dev: повторный `INSERT IGNORE` тем же
   набором строк напрямую через `doctrine:query:sql` (в обход

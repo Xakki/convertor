@@ -36,6 +36,18 @@ use Symfony\Component\Routing\Attribute\Route;
 #[Route('/api/v1/worker')]
 final class WorkerController extends AbstractController
 {
+    /**
+     * Зарезервированный instanceId seed-строк (registry-03,
+     * migrations/Version20260722150301.php). Реальный воркер никогда не
+     * должен на него попасть — иначе его регистрация будет неотличима от
+     * seed-строки и потенциально снесена down()-миграцией seed'а (та удаляет
+     * ряды строго по этому литералу). Литерал ЗАДУБЛИРОВАН в миграции
+     * намеренно — миграция обязана оставаться самодостаточной и не зависеть
+     * от кода приложения; при переименовании синхронизировать оба места
+     * вручную.
+     */
+    private const RESERVED_SEED_INSTANCE_ID = '__seed__';
+
     public function __construct(
         private readonly WorkerStreamGateway $gateway,
         private readonly ConversionResultPersister $persister,
@@ -88,6 +100,9 @@ final class WorkerController extends AbstractController
             || preg_match('/^[A-Za-z0-9._:-]+$/', $data['instanceId']) !== 1
         ) {
             return 'instanceId must be a non-empty string (max 128 chars, [A-Za-z0-9._:-]+)';
+        }
+        if ($data['instanceId'] === self::RESERVED_SEED_INSTANCE_ID) {
+            return 'instanceId "' . self::RESERVED_SEED_INSTANCE_ID . '" is reserved for the seed migration (registry-03)';
         }
         if (! array_key_exists('isAi', $data) || ! is_bool($data['isAi'])) {
             return 'isAi must be a boolean';

@@ -37,6 +37,11 @@ use Doctrine\Migrations\AbstractMigration;
  */
 final class Version20260722150301 extends AbstractMigration
 {
+    // Тот же литерал задублирован (не импортирован) в
+    // WorkerController::RESERVED_SEED_INSTANCE_ID, который отклоняет живой
+    // register с этим instanceId 400-кой — миграция обязана оставаться
+    // самодостаточной и не зависеть от кода приложения. При переименовании
+    // синхронизировать оба места вручную.
     private const SEED_INSTANCE_ID = '__seed__';
 
     public function getDescription(): string
