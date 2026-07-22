@@ -38,8 +38,20 @@ final class Version20260722142906 extends AbstractMigration
     public function down(Schema $schema): void
     {
         // ⚠ Откат безопасен только пока в таблице максимум один ряд на worker_type
-        // (т.е. до появления реальных multi-instance регистраций) — иначе
-        // CREATE UNIQUE INDEX на голый worker_type упадёт на дубликатах.
+        // (т.е. до появления реальных multi-instance регистраций) — иначе ниже
+        // CREATE UNIQUE INDEX на голый worker_type упал бы на дубликатах голым
+        // duplicate-key SQL-исключением. Проверяем это явно ДО отката и абортим
+        // с понятной ошибкой, называющей конкретный коллизирующий worker_type.
+        $dup = $this->connection->fetchAssociative(
+            'SELECT worker_type, COUNT(*) AS cnt FROM worker_capabilities GROUP BY worker_type HAVING COUNT(*) > 1 LIMIT 1',
+        );
+        $this->abortIf($dup !== false, $dup === false ? '' : sprintf(
+            "Cannot roll back: worker_type '%s' has %d rows (multi-instance data present) — ".
+            'UNIQUE(worker_type) would collide. Remove/merge the extra instances before downgrading.',
+            $dup['worker_type'],
+            (int) $dup['cnt'],
+        ));
+
         $this->addSql('DROP INDEX UNIQ_WORKER_CAPABILITIES_TYPE_INSTANCE ON worker_capabilities');
         $this->addSql('ALTER TABLE worker_capabilities DROP instance_id');
         $this->addSql('CREATE UNIQUE INDEX UNIQ_WORKER_CAPABILITIES_TYPE ON worker_capabilities (worker_type)');

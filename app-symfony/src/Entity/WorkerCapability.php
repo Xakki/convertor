@@ -90,17 +90,6 @@ class WorkerCapability
         return $this->capabilities;
     }
 
-    /**
-     * Обновляет возможности и метку lastSeen (при повторной регистрации).
-     *
-     * @param array<string, mixed> $capabilities
-     */
-    public function update(array $capabilities): void
-    {
-        $this->capabilities = $capabilities;
-        $this->lastSeen     = new \DateTimeImmutable();
-    }
-
     public function getLastSeen(): \DateTimeImmutable
     {
         return $this->lastSeen;
