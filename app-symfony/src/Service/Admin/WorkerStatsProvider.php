@@ -6,6 +6,7 @@ namespace App\Service\Admin;
 
 use App\Entity\WorkerCapability;
 use App\Repository\WorkerCapabilityRepository;
+use App\Service\Worker\WorkerLivenessTtl;
 
 /**
  * Сбор списка зарегистрированных воркеров для admin-панели (registry-07,
@@ -25,11 +26,16 @@ use App\Repository\WorkerCapabilityRepository;
  *
  * `stale` — TTL-сравнение читает ТОТ ЖЕ конфиг (`WORKER_CAPABILITY_GC_TTL_HOURS`),
  * что {@see \App\Service\Worker\WorkerCapabilityGcService} использует для
- * РЕАЛЬНОГО удаления строк — намеренно НЕТ второго литерала TTL здесь: если
- * бы страница считала "устарел" по своему порогу, она могла бы разойтись с
- * тем, когда GC на самом деле соберёт строку. `$ttlHours` — обязательный
- * конструкторный параметр (без дефолта) именно чтобы не завести случайный
- * повторно-хардкоженный номер вместо явного `%env(...)%`-wiring в services.yaml.
+ * РЕАЛЬНОГО удаления строк — намеренно НЕТ второго литерала TTL здесь.
+ * `$ttlHours` — обязательный конструкторный параметр (без дефолта) именно
+ * чтобы не завести случайный повторно-хардкоженный номер вместо явного
+ * `%env(...)%`-wiring в services.yaml. Ту же дисциплину распространили и на
+ * САМУ ФОРМУЛУ порога (registry-07 review): значение TTL было общим с самого
+ * начала, но формула "TTL → cutoff-дата" была задублирована буквально в этом
+ * классе и в `WorkerCapabilityGcService::run()` — обе стороны теперь идут
+ * через {@see \App\Service\Worker\WorkerLivenessTtl::staleThreshold()}, чтобы
+ * будущая правка floor/единиц/jitter в одном месте не разошлась молча со
+ * вторым.
  *
  * Seed-строки (`instanceId='__seed__'`, `[[registry-03-seed-migration]]`)
  * помечены `isSeed=true`: `stale` для них считается тем же способом (честные
@@ -69,7 +75,11 @@ final readonly class WorkerStatsProvider
      */
     public function collect(): array
     {
-        $threshold = (new \DateTimeImmutable())->modify('-' . max(1, $this->ttlHours) . ' hours');
+        // registry-07 review: threshold-формула вынесена в WorkerLivenessTtl —
+        // тот же callable использует WorkerCapabilityGcService (реальное
+        // удаление), чтобы страница никогда не разошлась с тем, когда GC
+        // фактически соберёт строку.
+        $threshold = WorkerLivenessTtl::staleThreshold($this->ttlHours);
 
         $rows = array_map(
             fn (WorkerCapability $cap): array => $this->toRow($cap, $threshold),

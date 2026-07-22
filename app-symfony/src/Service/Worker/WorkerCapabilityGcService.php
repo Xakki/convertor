@@ -70,9 +70,10 @@ final class WorkerCapabilityGcService
         assert($em instanceof EntityManagerInterface);
         $conn = $em->getConnection();
 
-        // max(1, …) — тот же защитный паттерн, что FileCleanupService: TTL <= 0
-        // из конфига не должен превратиться в «удалить всё немедленно».
-        $threshold = (new \DateTimeImmutable())->modify('-' . max(1, $this->ttlHours) . ' hours');
+        // registry-07 review: threshold-формула вынесена в WorkerLivenessTtl —
+        // тот же callable использует WorkerStatsProvider (admin-страница), чтобы
+        // предсказание "устарел" никогда не разошлось с моментом реального удаления.
+        $threshold = WorkerLivenessTtl::staleThreshold($this->ttlHours);
 
         $deleted = (int) $conn->executeStatement(
             'DELETE FROM worker_capabilities WHERE instance_id != :seedInstanceId AND last_seen < :threshold',

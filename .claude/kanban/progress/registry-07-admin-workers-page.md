@@ -127,3 +127,12 @@ Phase 2 существует в БД (`worker_capabilities` + `lastSeen` из `[
   → 212 файлов, всё чисто); `make test-php-live` — `OK (465 tests, 1898 assertions)`,
   drift 2/2.
 - Расхождений с зафиксированным тимлидом контрактом не найдено.
+
+**Доп. правка после ревью:** формула порога устаревания (`TTL → cutoff-дата`) была
+задублирована буквально в `WorkerCapabilityGcService::run()` и `WorkerStatsProvider::
+collect()` — значение TTL уже было общим (один env), но сама формула нет. Вынесена в
+`App\Service\Worker\WorkerLivenessTtl::staleThreshold()`, оба сервиса теперь идут через
+неё; поведение побайтово не изменилось (чистый extract), добавлен отдельный юнит-тест
+`WorkerLivenessTtlTest` на саму формулу (floor при TTL<=0, монотонность по TTL). QA
+после правки: `make phpstan`/`cs`/`cs-check` чисто, `make test-php-live` —
+`OK (468 tests, 1905 assertions)`, drift 2/2.
