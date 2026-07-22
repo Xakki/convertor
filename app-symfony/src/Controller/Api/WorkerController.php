@@ -49,7 +49,8 @@ final class WorkerController extends AbstractController
 
     /**
      * POST /api/v1/worker/register
-     * Регистрирует возможности воркера; upsert по workerType, инвалидирует кеш матрицы.
+     * Регистрирует возможности воркера; upsert по составному ключу (workerType,
+     * instanceId), инвалидирует кеш матрицы.
      */
     #[Route('/register', methods: ['POST'])]
     public function register(Request $request): JsonResponse
@@ -65,7 +66,7 @@ final class WorkerController extends AbstractController
             return $this->json(['error' => $err], Response::HTTP_BAD_REQUEST);
         }
 
-        $this->workerCapabilityRepository->upsert((string) $data['workerType'], $data);
+        $this->workerCapabilityRepository->upsert((string) $data['workerType'], (string) $data['instanceId'], $data);
         $this->registry->invalidateMatrix();
 
         return $this->json(['ok' => true]);
@@ -78,6 +79,15 @@ final class WorkerController extends AbstractController
     {
         if (! isset($data['workerType']) || ! is_string($data['workerType']) || $data['workerType'] === '') {
             return 'workerType must be a non-empty string';
+        }
+        if (
+            ! isset($data['instanceId'])
+            || ! is_string($data['instanceId'])
+            || $data['instanceId'] === ''
+            || strlen($data['instanceId']) > 128
+            || preg_match('/^[A-Za-z0-9._:-]+$/', $data['instanceId']) !== 1
+        ) {
+            return 'instanceId must be a non-empty string (max 128 chars, [A-Za-z0-9._:-]+)';
         }
         if (! array_key_exists('isAi', $data) || ! is_bool($data['isAi'])) {
             return 'isAi must be a boolean';

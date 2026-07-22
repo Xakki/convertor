@@ -308,6 +308,48 @@ final class ConversionRegistryFallbackTest extends TestCase
         self::assertFalse($registry->isSupported('wav', 'txt'), 'wav→txt must be dropped (category unknown)');
     }
 
+    /**
+     * registry-02: два ряда одного workerType (два инстанса, напр. два хоста с
+     * одинаковым воркером) — их непересекающиеся пары объединяются (union) в
+     * итоговой матрице, а не перетирают друг друга.
+     */
+    public function testUnionsPairsFromTwoInstancesOfSameWorkerType(): void
+    {
+        $blobHostA = [
+            'workerType'  => 'image',
+            'isAi'        => false,
+            'streams'     => ['conv.image'],
+            'routingKeys' => ['image'],
+            'matrix'      => ['jpg' => ['png']],
+        ];
+        $blobHostB = [
+            'workerType'  => 'image',
+            'isAi'        => false,
+            'streams'     => ['conv.image'],
+            'routingKeys' => ['image'],
+            'matrix'      => ['webp' => ['gif']],
+        ];
+
+        $capA = $this->createStub(WorkerCapability::class);
+        $capA->method('getWorkerType')->willReturn('image');
+        $capA->method('getCapabilities')->willReturn($blobHostA);
+
+        $capB = $this->createStub(WorkerCapability::class);
+        $capB->method('getWorkerType')->willReturn('image');
+        $capB->method('getCapabilities')->willReturn($blobHostB);
+
+        $repo = $this->createStub(WorkerCapabilityRepository::class);
+        $repo->method('findAllCapabilities')->willReturn([$capA, $capB]);
+
+        $registry = new ConversionRegistry($repo);
+
+        // Обе пары, объявленные разными инстансами, доступны — union, не перетирание.
+        self::assertTrue($registry->isSupported('jpg', 'png'), 'pair from instance A must survive');
+        self::assertTrue($registry->isSupported('webp', 'gif'), 'pair from instance B must survive');
+        self::assertSame('image', $registry->streamFor('jpg', 'png'));
+        self::assertSame('image', $registry->streamFor('webp', 'gif'));
+    }
+
     /** invalidateMatrix() сбрасывает per-request кеш. */
     public function testInvalidateMatrixResetsPerRequestCache(): void
     {

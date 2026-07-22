@@ -295,6 +295,14 @@ class ConversionRegistry
      * Строит матрицу из зарегистрированных в БД возможностей воркеров.
      * Политика коллизий: non-AI побеждает AI; при одинаковом isAi — last-write.
      *
+     * `$capabilities` — плоский список рядов, по ряду на пару (workerType,
+     * instanceId) (registry-02: ключ БД составной, несколько инстансов одного
+     * workerType — норма, напр. два хоста с одинаковым воркером). Цикл ниже НЕ
+     * группирует по workerType — он проходит по рядам как есть и накапливает
+     * пары в общий `$matrix`, поэтому несколько рядов одного workerType уже
+     * объединяются (union) построчно; повторяющиеся пары дедуплицируются самой
+     * структурой ассоциативного массива (последняя запись побеждает).
+     *
      * @param WorkerCapability[] $capabilities
      * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
      */

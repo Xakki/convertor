@@ -152,3 +152,57 @@ failover-реплики) молча теряет капабилити всех, 
   audio/video клиентами (см. компромисс выше) — осознанно, не баг. (2) Санитизация
   оператора: даже явный override прогоняется через `_sanitize_instance_id()` — оператор не
   обязан помнить charset контракта, а сервер получает всегда валидную форму.
+
+#### PHP-зона
+
+Файлы: `app-symfony/src/Entity/WorkerCapability.php`, `src/Repository/WorkerCapabilityRepository.php`,
+`src/Controller/Api/WorkerController.php`, `src/Service/Conversion/ConversionRegistry.php`,
+миграция `Version20260722142906`, тесты `tests/Functional/Repository/WorkerCapabilityRepositoryTest.php`
+(новый), `tests/Functional/Controller/Api/WorkerRegisterControllerTest.php`,
+`tests/Unit/Service/Conversion/ConversionRegistryFallbackTest.php`.
+
+- **Миграция `Version20260722142906`** — hand-written, НЕ через сырой вывод `migrate-diff`:
+  автосгенерированный diff тянул за собой несвязанный дрейф схемы по другим таблицам
+  (переименования индексов, снятие `DC2Type`-комментариев на нескольких таблицах) — явно вне
+  зоны этой карточки, поэтому мигрция написана вручную по рецепту из Recommendation.
+  `ADD instance_id VARCHAR(128) NOT NULL DEFAULT 'legacy'` backfill'ит существующие 6 строк
+  одним `ALTER` (проверено на dev-БД: все получили `instance_id='legacy'`), сразу следом
+  `ALTER ... DROP DEFAULT` — постоянного дефолта не остаётся, приложение всегда шлёт
+  `instanceId`. `down()` работает, но пересоздаёт `UNIQUE(worker_type)` — задокументирован
+  предостережением, что откат безопасен только пока в таблице ≤1 ряда на `worker_type`
+  (иначе `CREATE UNIQUE INDEX` упадёт на дублях, что и есть весь смысл этой карточки).
+  Применена на dev (`make migrate`) и на `convertor-test` (через `test-db-migrate` внутри
+  `make test-php-live`) — оба раза чисто.
+- **Entity** — `workerType` unique-констрейнт на колонке снят, добавлен табличный
+  `#[ORM\UniqueConstraint]` на `(worker_type, instance_id)`; конструктор принимает `instanceId`
+  третьим параметром (позиционально после `workerType`, перед `capabilities`).
+- **Repository::upsert()** — переписан на нативный `INSERT ... ON DUPLICATE KEY UPDATE`
+  (`Connection::executeStatement()`, один SQL для записи, без find-then-update → TOCTOU снят).
+  Сигнатура: `upsert(string $workerType, string $instanceId, array $capabilities): WorkerCapability`.
+  После INSERT — `SELECT id` + `EntityManager::find()` + `refresh()` для возврата свежей
+  управляемой сущности (нужен `refresh()`, т.к. UnitOfWork не знает о записи, сделанной в обход
+  ORM — без него объект в identity map мог бы вернуть устаревшие поля при повторном upsert в
+  рамках одного request/теста).
+- **Controller** — `validateRegisterPayload()` валидирует `instanceId` по контракту эпика
+  (непустая строка, ≤128, `^[A-Za-z0-9._:-]+$`), тем же `{"error": "..."}` 400-конвенцией,
+  что и остальные поля. `register()` пробрасывает `instanceId` в `upsert()`.
+- **ConversionRegistry — код НЕ менялся** (только докблок). Judgment call / расхождение со
+  спекой карточки: `buildMatrixFromCapabilities()` УЖЕ проходит по списку capability-рядов
+  плоским циклом, не группируя по `workerType` — несколько рядов одного `workerType` и так
+  объединяются (union) построчно в общий `$matrix`, а дедупликация пар — свойство самой
+  ассоциативной структуры (`$matrix[$from][$to] = ...`, последняя запись побеждает). Т.е.
+  "Registry must not break on multiple rows per workerType" из постановки уже выполнялось ДО
+  этой карточки — багфикса не потребовалось. Добавлен docblock-комментарий, объясняющий это
+  свойство явно (чтобы не выглядело как забытая работа), плюс регрессионный тест
+  `testUnionsPairsFromTwoInstancesOfSameWorkerType` — доказывает union на реальном примере
+  (два инстанса `workerType='image'` с непересекающимися парами `jpg→png` и `webp→gif`, обе
+  выживают в матрице).
+- **Тесты**: `WorkerCapabilityRepositoryTest` (новый, 3 теста — insert, re-register-updates-in-place,
+  два instanceId сосуществуют); `WorkerRegisterControllerTest` — добавлен `instanceId` в
+  `VALID_PAYLOAD`, обновлён mock-ожидание `upsert()` на 3 аргумента, добавлены 4 кейса в
+  `invalidPayloadProvider` (missing/empty/too-long/bad-charset instanceId);
+  `ConversionRegistryFallbackTest` — +1 тест на union (см. выше).
+- **QA**: `make phpstan` — чисто (0 ошибок); `make cs` → `make cs-check` — чисто (0 файлов на
+  исправление); `make test-php-live` — 425/425 зелёных (1 pre-existing PHPUnit Notice,
+  воспроизводится и без изменений этой карточки — не regression, не относится к
+  `WorkerCapability`/`ConversionRegistry`, не расследовался дальше как вне зоны).
