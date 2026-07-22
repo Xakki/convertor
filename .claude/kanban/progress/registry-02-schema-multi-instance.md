@@ -153,6 +153,14 @@ failover-реплики) молча теряет капабилити всех, 
   оператора: даже явный override прогоняется через `_sanitize_instance_id()` — оператор не
   обязан помнить charset контракта, а сервер получает всегда валидную форму.
 
+**Ревью-фикс (2026-07-22, Python-зона):** `caps.get("isAi", False)` неотличим для будущего
+воркера, забывшего объявить `isAi` (default тихо = False — та же хрупкость, что убрали у
+`worker_type == "ai"`, просто переехавшая на "забыли ключ"). Добавлен `logger.warning` в
+`_build_register_body()`, срабатывающий ТОЛЬКО когда ключ `isAi` ОТСУТСТВУЕТ (не когда он
+явно `False`) — эффективное значение не меняется (best-effort register не должен падать),
+но пропуск становится видимым в логах. Тесты: `test_is_ai_missing_key_warns_and_defaults_false`,
+`test_is_ai_declared_false_does_not_warn`.
+
 #### PHP-зона
 
 Файлы: `app-symfony/src/Entity/WorkerCapability.php`, `src/Repository/WorkerCapabilityRepository.php`,

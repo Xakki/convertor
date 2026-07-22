@@ -576,6 +576,16 @@ class WsClient:
 
     def _build_register_body(self) -> dict:
         caps = self._capabilities or {}
+        if "isAi" not in caps:
+            # Best-effort register не должен падать на этом — но молчаливый False здесь
+            # неотличим от осознанного `isAi: False` (та же хрупкость, что убрали у
+            # `worker_type == "ai"`, просто переехавшая на "забыли объявить ключ").
+            # WARNING делает пропуск видимым, не меняя эффективное поведение (см. review
+            # registry-02: все 6 текущих CAPABILITIES ключ объявляют, это защита на будущее).
+            logger.warning(
+                "CAPABILITIES missing explicit 'isAi' key — defaulting to False",
+                extra={"workerType": self._cfg.worker_type},
+            )
         routing_keys: list[str] = list(caps.get("routing_keys", []))
         matrix_raw: dict = caps.get("matrix", {})
         matrix = {

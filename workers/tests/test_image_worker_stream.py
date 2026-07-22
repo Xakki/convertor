@@ -206,3 +206,13 @@ def test_matrix_mime_coverage():
             if t not in _MIME:
                 missing.add(t)
     assert not missing, f"missing MIME for: {missing}"
+
+
+def test_capabilities_is_ai_declared_false():
+    """registry-02: image-воркер объявляет isAi=False явно (не non-AI по умолчанию).
+
+    Проверяется здесь (а не только параметризованным `test_ws_client.py`), потому что
+    этот модуль импортирует `pdf2image` — доступен только в образе `worker-image:test`;
+    `make test-gateway` гоняет `test_ws_client.py` в образе `worker-data:test`, где такого
+    импорта нет, и там этот кейс skip'ается (см. `test_is_ai_false_for_non_ai_worker_capabilities`)."""
+    assert ImageWorker.CAPABILITIES["isAi"] is False
