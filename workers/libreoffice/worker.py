@@ -193,6 +193,7 @@ class LibreOfficeWorker(StreamConsumerBase):
 
     CAPABILITIES: dict[str, Any] = {
         "routing_keys": ["document"],
+        "isAi": False,
         "matrix": _MATRIX,
     }
 

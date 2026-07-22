@@ -113,9 +113,24 @@ def _safe_dir_name(job_id: str) -> str:
 # Конфиг (централизует env-чтения для ВСЕХ воркеров-WS-клиентов, §8)
 # --------------------------------------------------------------------------
 
-# Допустимые типы воркера — зеркалит WorkerController::ALLOWED_TYPES и серверный
-# WORKER_TYPES (§4/§6.2). Держим здесь, чтобы валидировать конфиг ДО connect'а.
+# Допустимые типы воркера — самостоятельный whitelist (§4/§6.2), валидируется ДО connect'а.
+# NB: раньше комментарий утверждал, что список зеркалит `WorkerController::ALLOWED_TYPES` —
+# та PHP-константа УДАЛЕНА 2026-07-03 (`17b1ac8`, вместе с claim-by-type action); сейчас
+# у списка нет PHP-аналога. Вывод списка из реестра — отдельная grooming-карточка
+# `worker-type-lists-hardcode`, не трогать здесь.
 ALLOWED_WORKER_TYPES = ("ai", "document", "image", "audio", "video", "data")
+
+# Контракт `instanceId` (registry-02): непустая строка, ≤128 символов, только
+# `[A-Za-z0-9._:-]`. Сервер (PHP) 400-ит при нарушении формы — клиент обязан
+# генерировать/санитизировать значение ДО отправки, а не полагаться на валидацию сервера.
+_INSTANCE_ID_INVALID_RE = re.compile(r"[^A-Za-z0-9._:-]")
+_INSTANCE_ID_MAX_LEN = 128
+
+
+def _sanitize_instance_id(raw: str) -> str:
+    """Свести произвольную строку к контракту `instanceId` register-payload'а."""
+    cleaned = _INSTANCE_ID_INVALID_RE.sub("-", raw.strip())
+    return (cleaned or "unknown")[:_INSTANCE_ID_MAX_LEN]
 
 
 @dataclass(frozen=True)
@@ -127,6 +142,7 @@ class WsClientConfig:
     worker_api_token: str     # WORKER_API_TOKEN — Bearer для WS-upgrade (a) + прямого HTTP (b)
     version: str              # APP_VER (+ .i) — только репортится
     work_dir: Path            # WORK_DIR — куда качаем вход временным файлом
+    instance_id_override: str = ""  # WORKER_INSTANCE_ID — оператор пиннит instanceId явно
     slots: int = 1
     ws_result_inline_max: int = 262144
     ws_ping_interval_s: float = 20.0
@@ -206,6 +222,7 @@ class WsClientConfig:
             worker_api_token=os.getenv("WORKER_API_TOKEN", ""),
             version=_compose_version(),
             work_dir=resolved_work_dir,
+            instance_id_override=os.getenv("WORKER_INSTANCE_ID", "").strip(),
             slots=getenv_int("WS_SLOTS", 1),
             ws_result_inline_max=getenv_int("WS_RESULT_INLINE_MAX", 262144),
             ws_ping_interval_s=getenv_float("WS_PING_INTERVAL_S", 20.0),
@@ -534,6 +551,29 @@ class WsClient:
             return f"gateway закрыл сессию штатно: close {code} {reason!r}"
         return f"close {code} {reason!r}"
 
+    def _instance_id(self) -> str:
+        """`instanceId` для register-payload'а (registry-02 контракт).
+
+        Приоритет:
+        1. `WORKER_INSTANCE_ID` env (`instance_id_override`) — оператор пиннит явно
+           (напр. одинаковое значение по интенту деплоя); санитизируется так же, как
+           автогенерируемое значение — оператор не обязан помнить charset контракта.
+        2. `<hostname>:<worker_id>` — стабильно между реконнектами (worker_id и hostname
+           не меняются в течение жизни процесса/контейнера); различает несколько
+           WsClient-инстансов ОДНОГО процесса (ffmpeg `run_dual()` даёт им разные
+           worker_id — `<base>-audio`/`<base>-video`, см. `build_dual_configs`); различает
+           два ХОСТА с одинаковым `WORKER_ID`, если оператор его явно запиннил одинаково
+           (иначе один hostname сам по себе не гарантирует разделение — `worker_id` без
+           WORKER_ID env и так уже = hostname, см. `_default_worker_id`).
+        """
+        override = self._cfg.instance_id_override.strip()
+        if override:
+            return _sanitize_instance_id(override)
+        host = "unknown"
+        with suppress(OSError):
+            host = socket.gethostname().strip() or "unknown"
+        return _sanitize_instance_id(f"{host}:{self._cfg.worker_id}")
+
     def _build_register_body(self) -> dict:
         caps = self._capabilities or {}
         routing_keys: list[str] = list(caps.get("routing_keys", []))
@@ -548,7 +588,11 @@ class WsClient:
         matrix_categories: dict = dict(caps.get("matrix_categories", {}))
         return {
             "workerType": self._cfg.worker_type,
-            "isAi": self._cfg.worker_type == "ai",
+            "instanceId": self._instance_id(),
+            # isAi — из явного CAPABILITIES["isAi"] воркера (registry-02: раньше выводился
+            # из worker_type == "ai", что молча ломается при появлении второго AI-типа).
+            # Каждый воркер ОБЯЗАН объявлять isAi явно (см. workers/*/worker.py CAPABILITIES).
+            "isAi": bool(caps.get("isAi", False)),
             "streams": routing_keys,
             "routingKeys": routing_keys,
             "matrix": matrix,

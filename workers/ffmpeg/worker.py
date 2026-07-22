@@ -113,10 +113,12 @@ _VIDEO_INPUTS: set[str] = {"3gp", "mp4", "avi", "mkv", "mov", "webm", "flv", "wm
 
 AUDIO_CAPABILITIES: dict[str, Any] = {
     "routing_keys": ["audio"],
+    "isAi": False,
     "matrix": {k: v for k, v in SUPPORTED.items() if k in _AUDIO_INPUTS},
 }
 VIDEO_CAPABILITIES: dict[str, Any] = {
     "routing_keys": ["video"],
+    "isAi": False,
     "matrix": {k: v for k, v in SUPPORTED.items() if k in _VIDEO_INPUTS},
 }
 
@@ -126,6 +128,7 @@ class FfmpegWorker(StreamConsumerBase):
 
     CAPABILITIES: dict[str, Any] = {
         "routing_keys": ["audio", "video"],
+        "isAi": False,
         "matrix": SUPPORTED,
     }
 

@@ -72,4 +72,83 @@ failover-реплики) молча теряет капабилити всех, 
 
 **Эпик:** `[[registry-00-self-registration]]`
 
-**Status:** todo
+**Status:** in progress
+
+**Execution Log (2026-07-22):**
+
+#### Python-зона
+
+Файлы: `workers/common/ws_client.py`, `workers/ai/worker.py`, `workers/ffmpeg/worker.py`,
+`workers/libreoffice/worker.py`, `workers/data/worker.py`, `workers/image/worker.py`,
+`workers/tests/test_ws_client.py`.
+
+- **`instanceId`-схема** (`WsClient._instance_id()`): приоритет
+  1) `WORKER_INSTANCE_ID` env (`WsClientConfig.instance_id_override`) — явный пин оператором;
+  2) иначе `<hostname>:<worker_id>`. Оба пути прогоняются через `_sanitize_instance_id()` —
+  недопустимые символы → `-`, обрезка до 128, пустая строка → `"unknown"` (контракт
+  `^[A-Za-z0-9._:-]+$`, ≤128, непустая — сервер 400-ит при нарушении, санитизация делается
+  клиентом ДО отправки, не полагаемся на серверную валидацию).
+  Обоснование по 4 требованиям:
+  - **Стабильность между реконнектами** — `worker_id` и hostname не меняются в течение жизни
+    процесса/контейнера, значит `_instance_id()` детерминирована на каждый вызов
+    (`_register()` дёргается на каждый connect, L469) → один и тот же instanceId, не новая
+    строка на флапе.
+  - **Разные WsClient в одном процессе** — ffmpeg `run_dual()` создаёт audio/video клиентов с
+    РАЗНЫМИ `worker_id` (`build_dual_configs`: `<base>-audio`/`<base>-video`,
+    `workers/ffmpeg/__main__.py:24-34`) — раз `instanceId` выводится из `worker_id`, различие
+    приходит автоматически, без спецкейса под ffmpeg. Проверено в коде: `worker_type` у них
+    и так разный (`audio`/`video`), так что differentiation даже не строго обязателен для
+    ключа `(workerType, instanceId)` — но instanceId различается тоже, что упрощает будущий
+    multi-candidate router (Phase 3).
+  - **Разные хосты** — добавлен явный `hostname` в схему (не полагаемся только на `worker_id`),
+    потому что оператор может ЯВНО запиннить одинаковый `WORKER_ID` на нескольких хостах
+    (напр. один и тот же docker-compose service name) — без hostname такие два хоста
+    схлопнулись бы в один instanceId. (Без явного `WORKER_ID` фолбэк `_default_worker_id()`
+    и так = hostname — но это не гарантия для явно заданного `WORKER_ID`.)
+  - **Overridable через env** — `WORKER_INSTANCE_ID` (по аналогии с `WORKER_ID`/`WORKER_TYPE`),
+    прокидывается в `WsClientConfig.from_env()`, санитизируется так же, как авто-значение.
+  - Компромисс: если оператор явно пиннит ОДИН `WORKER_INSTANCE_ID` на audio- и video-клиента
+    ffmpeg — оба получат одинаковый instanceId, но это НЕ коллизия по контрактному ключу
+    `(workerType, instanceId)`, т.к. `workerType` у них разный; ответственность за это на
+    операторе, который явно переопределил авто-генерацию.
+- **`isAi`**: `_build_register_body()` теперь читает `caps.get("isAi", False)` вместо
+  `self._cfg.worker_type == "ai"`. Все CAPABILITIES-словари получили ЯВНЫЙ ключ `isAi`
+  (раньше отсутствовал ВЕЗДЕ, включая сам AI-воркер — не только в non-AI):
+  `workers/ai/worker.py::CAPABILITIES` → `isAi: True`;
+  `workers/ffmpeg/worker.py::AUDIO_CAPABILITIES`, `VIDEO_CAPABILITIES`, `FfmpegWorker.CAPABILITIES`;
+  `workers/libreoffice/worker.py::LibreOfficeWorker.CAPABILITIES`;
+  `workers/data/worker.py::DataWorker.CAPABILITIES`;
+  `workers/image/worker.py::ImageWorker.CAPABILITIES` → все `isAi: False`.
+- **Стале-комментарий** (`workers/common/ws_client.py:116-118`, старый номер строк) исправлен:
+  раньше утверждал, что `ALLOWED_WORKER_TYPES` зеркалит `WorkerController::ALLOWED_TYPES` —
+  эта PHP-константа удалена 2026-07-03 (`17b1ac8`). Список сейчас — самостоятельный whitelist
+  без PHP-аналога; вывод его из реестра — отдельная grooming-карточка `worker-type-lists-hardcode`,
+  здесь не трогали.
+- **Тесты** (`workers/tests/test_ws_client.py`): `test_instance_id_present_and_well_formed`,
+  `test_instance_id_stable_across_calls`, `test_instance_id_differs_between_ffmpeg_dual_clients`,
+  `test_instance_id_env_override_honored`, `test_instance_id_env_override_sanitized`,
+  `test_is_ai_true_only_for_ai_worker_capabilities`,
+  `test_is_ai_false_for_non_ai_worker_capabilities` (параметризован по всем 6 non-AI
+  CAPABILITIES-источникам — оба ffmpeg-словаря + класс, + libreoffice/data/image). Прогон —
+  `make test-gateway` (гоняет `test_ws_client.py` на реальном KeyDB) + `make test-python`
+  (юнит-сьюты по воркерам, включая ffmpeg/ai/libreoffice/data/image) + `make test-drift`
+  (routing-контракт — 2 skipped, известный пробел, не regressed этой карточкой).
+- **Рекомендация по `streams` vs `routingKeys`** (не реализовано здесь, только предложение
+  для отдельной подкарточки): сегодня `_build_register_body()` шлёт ОДНО и то же значение
+  (`routing_keys` из CAPABILITIES, напр. `["image"]`) в оба поля. Разница по факту не нужна:
+  единственный потребитель этих полей на PHP-стороне сегодня — `buildMatrixFromCapabilities`,
+  и оба поля концептуально отвечают на один вопрос «какой worker/stream обслуживает эту
+  capability-строку» (soft-разделение "имя stream-канала" vs "routing-суффикс" не отражает
+  РЕАЛЬНОЙ архитектуры — stream-имя строится PHP-стороной как `conv.<routing_key>`
+  детерминированно из ОДНОГО и того же значения, второе поле не несёт независимой
+  информации). Рекомендую СХЛОПНУТЬ в одно поле `routingKeys` (или `streams` — имя не
+  принципиально) и убрать дублирующее поле контракта целиком, а не разводить его на два
+  разных смысла ради разделения, которого сейчас нет ни в одном потребителе. Если позже
+  появится воркер с несколькими routing-key НЕ равными его stream-именам 1:1 — тогда и
+  разводить, с конкретным кейсом перед глазами, а не заранее.
+- **Judgment calls**: (1) `instance_id_override` — новое поле `WsClientConfig`, НЕ трогает
+  существующие поля/сигнатуры; `replace()` в `build_dual_configs()` не переопределяет его
+  явно, значит если оператор задаст `WORKER_INSTANCE_ID`, оно унаследуется ОБОИМИ
+  audio/video клиентами (см. компромисс выше) — осознанно, не баг. (2) Санитизация
+  оператора: даже явный override прогоняется через `_sanitize_instance_id()` — оператор не
+  обязан помнить charset контракта, а сервер получает всегда валидную форму.
