@@ -123,12 +123,26 @@ def _container_name() -> str:
 
 def _parse_registry_json(stdout: str, *, source: str) -> dict[str, Any]:
     try:
-        return json.loads(stdout)
+        data = json.loads(stdout)
     except json.JSONDecodeError as exc:
         pytest.fail(
             f"{PHP_SCRIPT} --json ({source}) produced unparsable output: {exc}\n"
             f"First 500 chars of stdout:\n{stdout[:500]!r}"
         )
+    # Belt-and-suspenders backstop: the tool's own docblock says it exit(1)s BEFORE
+    # ever printing an empty matrix/routingKeys (empty DB → refuse to print "nothing"
+    # as if it were a valid snapshot). If that guard itself ever regresses upstream
+    # and this somehow still exits 0, don't let an empty-but-"successful" response
+    # sail through and make both drift assertions pass vacuously — fail here too.
+    if not data.get("matrix") or not data.get("routingKeys"):
+        pytest.fail(
+            f"{PHP_SCRIPT} --json ({source}) returned exit 0 with an EMPTY "
+            "matrix/routingKeys — refusing to compare against nothing. The tool's own "
+            "docblock says it should exit(1) before this point; if you see this, that "
+            "guard has itself regressed (same shape as the ~12-day skip regression "
+            "this test file exists to prevent)."
+        )
+    return data
 
 
 def _load_registry() -> dict[str, Any]:
@@ -204,25 +218,47 @@ if caps is None:
 if caps is None:
     print('null')
     sys.exit(0)
+# 'routing_keys'/'matrix' silently defaulting to []/{} on a typo'd/missing key would
+# make that worker quietly vanish from the drift comparison's input (registry-04
+# review: same failure shape as the ~12-day skip regression this test suite exists
+# to prevent) — REQUIRE both keys explicitly rather than defaulting past their absence.
+missing_keys = [k for k in ('routing_keys', 'matrix') if k not in caps]
+if missing_keys:
+    print(f'CAPABILITIES missing required key(s): {missing_keys}', file=sys.stderr)
+    sys.exit(1)
 def ser(v):
     return sorted(v) if isinstance(v, (set, frozenset, list)) else sorted(str(x) for x in v)
 print(json.dumps({
-    'routing_keys': caps.get('routing_keys', []),
-    'matrix':       {k: ser(v) for k, v in caps.get('matrix', {}).items()},
+    'routing_keys': caps['routing_keys'],
+    'matrix':       {k: ser(v) for k, v in caps['matrix'].items()},
 }))
 """
 
 
 def _load_workers() -> list[tuple[str, dict[str, Any]]]:
-    """Return [(worker_name, capabilities), …] for every workers/*/worker.py."""
+    """Return [(worker_name, capabilities), …] for every workers/*/worker.py.
+
+    Fails loudly rather than silently shrinking its own output — two distinct risks
+    of that shape, both closed here (registry-04 review):
+    (1) a worker.py exists but no CAPABILITIES can be located in it — previously a
+        silent `continue` dropped that worker from the comparison's input entirely;
+    (2) the directory scan itself turns up zero worker.py files (wrong REPO_ROOT,
+        moved directory, empty checkout) — previously nothing would have noticed,
+        and both drift assertions below would have passed vacuously against nothing.
+    """
     results: list[tuple[str, dict[str, Any]]] = []
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT)}
+    found_any_worker_file = False
     for worker_dir in sorted(WORKERS_DIR.iterdir()):
         if not worker_dir.is_dir():
             continue
         worker_file = worker_dir / "worker.py"
         if not worker_file.exists():
+            # Not every workers/* directory is a worker package — common/, gateway/,
+            # metrics_exporter/, tests/ have no worker.py by design. This is a
+            # structural skip, not an input-completeness risk.
             continue
+        found_any_worker_file = True
         proc = subprocess.run(
             [sys.executable, "-c", _EXTRACT_CAPS, str(worker_file)],
             capture_output=True, text=True, env=env,
@@ -234,8 +270,22 @@ def _load_workers() -> list[tuple[str, dict[str, Any]]]:
             )
         parsed = json.loads(proc.stdout.strip())
         if parsed is None:
-            continue
+            pytest.fail(
+                f"workers/{worker_dir.name}/worker.py has no CAPABILITIES (neither a "
+                "module-level constant nor a class attribute) — silently dropping this "
+                "worker from the drift comparison is exactly the failure mode this test "
+                "file exists to prevent (see module docstring). If this worker genuinely "
+                "must not declare capabilities, exclude it here explicitly with a comment "
+                "explaining why — do not let it vanish via a silent `None`."
+            )
         results.append((worker_dir.name, parsed))
+    if not found_any_worker_file:
+        pytest.fail(
+            f"Found ZERO workers/*/worker.py files under {WORKERS_DIR} — the worker scan "
+            "came back empty. Both drift assertions would otherwise pass vacuously while "
+            "comparing against nothing, which is exactly the silent-guard failure mode "
+            "this test file exists to prevent."
+        )
     return results
 
 

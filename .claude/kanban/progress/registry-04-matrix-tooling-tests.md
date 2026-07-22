@@ -220,3 +220,38 @@ CAPABILITIES vs live dump-matrix.php (needs docker+php+DB; run via test-php-live
 **Проверено реальным прогоном** `make test-php-live` целиком (не только test-drift изолированно):
 PHPUnit 429/429 OK, ЗАТЕМ `test-drift` — 2 passed, оба видны в одном логе одного `make`-вызова,
 exit 0. Guard больше не «никем не запускаемый» — часть канонического CI-таргета.
+
+**Ревью-фикс (2026-07-22): `_load_workers()` больше не глотает пропавший CAPABILITIES молча.**
+Было: `if parsed is None: continue` — воркер без CAPABILITIES тихо выпадал из сравнения, ноль
+следа в выводе. Стало: `pytest.fail()` с именем файла. Аудит на «другие места, где сбор входа
+может тихо ужаться» нашёл ЕЩЁ ДВА реальных случая той же формы (не гипотетических — оба
+воспроизведены):
+1. `_EXTRACT_CAPS`-скрипт брал `caps.get('routing_keys', [])`/`caps.get('matrix', {})` с
+   молчаливым дефолтом на отсутствующий ключ → теперь `sys.exit(1)`, если ключ отсутствует.
+   **Драйл вскрыл кейс СЕРЬЁЗНЕЕ ожидаемого**: временно переименовал
+   `DataWorker.CAPABILITIES` → `CAPABILITIES_TEMP_DRILL_RENAME` (симуляция «воркер без
+   CAPABILITIES») — оказалось, `StreamConsumerBase` (базовый класс) объявляет
+   `CAPABILITIES: dict = {}` как дефолт → `DataWorker` ВСЁ РАВНО отвечает `hasattr(..,
+   'CAPABILITIES')=True` (унаследованный пустой dict), `caps = {}` — это НЕ `None`! Старая
+   (и даже уже пофикшенная только для None) проверка это НЕ ловила бы — воркер тихо ушёл бы
+   в результат с `routing_keys=[]`, `matrix={}`, полностью выпав из обоих assert'ов БЕЗ
+   единого намёка. Новая required-key проверка ловит именно этот случай. Реальный прогон
+   pytest на этой порче — `Failed: CAPABILITIES missing required key(s): ['routing_keys',
+   'matrix']`; откат правки (той же Edit, не git checkout) — `git diff --stat` пусто, повтор —
+   2 passed.
+2. Сам скан `WORKERS_DIR.iterdir()` мог тихо вернуть 0 воркеров (не найдено ни одного
+   worker.py — неверный REPO_ROOT, съехавшая директория) — добавлен явный
+   `found_any_worker_file`-флаг → `pytest.fail()`, если ни одного worker.py не найдено.
+3. Заодно — belt-and-suspenders на стороне registry: `_parse_registry_json()` теперь
+   `pytest.fail()`, если `dump-matrix.php --json` вернул exit 0, но с ПУСТЫМ
+   matrix/routingKeys (страхует Python-сторону на случай регресса собственной проверки
+   PHP-инструмента на пустую БД — той же формы, что уже случилось однажды с самим файлом
+   `dump-matrix.php`).
+Все 4 новых failure-пути проверены эмпирически (не чтением кода): #1 — реальным pytest-прогоном
+с откатом (см. выше); #2, #3 и «истинный None» (модуль без единого CAPABILITIES-подобного
+атрибута, включая базовый класс) — прямым вызовом функций с смонтированными входами
+(`mock.patch.object`/временный файл), каждый подтверждённо поднимает `pytest.fail.Exception`.
+Прочие `continue`/`.get(...)` в файле (не-directory skip, self-pair skip, fallback имени
+контейнера из `.env`) — рассмотрены и оставлены: это структурные/best-effort ветки, не
+сокращающие СРАВНИВАЕМЫЙ набор данных. `make test-drift` — 2 passed (базовый прогон,
+без порчи).
