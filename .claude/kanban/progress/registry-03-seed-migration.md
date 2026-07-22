@@ -59,4 +59,4 @@
 
 **Эпик:** `[[registry-00-self-registration]]`
 
-**Status:** todo
+**Status:** in progress
