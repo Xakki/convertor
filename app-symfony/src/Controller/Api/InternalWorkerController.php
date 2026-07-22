@@ -190,9 +190,18 @@ final class InternalWorkerController extends AbstractController
      * UPDATE ONLY — {@see WorkerCapabilityRepository::updateLiveness()} never
      * inserts. An unknown `(workerType, instanceId)` (no matching capability
      * row — never registered, or already GC'd) is reported back in `unknown`
-     * so the gateway can force that worker to re-register; silently creating
-     * a row here would let a liveness ping fabricate a worker with no
-     * declared matrix.
+     * instead of being silently created — a liveness ping fabricating a
+     * worker with no declared matrix is exactly what registry-05's "no
+     * silent non-empty fallback" contract forbids.
+     *
+     * KNOWN GAP (review finding, tracked as a separate grooming card — do
+     * NOT treat this as self-healing): reporting `unknown` does not, by
+     * itself, cause anything to re-create the row. Nothing here forces the
+     * gateway to re-register that worker, and `register()` only fires on the
+     * worker's OWN (re)connect. If a row is GC'd while its worker keeps its
+     * WS connection open (never drops it), the gap persists indefinitely —
+     * not just "until the next push cycle" — until an unrelated reconnect
+     * happens to trigger a fresh `register()`.
      *
      * `status` IS persisted ({@see WorkerCapability::$status},
      * {@see \App\Enum\WorkerLivenessStatus}) — it does NOT gate routing

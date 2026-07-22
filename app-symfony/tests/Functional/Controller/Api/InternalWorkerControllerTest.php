@@ -721,6 +721,77 @@ final class InternalWorkerControllerTest extends WebTestCase
     }
 
     /**
+     * Idempotent-retry regression guard (review finding): `updateLiveness()`
+     * is deliberately SELECT-based, not affected-rows-based, because
+     * MySQL/MariaDB's default affected-rows semantics count CHANGED rows,
+     * not MATCHED ones — a gateway retry that resends the SAME batch (same
+     * `lastSeenAt`, nothing actually changes on the second write) would
+     * report `affected=0` under a naive implementation, and a known worker
+     * would be misreported as `unknown`, forcing a spurious re-register.
+     * This test pins that behaviour: pushing the identical entry twice must
+     * report `updated` (not `unknown`) BOTH times, and must never create a
+     * second row.
+     */
+    public function testLivenessIdempotentRetryWithIdenticalLastSeenStillReportsUpdated(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'liveness-idempotent-retry');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $payload = json_encode([
+            'instances' => [[
+                'workerType' => $cap->getWorkerType(),
+                'instanceId' => $cap->getInstanceId(),
+                'status'     => 'alive',
+                'lastSeenAt' => '2099-06-15T12:00:00Z',
+            ]],
+        ], JSON_THROW_ON_ERROR);
+
+        // First push.
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            $payload,
+        );
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $firstBody = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(1, $firstBody['updated']);
+        self::assertSame([], $firstBody['unknown']);
+
+        // Retry — byte-identical payload, so the row's last_seen/status do
+        // NOT actually change on this second write.
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            $payload,
+        );
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $secondBody = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(1, $secondBody['updated'], 'a no-op retry must still be reported as updated, not unknown');
+        self::assertSame([], $secondBody['unknown']);
+
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame('2099-06-15 12:00:00', $reloaded->getLastSeen()->format('Y-m-d H:i:s'));
+
+        // No second row was fabricated for the same composite key.
+        $matching = array_filter(
+            $repo->findAllCapabilities(),
+            static fn (WorkerCapability $c): bool => $c->getWorkerType() === $cap->getWorkerType()
+                && $c->getInstanceId()                                   === $cap->getInstanceId(),
+        );
+        self::assertCount(1, $matching, 'the idempotent retry must not create a duplicate row');
+    }
+
+    /**
      * `metrics` absent entirely (not just null) is a valid entry — the wire
      * contract makes it optional. Also proves `status` is actually PERSISTED
      * (not just accepted-and-ignored the way `metrics` is — grooming
