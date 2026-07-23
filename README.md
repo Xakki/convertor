@@ -78,7 +78,7 @@ make console CMD="app:user:make-admin <email|id>"
 | `make build` / `make rebuild` | Сборка образов (`rebuild` — без кэша) |
 | `make pull` | Подтянуть базовые образы из Harbor |
 | `make ps` / `make logs` / `make logs-<svc>` | Статус / логи |
-| `make login` | Логин в Docker-registry (Harbor) |
+| `make harbor-login` | Логин в Docker-registry (Harbor) |
 | `make docker-check` | Валидация compose (`config -q`) |
 | `make migrate` | Doctrine-миграции |
 | `make console CMD="…"` | Произвольная Symfony-консоль |
