@@ -57,7 +57,7 @@ build-gateway: ## Build ws-gateway image (Harbor-suitable)
 	$(call build_img,ws-gateway,gateway)
 
 .PHONY: push-gateway
-push-gateway: build-gateway ## Build + push ws-gateway в Harbor (проект convertor); нужен `make login`
+push-gateway: build-gateway ## Build + push ws-gateway в Harbor (проект convertor); нужен `make harbor-login`
 	docker tag $(IMG)/ws-gateway:latest $(HARBOR_NS)/ws-gateway:latest
 	docker push $(HARBOR_NS)/ws-gateway:latest
 
@@ -68,6 +68,10 @@ gateway-up: ## Start только ws-gateway (глобальный `make up` т�
 .PHONY: gateway-down
 gateway-down: ## Stop & remove только ws-gateway
 	$(DC) rm -sf ws-gateway
+
+.PHONY: gateway-recreate
+gateway-recreate: ## Force-recreate ТОЛЬКО ws-gateway на свежий образ, --no-deps (keydb НЕ трогает; depends_on: service_healthy иначе тянет keydb в пересоздание)
+	$(DC) up -d --force-recreate --no-deps ws-gateway
 
 .PHONY: gateway-logs
 gateway-logs: ## Tail логи ws-gateway
