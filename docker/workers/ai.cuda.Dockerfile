@@ -92,24 +92,38 @@ RUN set -eux; \
     mkdir -p /work /data /home/app/.cache/huggingface; \
     chown -R app:app /work /data /home/app
 
-RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --upgrade pip setuptools wheel
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m venv /opt/venv && \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
-# Pull code + requirements from the Harbor code artifact
-COPY --from=aibase /app /app
+# Pull ONLY the requirements files from the code artifact first. aibase is a single
+# FROM-scratch layer holding code + requirements, so its digest changes on every
+# source edit — but COPY --from is keyed on the copied PATHS' content, not the whole
+# stage, so this narrow copy stays CACHED across pure code changes and the ~2GB
+# torch/pip layers below don't get invalidated by them.
+COPY --from=aibase /app/requirements-ai-base.txt /app/requirements-ai-ml.txt /app/
 
 # CUDA-enabled PyTorch — bundles CUDA runtime; no separate nvidia/cuda runtime layer needed
-RUN pip install --no-cache-dir torch \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install torch \
     --index-url https://download.pytorch.org/whl/cu128
 
-RUN TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH}" \
-    pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH}" \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install \
     -r /app/requirements-ai-base.txt \
     -r /app/requirements-ai-ml.txt
 
-# Install llama-cpp-python wheel if compiled in Stage 1 (empty dir is harmless)
+# Install llama-cpp-python wheel if compiled in Stage 1 (empty dir is harmless).
+# Wheel + install are independent of application code (only WITH_LLAMACPP/CUDA_ARCH
+# affect them), so they stay above the code COPY too.
 COPY --from=llamacpp-build /build/wheels/ /tmp/llama_wheels/
-RUN set -- /tmp/llama_wheels/*.whl; [ -f "$1" ] && pip install --no-cache-dir "$@" || true
+RUN --mount=type=cache,target=/root/.cache/pip \
+    set -- /tmp/llama_wheels/*.whl; [ -f "$1" ] && PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install "$@" || true
+
+# Application code — the LAST content layer pulled from aibase. A pure source-code
+# change now only invalidates cache from HERE down; all pip installs above stay CACHED.
+COPY --from=aibase /app /app
 
 WORKDIR /app
 

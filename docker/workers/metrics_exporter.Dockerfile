@@ -19,7 +19,8 @@ RUN useradd -m -u 1000 app
 FROM base AS exporter
 
 COPY docker/workers/requirements-metrics-exporter.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install -r /tmp/requirements.txt
 
 RUN mkdir -p /app && chown app:app /app
 

@@ -20,7 +20,8 @@ FROM base AS worker
 
 # Deps before COPY source for layer caching
 COPY docker/workers/requirements-data.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install -r /tmp/requirements.txt
 
 RUN mkdir -p /work /app && chown app:app /work /app
 

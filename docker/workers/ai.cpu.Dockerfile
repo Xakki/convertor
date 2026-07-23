@@ -44,24 +44,36 @@ RUN set -eux; \
     mkdir -p /work /data /home/app/.cache/huggingface; \
     chown -R app:app /work /data /home/app
 
-RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --upgrade pip setuptools wheel
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m venv /opt/venv && \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
-# Pull code + requirements from the Harbor code artifact
-COPY --from=aibase /app /app
+# Pull ONLY the requirements files from the code artifact first. aibase is a single
+# FROM-scratch layer holding code + requirements, so its digest changes on every
+# source edit — but COPY --from is keyed on the copied PATHS' content, not the whole
+# stage, so this narrow copy stays CACHED across pure code changes and the ~2GB
+# torch/pip layers below don't get invalidated by them.
+COPY --from=aibase /app/requirements-ai-base.txt /app/requirements-ai-ml.txt /app/
 
 # CPU PyTorch wheel — lightweight, no CUDA runtime bundled
-RUN pip install --no-cache-dir torch \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install torch \
     --index-url https://download.pytorch.org/whl/cpu
 
-RUN pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install \
     -r /app/requirements-ai-base.txt \
     -r /app/requirements-ai-ml.txt
 
 # llama-cpp-python for the local llamacpp LLM backend (text→text over GGUF).
 # Prebuilt CPU wheel (py3-none manylinux2014) from the abetlen index → no source compile.
-RUN pip install --no-cache-dir llama-cpp-python==0.3.30 \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_CACHE_DIR=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install llama-cpp-python==0.3.30 \
     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
+# Application code — the LAST content layer pulled from aibase. A pure source-code
+# change now only invalidates cache from HERE down; all pip installs above stay CACHED.
+COPY --from=aibase /app /app
 
 WORKDIR /app
 
