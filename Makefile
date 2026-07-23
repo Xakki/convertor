@@ -82,10 +82,13 @@ pull: ## Pull latest base images
 ps: ## Show running containers
 	$(DC) ps
 
+.PHONY: docker-check
 docker-check:  ## Check docker config
 	@$(DC) config -q
 
-##@ Logs
+.PHONY: harbor-login
+harbor-login: ## Login to Docker registry
+	docker login $(DOCKER_REGISTRY) -u $(DOCKER_USER) -p $(DOCKER_PASS)
 
 .PHONY: logs
 logs: ## Tail logs for all services
@@ -94,12 +97,6 @@ logs: ## Tail logs for all services
 .PHONY: logs-%
 logs-%: ## Tail logs for a specific service (make logs-php)
 	$(DC) logs -f $*
-
-##@ Docker auth
-
-.PHONY: login
-login: ## Login to Docker registry
-	docker login $(DOCKER_HOST) -u $(DOCKER_USER) -p $(DOCKER_PASS)
 
 ##@ Testing
 
