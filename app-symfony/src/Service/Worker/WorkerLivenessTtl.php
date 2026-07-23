@@ -29,4 +29,19 @@ final class WorkerLivenessTtl
     {
         return (new \DateTimeImmutable())->modify('-' . max(1, $ttlHours) . ' hours');
     }
+
+    /**
+     * Silence window for the gateway-driven liveness RECONCILE (registry-09),
+     * a completely different time scale from {@see staleThreshold()}: seconds/
+     * minutes (a couple of liveness push cycles), not days. A row whose
+     * `lastSeen` is older than the returned threshold has not been reported
+     * alive by ANY gateway for the whole window — see
+     * {@see WorkerLivenessReconciler} for why that, and not gateway ownership,
+     * is the invariant. `max(1, …)` — same defensive floor as above: a
+     * misconfigured `<= 0` must not mean "offline everything right now".
+     */
+    public static function silenceThreshold(int $silenceSeconds): \DateTimeImmutable
+    {
+        return (new \DateTimeImmutable())->modify('-' . max(1, $silenceSeconds) . ' seconds');
+    }
 }

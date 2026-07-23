@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass
 
 
@@ -127,6 +128,27 @@ class Config:
     # per cycle for a worker on the default ping interval — reasonably fresh
     # without pushing on every single ping.
     liveness_push_interval_s: float = 30.0
+    # Warm-up window (seconds since the push loop started) during which the
+    # gateway does NOT claim its snapshot is authoritative. Right after a
+    # gateway restart every worker is still reconnecting, so the alive-set is
+    # legitimately empty/partial — an `authoritative: false` push is applied by
+    # PHP as a plain delta (no offline sweep). Belt-and-suspenders only: PHP's
+    # own silence-window guard already makes a partial snapshot harmless (see
+    # `App\Service\Worker\WorkerLivenessReconciler`), this just avoids even
+    # attempting a sweep from an obviously-incomplete view.
+    liveness_snapshot_warmup_s: float = 60.0
+    # Per-`(workerType, instanceId)` cooldown between two `re-register` control
+    # frames (registry-09 self-healing). PHP answers `unknown` on EVERY push
+    # cycle for an instance with no capability row, so without a cooldown the
+    # gateway would hammer the worker every `liveness_push_interval_s`. 300 s ≫
+    # one push cycle: one nudge, then silence until it plausibly failed again.
+    liveness_reregister_cooldown_s: float = 300.0
+    # Self-identification carried in every liveness push. Purely diagnostic on
+    # the PHP side (logged, never a state key) — the reconcile invariant is
+    # deliberately NOT keyed on gateway ownership, see
+    # `App\Service\Worker\WorkerLivenessReconciler`. Defaults to the container
+    # hostname so multi-gateway logs are still tellable apart with zero config.
+    gateway_id: str = "gateway"
 
 
 def load_config() -> Config:
@@ -160,4 +182,9 @@ def load_config() -> Config:
         reclaim_idle_ms_data=_getenv_int("RECLAIM_IDLE_MS_DATA", 180_000),
         reclaim_idle_ms_ai=_getenv_int("RECLAIM_IDLE_MS_AI", 300_000),
         liveness_push_interval_s=_getenv_float("LIVENESS_PUSH_INTERVAL_S", 30.0),
+        liveness_snapshot_warmup_s=_getenv_float("LIVENESS_SNAPSHOT_WARMUP_S", 60.0),
+        liveness_reregister_cooldown_s=_getenv_float(
+            "LIVENESS_REREGISTER_COOLDOWN_S", 300.0
+        ),
+        gateway_id=os.getenv("GATEWAY_ID", "").strip() or socket.gethostname(),
     )

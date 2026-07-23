@@ -185,6 +185,14 @@ class WsGateway:
         self._handoff: dict[str, asyncio.Queue] = {
             t: asyncio.Queue() for t in WORKER_TYPES
         }
+        # registry-09: (workerType, instanceId) → live WS connection, so the
+        # liveness push loop can send a `re-register` control frame to a worker
+        # PHP reported as having no capability row. Populated ONLY for
+        # connections that presented a valid instanceId (same key space as
+        # `LivenessAggregator._alive`) and removed on teardown with an IDENTITY
+        # check — a reconnect that lands before the old handler's finally runs
+        # must not have its fresh entry deleted by the dying one.
+        self._conns: dict[tuple[str, str], ServerConnection] = {}
 
     def get_handoff_queues(self) -> dict[str, asyncio.Queue]:
         """Per-type handoff-очереди для idle-reclaim (s1-06)."""
@@ -194,6 +202,44 @@ class WsGateway:
         """Агрегатор liveness (registry-06) — читается `run_liveness_push_loop`,
         запущенным рядом отдельной asyncio-задачей из `__main__.py`."""
         return self._liveness
+
+    @staticmethod
+    def _conn_key(session: WorkerSession) -> tuple[str, str] | None:
+        """Ключ реестра соединений (registry-09) — тот же `(workerType,
+        instanceId)`, которым ключуется `LivenessAggregator`. None — старый
+        воркер без instanceId в ready: его нельзя ни отследить в liveness, ни
+        адресно попросить перерегистрироваться (диспетч задач не затронут)."""
+        if not session.instance_id:
+            return None
+        return (session.worker_type, session.instance_id)
+
+    async def request_reregister(self, worker_type: str, instance_id: str) -> bool:
+        """Попросить конкретный живой инстанс заново выполнить `register()`
+        (registry-09 self-healing). Зовётся из liveness-push-цикла, когда PHP
+        вернул этот инстанс в `unknown` (строки capability нет — воркер проиграл
+        гонку register при деплое, либо строку уже собрал GC).
+
+        Контроль-фрейм `re-register` — АДДИТИВНЫЙ: воркер старого билда попадёт
+        в `else`-ветку своего `_reader_loop` и просто залогирует его в debug —
+        не крашится и не рвёт соединение (см. `workers/common/ws_client.py`).
+
+        True — фрейм отправлен; False — соединения уже нет (гонка со снапшотом)
+        либо оно закрылось прямо в момент отправки. Не бросает: это телеметрия,
+        а не путь доставки задачи. Отправка из ЧУЖОЙ задачи безопасна — по этому
+        же сокету уже конкурентно шлют `pong` (reader) и `job` (dispatcher).
+        """
+        ws = self._conns.get((worker_type, instance_id))
+        if ws is None:
+            return False
+        try:
+            await ws.send(json.dumps({"type": "re-register", "reason": "no capability row"}))
+        except ConnectionClosed:
+            return False
+        logger.info(
+            "re-register frame sent",
+            extra={"workerType": worker_type, "instanceId": instance_id},
+        )
+        return True
 
     def _get_relay(self) -> RelayClient:
         """Ленивая инициализация relay-клиента (создаём в async-контексте, не в
@@ -249,6 +295,9 @@ class WsGateway:
         # registry-06: агрегатор сам логирует WARNING, если instanceId
         # отсутствует/невалиден — здесь просто передаём, что есть.
         self._liveness.record_connect(session.worker_type, session.instance_id)
+        conn_key = self._conn_key(session)
+        if conn_key is not None:
+            self._conns[conn_key] = ws
 
         # Диспетч и чтение входящих фреймов — параллельно; закрытие соединения
         # (клиентом) завершает reader → отменяем dispatcher. Кредитный учёт общий:
@@ -266,6 +315,12 @@ class WsGateway:
             for task in (reader, dispatcher):
                 with suppress(asyncio.CancelledError, ConnectionClosed):
                     await task
+            # registry-09: снять СВОЮ запись из реестра соединений — но только
+            # если там всё ещё лежит ИМЕННО этот ws. Реконнект того же инстанса
+            # может успеть записать новое соединение до того, как отработает
+            # этот finally; безусловный pop() убил бы живую запись.
+            if conn_key is not None and self._conns.get(conn_key) is ws:
+                del self._conns[conn_key]
             # registry-06: обрыв WS → следующий liveness-батч репортит инстанс
             # disconnected (сигнал ТОЛЬКО для админ-вью — НЕ трогает
             # routing-матрицу, gateway её вообще не читает/не пишет).

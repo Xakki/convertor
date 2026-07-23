@@ -78,7 +78,13 @@ final class WorkerController extends AbstractController
             return $this->json(['error' => $err], Response::HTTP_BAD_REQUEST);
         }
 
-        $this->workerCapabilityRepository->upsert((string) $data['workerType'], (string) $data['instanceId'], $data);
+        // host (registry-08): опциональное поле — старый Python-билд его не шлёт,
+        // это НЕ повод 400-ить весь register. Отдельный столбец (см. репозиторий),
+        // не только часть JSON-блоба $data (в котором ключ тоже остаётся — honest
+        // raw echo того, что воркер прислал).
+        $host = isset($data['host']) && is_string($data['host']) && $data['host'] !== '' ? $data['host'] : null;
+
+        $this->workerCapabilityRepository->upsert((string) $data['workerType'], (string) $data['instanceId'], $data, $host);
         $this->registry->invalidateMatrix();
 
         return $this->json(['ok' => true]);
@@ -115,6 +121,13 @@ final class WorkerController extends AbstractController
         }
         if (! isset($data['matrix']) || ! is_array($data['matrix'])) {
             return 'matrix must be an object';
+        }
+        // host (registry-08) — OPTIONAL (old worker builds don't send it): absent/null
+        // is fine, but if present it must be a string within a sane length.
+        if (array_key_exists('host', $data) && $data['host'] !== null) {
+            if (! is_string($data['host']) || strlen($data['host']) > 255) {
+                return 'host must be a string (max 255 chars) or null';
+            }
         }
 
         return null;

@@ -58,7 +58,7 @@ xakki-convertor/worker-ai:cuda  (или :cpu)         ← собирается �
 Траблшутинг).
 
 Источники: `docker/workers/ai-base.Dockerfile`, `docker/workers/ai.cuda.Dockerfile`,
-`docker/workers/ai.cpu.Dockerfile`, шапка `docker-compose.worker-ai.yml`.
+`docker/workers/ai.cpu.Dockerfile`, сервис `worker-ai` в `docker-compose.yml`.
 
 ### Предпосылки на хосте
 
@@ -126,12 +126,16 @@ docker run --rm --entrypoint python3 xakki-convertor/worker-ai:cuda \
 
 ### Compose-альтернатива запуску
 
+worker-ai — обычный сервис в основном `docker-compose.yml` (не отдельный файл):
+заполнить `WORKER_API_TOKEN`/`GATEWAY_WS_URL`/`API_BASE_URL` в `.env.local`
+(см. `docs/workers-remote-deploy.md`, блок «Remote worker host») и поднять:
 ```bash
-cp .env.worker-ai.example .env.worker-ai      # заполнить GATEWAY_WS_URL + WORKER_API_TOKEN + API_BASE_URL
-docker compose -f docker-compose.worker-ai.yml --env-file .env.worker-ai up -d
+docker compose up -d --no-deps worker-ai
 ```
-Для GPU — раскомментировать блок `deploy.resources.devices` в
-`docker-compose.worker-ai.yml` и выставить `WHISPER_DEVICE=cuda`.
+Для GPU — задать `AI_VARIANT=cuda` + `AI_RUNTIME=nvidia` в `.env.local` (образ
+переключается на `:cuda`-тег, runtime — на `nvidia`) и раскомментировать блок
+`deploy.resources.devices` у сервиса `worker-ai` в `docker-compose.yml`, затем
+выставить `WHISPER_DEVICE=cuda`.
 
 ## Переменные окружения
 
@@ -180,7 +184,8 @@ docker compose -f docker-compose.worker-ai.yml --env-file .env.worker-ai up -d
    `worker-ai-base:local` из текущих исходников, отдельный шаг для базы не нужен.
 2. Гейт (шаг 3 выше).
 3. Пересоздать контейнер (`docker rm -f worker-ai` + `docker run …`, или
-   `--force-recreate` через compose / `make worker-ai-recreate`).
+   `docker compose up -d --force-recreate --no-deps worker-ai` / `make workers-recreate`
+   для всех 6 воркеров сразу).
 
 На хосте без репозитория (путь 2b) или чтобы раздать свежую базу на другой хост:
 1. С хоста, где есть исходники: `make push-ai-base` (пересобирает и пушит
@@ -208,4 +213,6 @@ docker compose -f docker-compose.worker-ai.yml --env-file .env.worker-ai up -d
 
 - `docs/queue-contract.md`, `docs/queue-streams.md` — контракт очередей и WS-транспорт
   (воркер — WS-клиент gateway, не трогает KeyDB/S3 напрямую).
-- `docker-compose.worker-ai.yml` — эталонные инструкции сборки/запуска в шапке.
+- `docker-compose.yml` (сервис `worker-ai`) — актуальный env/volumes/healthcheck.
+- `docs/workers-remote-deploy.md` — запуск AI-воркера как части remote-хоста
+  (все 6 воркеров разом).

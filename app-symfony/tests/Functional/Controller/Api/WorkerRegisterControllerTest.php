@@ -54,7 +54,7 @@ final class WorkerRegisterControllerTest extends WebTestCase
         $repo = $this->createMock(WorkerCapabilityRepository::class);
         $repo->expects(self::once())
             ->method('upsert')
-            ->with('image', 'host-a.image-0', self::VALID_PAYLOAD);
+            ->with('image', 'host-a.image-0', self::VALID_PAYLOAD, null);
         $container->set(WorkerCapabilityRepository::class, $repo);
 
         $registry = $this->createMock(ConversionRegistry::class);
@@ -100,6 +100,90 @@ final class WorkerRegisterControllerTest extends WebTestCase
         );
 
         self::assertSame(200, $client->getResponse()->getStatusCode());
+    }
+
+    // -------------------------------------------------------------------------
+    // host (registry-08): опциональное поле, отдельный параметр upsert()
+    // -------------------------------------------------------------------------
+
+    public function testRegisterForwardsHostToRepository(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $payload = array_merge(self::VALID_PAYLOAD, ['host' => 'xbook-remote']);
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::once())
+            ->method('upsert')
+            ->with('image', 'host-a.image-0', $payload, 'xbook-remote');
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $registry = $this->createStub(ConversionRegistry::class);
+        $container->set(ConversionRegistry::class, $registry);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+    }
+
+    public function testRegisterWithoutHostForwardsNull(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::once())
+            ->method('upsert')
+            ->with('image', 'host-a.image-0', self::VALID_PAYLOAD, null);
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $registry = $this->createStub(ConversionRegistry::class);
+        $container->set(ConversionRegistry::class, $registry);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode(self::VALID_PAYLOAD),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+    }
+
+    public function testRegisterReturns400WhenHostIsNotAString(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $repo = $this->createStub(WorkerCapabilityRepository::class);
+        $container->set(WorkerCapabilityRepository::class, $repo);
+        $registry = $this->createStub(ConversionRegistry::class);
+        $container->set(ConversionRegistry::class, $registry);
+
+        $payload = array_merge(self::VALID_PAYLOAD, ['host' => 12345]);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertStringContainsString('host', (string) ($body['error'] ?? ''));
     }
 
     // -------------------------------------------------------------------------

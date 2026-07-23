@@ -24,6 +24,8 @@ final class WorkerStatsProviderTest extends TestCase
         \DateTimeImmutable $lastSeen,
         WorkerLivenessStatus $status,
         array $capabilities = [],
+        ?array $metrics = null,
+        ?string $host = null,
     ): WorkerCapability {
         $cap = $this->createStub(WorkerCapability::class);
         $cap->method('getWorkerType')->willReturn($workerType);
@@ -35,6 +37,8 @@ final class WorkerStatsProviderTest extends TestCase
             'instanceId' => $instanceId,
             'matrix'     => [],
         ]);
+        $cap->method('getMetrics')->willReturn($metrics);
+        $cap->method('getHost')->willReturn($host);
 
         return $cap;
     }
@@ -125,6 +129,83 @@ final class WorkerStatsProviderTest extends TestCase
 
         self::assertNull($row['image']);
         self::assertNull($row['version']);
+    }
+
+    public function testIsAiStreamsRoutingKeysAndMatrixCategoriesAreExposed(): void
+    {
+        $cap = $this->stubCap('ai', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive, [
+            'isAi'              => true,
+            'streams'           => ['ai'],
+            'routingKeys'       => ['ai'],
+            'matrix_categories' => ['mp3' => 'audio', 'wav' => 'audio'],
+        ]);
+
+        $row = $this->provider([$cap])->collect()['workers'][0];
+
+        self::assertTrue($row['isAi']);
+        self::assertSame(['ai'], $row['streams']);
+        self::assertSame(['ai'], $row['routingKeys']);
+        self::assertSame(['mp3' => 'audio', 'wav' => 'audio'], $row['matrix_categories']);
+    }
+
+    public function testMissingIsAiStreamsRoutingKeysAndMatrixCategoriesDefaultToEmpty(): void
+    {
+        $cap = $this->stubCap('image', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive);
+
+        $row = $this->provider([$cap])->collect()['workers'][0];
+
+        self::assertFalse($row['isAi']);
+        self::assertSame([], $row['streams']);
+        self::assertSame([], $row['routingKeys']);
+        self::assertSame([], $row['matrix_categories']);
+    }
+
+    public function testMetricsArePassedThroughFromTheEntityWhenPresent(): void
+    {
+        $cap = $this->stubCap(
+            'image',
+            'host-a:1',
+            new \DateTimeImmutable(),
+            WorkerLivenessStatus::Alive,
+            metrics: ['cpu' => 0.42, 'mem' => 0.31, 'load' => 0.1],
+        );
+
+        $row = $this->provider([$cap])->collect()['workers'][0];
+
+        self::assertSame(['cpu' => 0.42, 'mem' => 0.31, 'load' => 0.1], $row['metrics']);
+    }
+
+    public function testMetricsAreNullWhenTheWorkerNeverPushedAny(): void
+    {
+        $cap = $this->stubCap('image', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive);
+
+        $row = $this->provider([$cap])->collect()['workers'][0];
+
+        self::assertNull($row['metrics']);
+    }
+
+    public function testHostIsPassedThroughFromTheEntityWhenPresent(): void
+    {
+        $cap = $this->stubCap(
+            'image',
+            'host-a:1',
+            new \DateTimeImmutable(),
+            WorkerLivenessStatus::Alive,
+            host: 'xbook-remote',
+        );
+
+        $row = $this->provider([$cap])->collect()['workers'][0];
+
+        self::assertSame('xbook-remote', $row['host']);
+    }
+
+    public function testHostIsNullWhenTheWorkerNeverSentOne(): void
+    {
+        $cap = $this->stubCap('image', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive);
+
+        $row = $this->provider([$cap])->collect()['workers'][0];
+
+        self::assertNull($row['host']);
     }
 
     /** Sort: workerType asc, then seed-row first within its group, then instanceId asc. */

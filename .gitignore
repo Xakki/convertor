@@ -4,7 +4,6 @@
 !/.env.test
 !/app-symfony/.env.test
 !/.env.local_example
-!/.env.worker-ai.example
 /.claude/worktrees/
 /shared-files/*
 !/shared-files/.gitkeep

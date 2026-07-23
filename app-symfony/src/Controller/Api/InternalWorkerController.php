@@ -10,6 +10,7 @@ use App\Repository\WorkerCapabilityRepository;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Storage\S3Storage;
 use App\Service\Worker\ResultKeyBuilder;
+use App\Service\Worker\WorkerLivenessReconciler;
 use App\Service\Worker\WorkerStreamGateway;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -42,6 +43,7 @@ final class InternalWorkerController extends AbstractController
         private readonly ResultKeyBuilder $keyBuilder,
         private readonly ConversionRepository $conversions,
         private readonly WorkerCapabilityRepository $workerCapabilities,
+        private readonly WorkerLivenessReconciler $reconciler,
     ) {
     }
 
@@ -183,8 +185,10 @@ final class InternalWorkerController extends AbstractController
      * POST /api/v1/internal/worker/liveness
      * Body: {"instances":[{"workerType":"...","instanceId":"...",
      *   "status":"alive"|"disconnected","lastSeenAt":"<ISO-8601 UTC>",
-     *   "metrics":{"cpu":<float|null>,"mem":<float|null>,"load":<float|null>}|absent}]}
-     * Response: {"updated":<int>,"unknown":[{"workerType":"...","instanceId":"..."}]}
+     *   "metrics":{"cpu":<float|null>,"mem":<float|null>,"load":<float|null>}|absent}],
+     *   "snapshot":<bool|absent>,"authoritative":<bool|absent>,"gatewayId":<string|absent>}
+     * Response: {"updated":<int>,"unknown":[{"workerType":"...","instanceId":"..."}],
+     *   "offlined":<int>}
      *
      * registry-06 (gateway batch push, one tick per ping-aggregation window).
      * UPDATE ONLY — {@see WorkerCapabilityRepository::updateLiveness()} never
@@ -194,27 +198,34 @@ final class InternalWorkerController extends AbstractController
      * worker with no declared matrix is exactly what registry-05's "no
      * silent non-empty fallback" contract forbids.
      *
-     * KNOWN GAP (review finding, tracked as a separate grooming card — do
-     * NOT treat this as self-healing): reporting `unknown` does not, by
-     * itself, cause anything to re-create the row. Nothing here forces the
-     * gateway to re-register that worker, and `register()` only fires on the
-     * worker's OWN (re)connect. If a row is GC'd while its worker keeps its
-     * WS connection open (never drops it), the gap persists indefinitely —
-     * not just "until the next push cycle" — until an unrelated reconnect
-     * happens to trigger a fresh `register()`.
+     * registry-09 — `unknown` IS now actionable (the KNOWN GAP noted here
+     * before is closed): the gateway holds that worker's live WS connection
+     * and, on seeing it in `unknown`, sends it a rate-limited `re-register`
+     * control frame (`workers/gateway/liveness.py::_handle_unknown` →
+     * `WsGateway.request_reregister`), so the worker POSTs `register()` again
+     * on its own. This endpoint's own contract is unchanged: still
+     * UPDATE-ONLY, it still never fabricates a row.
+     *
+     * registry-09 — RECONCILIATION. When the push declares itself a FULL
+     * alive-set snapshot (`snapshot: true`) from a warmed-up gateway
+     * (`authoritative: true`), rows that no gateway has reported for a whole
+     * silence window are flipped to `disconnected` by
+     * {@see \App\Service\Worker\WorkerLivenessReconciler} — that class owns
+     * the invariant and the reasoning about multi-gateway / gateway-restart /
+     * partial-snapshot safety; do not re-derive it here. Both envelope keys
+     * are OPTIONAL and default to "no reconcile": an older gateway build that
+     * sends neither keeps the exact registry-06 delta-only behaviour.
      *
      * `status` IS persisted ({@see WorkerCapability::$status},
      * {@see \App\Enum\WorkerLivenessStatus}) — it does NOT gate routing
      * (`ConversionRegistry` never reads it), it is a pure monitoring signal
-     * for the future admin page. `metrics` is validated (shape-checked,
-     * malformed rejects the batch same as any other field) but deliberately
-     * NOT persisted — accept-and-ignore, grooming decision: no current
-     * consumer reads worker metrics anywhere (registry-07's admin page lists
-     * workerType/instanceId/image/version/lastSeen/alive-stale/pair count,
-     * no metrics), so shipping a column nobody reads would be dead schema.
-     * Add it (one migration) if/when something actually consumes it — this
-     * is NOT an oversight, do not "fix" it by adding persistence without a
-     * consumer driving the requirement.
+     * for the admin page. `metrics` is validated (shape-checked, malformed
+     * rejects the batch same as any other field) and, since the admin
+     * workers page now surfaces cpu/mem/load ({@see \App\Service\Admin\WorkerStatsProvider}),
+     * IS persisted too ({@see \App\Entity\WorkerCapability::$metrics},
+     * {@see WorkerCapabilityRepository::updateLiveness()}) — null when the
+     * batch entry omits it (e.g. an instance that just connected and hasn't
+     * pinged yet), never fabricated.
      *
      * Malformed-batch policy: ANY invalid entry rejects the WHOLE batch with
      * 400 (not a partial-apply-and-report-the-rest split). This is an
@@ -242,11 +253,35 @@ final class InternalWorkerController extends AbstractController
             $parsed[] = $validated;
         }
 
-        return $this->json($this->workerCapabilities->updateLiveness($parsed));
+        // Порядок обязателен (часть инварианта, см. WorkerLivenessReconciler):
+        // сперва применить батч (живым проставится свежий lastSeen), и только
+        // потом гасить молчащих.
+        $result = $this->workerCapabilities->updateLiveness($parsed);
+
+        // Оба флага строго `true`-only: любое иное значение (отсутствует, null,
+        // строка, false) = «это не авторитетный полный снапшот» → сверку не
+        // запускаем. Fail-closed: сомнительный пуш не должен гасить строки.
+        if (($body['snapshot'] ?? null) === true && ($body['authoritative'] ?? null) === true) {
+            $gatewayId = isset($body['gatewayId']) && is_string($body['gatewayId']) && $body['gatewayId'] !== ''
+                ? $body['gatewayId']
+                : null;
+            $snapshotKeys = array_map(
+                static fn (array $entry): array => [
+                    'workerType' => $entry['workerType'],
+                    'instanceId' => $entry['instanceId'],
+                ],
+                $parsed,
+            );
+            $result['offlined'] = $this->reconciler->reconcile($snapshotKeys, $gatewayId);
+        } else {
+            $result['offlined'] = 0;
+        }
+
+        return $this->json($result);
     }
 
     /**
-     * @return array{workerType: string, instanceId: string, status: WorkerLivenessStatus, lastSeenAt: \DateTimeImmutable}|string
+     * @return array{workerType: string, instanceId: string, status: WorkerLivenessStatus, lastSeenAt: \DateTimeImmutable, metrics: array{cpu: float|null, mem: float|null, load: float|null}|null}|string
      *         Normalized entry, or an error-message string on validation failure.
      */
     private function validateLivenessEntry(mixed $entry): array|string
@@ -275,7 +310,9 @@ final class InternalWorkerController extends AbstractController
         } catch (\Exception) {
             return 'lastSeenAt must be a valid ISO-8601 timestamp';
         }
-        // Shape-validated, then dropped — see the accept-and-ignore note above.
+        // Shape-validated, then normalized to a plain cpu/mem/load array (or
+        // null) for the repository — see the persistence note above.
+        $metrics = null;
         if (array_key_exists('metrics', $entry) && $entry['metrics'] !== null) {
             if (! is_array($entry['metrics'])) {
                 return 'metrics must be an object or null';
@@ -286,6 +323,14 @@ final class InternalWorkerController extends AbstractController
                     return "metrics.{$field} must be numeric or null";
                 }
             }
+            $cpu     = $entry['metrics']['cpu']  ?? null;
+            $mem     = $entry['metrics']['mem']  ?? null;
+            $load    = $entry['metrics']['load'] ?? null;
+            $metrics = [
+                'cpu'  => is_int($cpu)  || is_float($cpu) ? (float) $cpu : null,
+                'mem'  => is_int($mem)  || is_float($mem) ? (float) $mem : null,
+                'load' => is_int($load) || is_float($load) ? (float) $load : null,
+            ];
         }
 
         return [
@@ -293,6 +338,7 @@ final class InternalWorkerController extends AbstractController
             'instanceId' => $entry['instanceId'],
             'status'     => $status,
             'lastSeenAt' => $lastSeenAt,
+            'metrics'    => $metrics,
         ];
     }
 }

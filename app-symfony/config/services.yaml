@@ -52,6 +52,14 @@ parameters:
     # заведомо больше любого разумного окна простоя/деплоя воркера.
     env(WORKER_CAPABILITY_GC_TTL_HOURS): '168'
 
+    # Окно тишины сверки liveness (registry-09, WorkerLivenessReconciler).
+    # Секунды; строка со `status=alive`, которую НИ ОДИН gateway не репортил
+    # дольше этого срока, гасится в `disconnected`. Совсем другая шкала, чем
+    # GC-TTL выше: должно быть заметно больше периода пуша gateway
+    # (LIVENESS_PUSH_INTERVAL_S, дефолт 30 с), чтобы один пропущенный/неудачный
+    # цикл не гасил живого воркера. 120 = 4 цикла.
+    env(WORKER_LIVENESS_SILENCE_SECONDS): '120'
+
     # Доверенные прокси для getClientIp() (guest rate-limit по IP). По умолчанию —
     # приватные диапазоны (Symfony keyword `private_ranges`): доверяем nginx в
     # docker-сети. В проде можно сузить до конкретного адреса фронта.
@@ -251,3 +259,10 @@ services:
     App\Service\Admin\WorkerStatsProvider:
         arguments:
             $ttlHours: '%env(int:WORKER_CAPABILITY_GC_TTL_HOURS)%'
+
+    # Сверка liveness по авторитетному снапшоту gateway (registry-09) —
+    # ОТДЕЛЬНЫЙ env от GC-TTL: другая шкала (секунды vs дни) и другой смысл
+    # (пометить offline vs удалить строку).
+    App\Service\Worker\WorkerLivenessReconciler:
+        arguments:
+            $silenceSeconds: '%env(int:WORKER_LIVENESS_SILENCE_SECONDS)%'

@@ -228,6 +228,11 @@ services:
             WORKER_MODULE: workers.libreoffice.worker
             WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-libreoffice
             WORKER_TYPE: document
+            # registry-08: явный host/node-идентификатор для admin-страницы воркеров —
+            # HOST_NAME уже вычисляется Makefile'ом (`hostname`, экспортируется в env
+            # docker compose) для fluent-bit-лейблов; переиспользуем тот же источник,
+            # не заводя отдельную переменную.
+            WORKER_HOST: ${HOST_NAME}
             GATEWAY_WS_URL: ${GATEWAY_WS_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
             API_BASE_URL: ${API_BASE_URL}
@@ -258,6 +263,8 @@ services:
             WORKER_MODULE: workers.ffmpeg.worker
             WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-ffmpeg-audio
             WORKER_TYPE: audio
+            # registry-08: см. комментарий у worker-libreoffice выше.
+            WORKER_HOST: ${HOST_NAME}
             GATEWAY_WS_URL: ${GATEWAY_WS_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
             API_BASE_URL: ${API_BASE_URL}
@@ -288,6 +295,8 @@ services:
             WORKER_MODULE: workers.ffmpeg.worker
             WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-ffmpeg-video
             WORKER_TYPE: video
+            # registry-08: см. комментарий у worker-libreoffice выше.
+            WORKER_HOST: ${HOST_NAME}
             GATEWAY_WS_URL: ${GATEWAY_WS_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
             API_BASE_URL: ${API_BASE_URL}
@@ -318,6 +327,8 @@ services:
             WORKER_MODULE: workers.image.worker
             WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-image
             WORKER_TYPE: image
+            # registry-08: см. комментарий у worker-libreoffice выше.
+            WORKER_HOST: ${HOST_NAME}
             GATEWAY_WS_URL: ${GATEWAY_WS_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
             API_BASE_URL: ${API_BASE_URL}
@@ -332,9 +343,142 @@ services:
         networks:
             - default
 
-    # worker-ai lives in docker-compose.worker-ai.yml (add it to COMPOSE_FILE in
-    # .env.local). On-server it runs as a full prod CPU worker; remote GPU hosts
-    # run the same worker in parallel — both are independent conv.ai consumers.
+    worker-ai:
+        # CPU-образ по умолчанию (собирается `make build-ai-cpu`); на GPU-хосте
+        # переопределить AI_VARIANT=cuda + AI_RUNTIME=nvidia в .env.local (см.
+        # .env.local_example, docs/workers-remote-deploy.md).
+        # build: нужен, чтобы голый `make up`/`docker compose up` на свежем хосте не пытался
+        # ПУЛЛИТЬ несуществующий тег (worker-ai в Harbor не публикуется — только
+        # worker-ai-base), а сам собрал рабочий образ. Двухступенчатая схема
+        # (ai-base → ai.cpu/ai.cuda) — см. workers/Makefile: `make build-ai-cpu`/
+        # `build-ai-cuda` остаются рекомендованным путём (сами пересобирают свежий
+        # ai-base ЛОКАЛЬНО перед сборкой рабочего образа); голый `docker compose build
+        # worker-ai` — фолбэк, тянущий AI_BASE_IMAGE из Harbor через ARG-дефолт ниже.
+        build:
+            context: .
+            dockerfile: docker/workers/ai.${AI_VARIANT:-cpu}.Dockerfile
+            args:
+                AI_BASE_IMAGE: ${AI_BASE_IMAGE:-harbor.xakki.ru/convertor/worker-ai-base:latest}
+                APP_UID: ${APP_UID:-1000}
+                APP_GID: ${APP_GID:-1000}
+        image: ${COMPOSE_PROJECT_NAME}/worker-ai:${AI_VARIANT:-cpu}
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
+        # Стабильный hostname → стабильный auto-derived WORKER_ID (см. ws_client.py
+        # _default_worker_id, §6.1): без пиннинга каждое пересоздание контейнера
+        # получало бы новое имя KeyDB-consumer'а (мирроим hostname-паттерн php/cron
+        # в основном docker-compose.yml).
+        hostname: "${COMPOSE_PROJECT_NAME:-convertor}-worker-ai"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 60s
+        stop_signal: SIGTERM
+        # runc (дефолт) на CPU-хосте; nvidia на GPU-хосте вместе с AI_VARIANT=cuda
+        # (докер-runtime, нужный для --gpus/CUDA-доступа внутри контейнера).
+        runtime: ${AI_RUNTIME:-runc}
+        # ВНИМАНИЕ: 1G снят в idle-окно (QW1b). AI-инференс грузит ML-модели
+        # (Whisper + embedding + llama.cpp GGUF) в RAM — при реальной нагрузке
+        # поднять память, иначе OOM убьёт задачу в полёте.
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "1"
+                    memory: "1G"
+        volumes:
+            # Named volume for HuggingFace model cache (Whisper, embedding weights).
+            - worker-ai-models:/home/app/.cache/huggingface
+            # Dev-server settings overlay — must survive restart (NOT under WORK_DIR/tempdir).
+            # Used only by `python -m workers.ai --devserver`; see ai-worker-devserver.
+            - worker-ai-data:/data
+            # Alternative: bind-mount already-downloaded weights from the host (no re-download):
+            # - ${HF_CACHE_HOST:-~/.cache/huggingface}:/home/app/.cache/huggingface
+            # Ollama sidecar weights (only needed when running an Ollama sidecar inside the
+            # container — NOT for the default external-Ollama path via OLLAMA_URL).
+            # Note: container runs as uid 1000 (app); /root/.ollama may not be writable.
+            # - ${OLLAMA_HOME:-~/.ollama}:/root/.ollama
+        environment:
+            WORKER_MODULE: workers.ai.worker
+            # Pull-API (required)
+            API_BASE_URL: ${API_BASE_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            WORKER_TYPE: ${WORKER_TYPE:-ai}
+            # registry-08: см. комментарий у worker-libreoffice выше.
+            WORKER_HOST: ${HOST_NAME}
+            # WS-транспорт (prod worker mode): без явного GATEWAY_WS_URL воркер падает
+            # обратно на публичный wss://…/ws/worker/, зашитый в workers/ai/worker.py
+            # (_run_with_signals default_gateway_ws_url) — годится для remote-хоста, но
+            # worker-ai теперь обычный сервис в этом же docker-compose.yml (рядом с
+            # worker-data и др.) и берёт внутренний адрес из корневого .env.
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            # Рабочий каталог для временных файлов конвертации (см. worker-data/др.).
+            WORK_DIR: /tmp/worker
+            # STT
+            WHISPER_MODEL: ${WHISPER_MODEL:-base}
+            # Пустой фолбэк (не cpu/int8!) — иначе compose-env забивает автодетект в
+            # workers/ai/config.py (_autodetect_device). Пусто → воркер сам определит
+            # cuda+float16 при видимом GPU, иначе cpu+int8.
+            WHISPER_DEVICE: ${WHISPER_DEVICE:-}
+            WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-}
+            STREAM_WINDOW_SEC: ${STREAM_WINDOW_SEC:-20}
+            STREAM_OVERLAP_SEC: ${STREAM_OVERLAP_SEC:-2}
+            # TTS
+            TTS_ENGINE: ${TTS_ENGINE:-espeak}
+            # Embedding
+            EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+            # LLM text→text — local only. Default = embedded llama.cpp over a HF GGUF
+            # (self-contained, no external server). Switch LLM_BACKEND=ollama to use a
+            # self-hosted Ollama server instead.
+            LLM_BACKEND: ${LLM_BACKEND:-llamacpp}
+            # llamacpp: pull the GGUF from a HF repo on first use (cached in the models volume).
+            LLM_MODEL_REPO: ${LLM_MODEL_REPO:-Qwen/Qwen2.5-0.5B-Instruct-GGUF}
+            LLM_MODEL_FILE: ${LLM_MODEL_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+            OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+            OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+            # llamacpp alt: a local GGUF path instead of LLM_MODEL_REPO (takes precedence if set).
+            LLM_MODEL_PATH: ${LLM_MODEL_PATH:-}
+            LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1024}
+            LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+            LLM_SYSTEM_PROMPT: ${LLM_SYSTEM_PROMPT:-}
+            # Dev-server (only used when overriding command to `python -m workers.ai --devserver`).
+            # Persist overlay on the worker-ai-data volume. A single DEVSERVER_PORT drives both
+            # the uvicorn listen port and the published port below. To reach it from the host you
+            # must also set DEVSERVER_HOST=0.0.0.0 (the in-container default 127.0.0.1 is loopback-only).
+            DEVSERVER_CONFIG_PATH: ${DEVSERVER_CONFIG_PATH:-/data/devserver_settings.json}
+            DEVSERVER_HOST: ${DEVSERVER_HOST:-127.0.0.1}
+            DEVSERVER_PORT: ${DEVSERVER_PORT:-8877}
+            DEVSERVER_TOKEN: ${DEVSERVER_TOKEN:-}
+            # WS Origin allowlist (anti-CSWSH). Localhost is always allowed; when reaching the
+            # dev-server off-loopback or via the nginx /worker-ai/ subpath, add the public origin(s)
+            # here (comma-separated, no path), else the /ws/stream handshake is rejected (1008).
+            #   e.g. DEVSERVER_ALLOWED_ORIGINS=https://convertor.xakki.pro
+            DEVSERVER_ALLOWED_ORIGINS: ${DEVSERVER_ALLOWED_ORIGINS:-}
+        # PROD worker mode (заменяет dev-UI, 2026-07-20): подключается к ws-gateway и
+        # реально обрабатывает conv.ai задачи — как остальные on-server воркеры в
+        # основном docker-compose.yml. Раньше здесь стоял `--devserver` (FastAPI UI +
+        # in-process WS-client), который по дизайну НЕ подключается к gateway и не
+        # берёт задачи; nginx-роут /worker-ai/ и DEVSERVER_* env ниже больше не
+        # обслуживают прод-трафик — оставлены как заглушённая опция для локальной
+        # отладки (см. закомментированный роут в docker/nginx/*/conf.d/default.conf).
+        # Чтобы вернуть dev-UI вручную: command: ["python3", "-m", "workers.ai", "--devserver"].
+        command: ["python3", "-m", "workers.ai"]
+        #   ports: ["${DEVSERVER_PORT:-8877}:${DEVSERVER_PORT:-8877}"]   # only for --devserver + direct host curl
+        # Uncomment for CUDA GPU support (nvidia-container-toolkit required on host):
+        # deploy:
+        #     resources:
+        #         reservations:
+        #             devices:
+        #                 - driver: nvidia
+        #                   count: 1
+        #                   capabilities: [gpu]
+        healthcheck:
+            test: ["CMD", "python3", "-c", "import faster_whisper; print('ok')"]
+            interval: 60s
+            timeout: 15s
+            retries: 3
+            start_period: 60s
+        # default: reaches gateway (public wss://) + Symfony API (http://nginx).
+        networks:
+            - default
 
     worker-data:
         build:
@@ -352,6 +496,8 @@ services:
             WORKER_MODULE: workers.data.worker
             WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-data
             WORKER_TYPE: data
+            # registry-08: см. комментарий у worker-libreoffice выше.
+            WORKER_HOST: ${HOST_NAME}
             GATEWAY_WS_URL: ${GATEWAY_WS_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
             API_BASE_URL: ${API_BASE_URL}
@@ -403,6 +549,14 @@ services:
             RECLAIM_IDLE_MS_VIDEO: ${RECLAIM_IDLE_MS_VIDEO:-600000}
             RECLAIM_IDLE_MS_DATA: ${RECLAIM_IDLE_MS_DATA:-180000}
             RECLAIM_IDLE_MS_AI: ${RECLAIM_IDLE_MS_AI:-300000}
+            # Liveness push + авторитетный снапшот (registry-06/09). Период
+            # пуша обязан быть заметно МЕНЬШЕ окна тишины Symfony
+            # (WORKER_LIVENESS_SILENCE_SECONDS, дефолт 120): иначе живой воркер
+            # будет гаситься между пушами.
+            LIVENESS_PUSH_INTERVAL_S: ${LIVENESS_PUSH_INTERVAL_S:-30}
+            LIVENESS_SNAPSHOT_WARMUP_S: ${LIVENESS_SNAPSHOT_WARMUP_S:-60}
+            LIVENESS_REREGISTER_COOLDOWN_S: ${LIVENESS_REREGISTER_COOLDOWN_S:-300}
+            GATEWAY_ID: ${GATEWAY_ID:-}
         depends_on:
             keydb:
                 condition: service_healthy
@@ -465,3 +619,7 @@ volumes:
         name: "${COMPOSE_PROJECT_NAME}-keydb-data"
     php-socket:
         name: "${COMPOSE_PROJECT_NAME}-php-socket"
+    worker-ai-models:
+        name: "worker-ai-models"
+    worker-ai-data:
+        name: "worker-ai-data"

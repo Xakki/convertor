@@ -22,6 +22,7 @@ use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
 use Psr\Log\NullLogger;
+use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 /**
@@ -718,6 +719,11 @@ final class InternalWorkerControllerTest extends WebTestCase
         self::assertNotNull($reloaded);
         self::assertSame('2099-06-15 12:00:00', $reloaded->getLastSeen()->format('Y-m-d H:i:s'));
         self::assertSame(WorkerLivenessStatus::Alive, $reloaded->getStatus());
+        self::assertSame(
+            ['cpu' => 0.42, 'mem' => 0.31, 'load' => 1.5],
+            $reloaded->getMetrics(),
+            'metrics from the wire payload must now be persisted (Phase 1 cheap wins), not accept-and-ignore',
+        );
     }
 
     /**
@@ -831,6 +837,7 @@ final class InternalWorkerControllerTest extends WebTestCase
         $reloaded = $repo->find($cap->getId());
         self::assertNotNull($reloaded);
         self::assertSame(WorkerLivenessStatus::Disconnected, $reloaded->getStatus());
+        self::assertNull($reloaded->getMetrics(), 'omitted metrics must persist as null, not fabricated zeros');
     }
 
     /**
@@ -991,6 +998,219 @@ final class InternalWorkerControllerTest extends WebTestCase
         $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(0, $body['updated']);
         self::assertSame([], $body['unknown']);
+    }
+
+    // -------------------------------------------------------------------------
+    // liveness reconcile (registry-09) — gateway = источник истины о подключённых
+    //
+    // Инвариант целиком описан в App\Service\Worker\WorkerLivenessReconciler;
+    // тесты ниже пиннят ровно его четыре условия и обе ветки обратной
+    // совместимости (пуш без флагов = дельта, как в registry-06).
+    // -------------------------------------------------------------------------
+
+    /**
+     * Главный сценарий: инстанс, о котором gateway не отчитался целое окно
+     * тишины, гасится в `disconnected` — та самая ложь админ-панели, ради
+     * которой сделан эпик. Строка НЕ удаляется и `lastSeen` НЕ двигается
+     * (это вход GC и колонки «Свежесть»).
+     */
+    public function testAuthoritativeSnapshotOfflinesSilentAliveInstance(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'reconcile-silent');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $this->ageLastSeen($cap, '2020-01-01 00:00:00');
+
+        $this->pushLiveness($client, [], ['snapshot' => true, 'authoritative' => true, 'gatewayId' => 'gw-a']);
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertGreaterThanOrEqual(1, $body['offlined']);
+
+        $reloaded = $this->reload($repo, $cap);
+        self::assertSame(WorkerLivenessStatus::Disconnected, $reloaded->getStatus());
+        self::assertSame(
+            '2020-01-01 00:00:00',
+            $reloaded->getLastSeen()->format('Y-m-d H:i:s'),
+            'сверка меняет только status — lastSeen кормит GC и колонку «Свежесть»',
+        );
+    }
+
+    /**
+     * Инстанс ЕСТЬ в снапшоте, но его `lastSeenAt` уже старый (подключён, но
+     * не шлёт ping'и). Гасить его нельзя — спасает явное исключение ключей
+     * снапшота, а не одно только условие по времени.
+     */
+    public function testInstancePresentInSnapshotIsNeverOfflinedEvenWithOldLastSeen(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'reconcile-present');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $this->ageLastSeen($cap, '2020-01-01 00:00:00');
+
+        $this->pushLiveness(
+            $client,
+            [[
+                'workerType' => $cap->getWorkerType(),
+                'instanceId' => $cap->getInstanceId(),
+                'status'     => 'alive',
+                'lastSeenAt' => '2020-06-01T00:00:00Z',
+            ]],
+            ['snapshot' => true, 'authoritative' => true],
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        self::assertSame(WorkerLivenessStatus::Alive, $this->reload($repo, $cap)->getStatus());
+    }
+
+    /**
+     * Прогрев gateway после рестарта: `authoritative: false` — снапшот заведомо
+     * неполный (воркеры ещё переподключаются), сверка не запускается вовсе.
+     */
+    public function testNonAuthoritativeSnapshotDoesNotOfflineAnything(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'reconcile-warmup');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $this->ageLastSeen($cap, '2020-01-01 00:00:00');
+
+        $this->pushLiveness($client, [], ['snapshot' => true, 'authoritative' => false]);
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(0, $body['offlined']);
+        self::assertSame(WorkerLivenessStatus::Alive, $this->reload($repo, $cap)->getStatus());
+    }
+
+    /**
+     * Обратная совместимость: gateway СТАРОГО билда шлёт батч без конверта —
+     * поведение обязано остаться ровно registry-06 (дельта, без сверки).
+     */
+    public function testPushWithoutSnapshotFlagStaysDeltaOnly(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'reconcile-legacy');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $this->ageLastSeen($cap, '2020-01-01 00:00:00');
+
+        $this->pushLiveness($client, []);
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(0, $body['offlined']);
+        self::assertSame(WorkerLivenessStatus::Alive, $this->reload($repo, $cap)->getStatus());
+    }
+
+    /**
+     * МНОГО GATEWAY: воркер висит на ДРУГОМ gateway, тот каждый цикл обновляет
+     * ему `lastSeen`. Снапшот первого gateway его не содержит — и всё равно не
+     * должен его погасить. Именно это свойство даёт условие по окну тишины,
+     * поэтому колонка «владельца» (gateway_id) и не понадобилась.
+     */
+    public function testSnapshotFromOneGatewayDoesNotOfflineAnotherGatewaysWorker(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'reconcile-other-gw');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+        // registerCapability() уже проставил lastSeen = now — ровно то, что
+        // делает пуш второго gateway каждый цикл.
+
+        $this->pushLiveness($client, [], ['snapshot' => true, 'authoritative' => true, 'gatewayId' => 'gw-a']);
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        self::assertSame(WorkerLivenessStatus::Alive, $this->reload($repo, $cap)->getStatus());
+    }
+
+    /**
+     * Seed-строка (registry-03) — не процесс: у неё вечно древний lastSeen и
+     * она никогда не получает liveness-пуш. Сверка обязана её не трогать,
+     * иначе админка показывала бы «снимок матрицы» как упавший воркер.
+     */
+    public function testSeedRowIsNeverOfflinedByReconcile(): void
+    {
+        $client = static::createClient();
+        $conn   = static::getContainer()->get(EntityManagerInterface::class)->getConnection();
+        // Худший случай для seed: статус alive + древний last_seen (дата
+        // seed-миграции) — под все условия сверки, кроме исключения по
+        // instance_id. Исходное состояние восстанавливаем в finally.
+        $conn->executeStatement(
+            "UPDATE worker_capabilities SET status = 'alive', last_seen = '2020-01-01 00:00:00' WHERE instance_id = '__seed__'",
+        );
+
+        try {
+            $this->pushLiveness($client, [], ['snapshot' => true, 'authoritative' => true]);
+            self::assertSame(200, $client->getResponse()->getStatusCode());
+
+            $stillAlive = (int) $conn->fetchOne(
+                "SELECT COUNT(*) FROM worker_capabilities WHERE instance_id = '__seed__' AND status = 'alive'",
+            );
+            $total = (int) $conn->fetchOne("SELECT COUNT(*) FROM worker_capabilities WHERE instance_id = '__seed__'");
+            self::assertSame($total, $stillAlive, 'seed-строки не гасятся сверкой ни при каких условиях');
+        } finally {
+            $conn->executeStatement(
+                "UPDATE worker_capabilities SET status = 'unknown' WHERE instance_id = '__seed__'",
+            );
+        }
+    }
+
+    /**
+     * Строка, уже помеченной `disconnected`, повторно не «гасится» — счётчик
+     * `offlined` считает реальные переходы, а не совпадения по условию.
+     */
+    public function testAlreadyDisconnectedRowIsNotCountedAgain(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'reconcile-idempotent');
+        $this->ageLastSeen($cap, '2020-01-01 00:00:00');
+
+        $meta = ['snapshot' => true, 'authoritative' => true];
+        $this->pushLiveness($client, [], $meta);
+        $first = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        $this->pushLiveness($client, [], $meta);
+        $second = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertGreaterThanOrEqual(1, $first['offlined']);
+        self::assertSame(0, $second['offlined'], 'второй проход по тем же строкам — no-op');
+    }
+
+    /**
+     * POST на liveness-эндпоинт с опциональным конвертом registry-09.
+     *
+     * @param list<array<string, mixed>> $instances
+     * @param array<string, mixed>       $meta
+     */
+    private function pushLiveness(KernelBrowser $client, array $instances, array $meta = []): void
+    {
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode(['instances' => $instances] + $meta, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    /**
+     * Состарить `last_seen` строки нативным SQL — тем же путём, каким его
+     * читает сверка (мимо UnitOfWork), чтобы тест не зависел от identity map.
+     */
+    private function ageLastSeen(WorkerCapability $cap, string $lastSeen): void
+    {
+        static::getContainer()->get(EntityManagerInterface::class)->getConnection()->executeStatement(
+            'UPDATE worker_capabilities SET last_seen = :lastSeen WHERE id = :id',
+            ['lastSeen' => $lastSeen, 'id' => $cap->getId()],
+        );
+    }
+
+    private function reload(WorkerCapabilityRepository $repo, WorkerCapability $cap): WorkerCapability
+    {
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+
+        return $reloaded;
     }
 
     /**

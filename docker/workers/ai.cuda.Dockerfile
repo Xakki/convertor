@@ -122,7 +122,7 @@ ENV WORKER_TYPE=ai
 # cpu+int8. Запечённый ENV замаскировал бы автодетект; переопределяются через -e/compose.
 
 # Import-based healthcheck — образ самодостаточен вне compose (параметры согласованы
-# с docker-compose.worker-ai.yml). Обязательно python3 (не python).
+# с worker-ai в docker-compose.yml). Обязательно python3 (не python).
 HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
     CMD python3 -c "import faster_whisper, webrtcvad, workers.common" || exit 1
 

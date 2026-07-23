@@ -1,14 +1,14 @@
 ---
 name: worker-ai-image
 description: >-
-  Как собирать и деплоить Docker-образ AI-воркера convertor (worker-ai): двухслойная
-  схема worker-ai-base (Harbor, весь код) → рабочий образ :cuda/:cpu (собирается локально
-  из базы). Триггеры: build-ai-base/build-ai-cpu/build-ai-cuda, push-ai-base,
-  worker-ai-recreate, запуск AI-воркера на GPU/CPU-хосте, обновить образ воркера.
-  КРИТИЧНЫЕ грабли: ModuleNotFoundError workers.common (крэш-луп), ModuleNotFoundError
-  webrtcvad, устаревший worker-ai-base в Harbor, образ работает с bind-mount но падает
-  без него. Источники: docker/workers/ai-base.Dockerfile, ai.cpu.Dockerfile,
-  ai.cuda.Dockerfile, workers/Makefile, docs/worker-ai-deploy.md.
+  Как собирать и деплоить Docker-образ AI-воркера convertor (worker-ai, обычный сервис
+  в docker-compose.yml): двухслойная схема worker-ai-base (Harbor, весь код) → рабочий
+  образ :cuda/:cpu (собирается локально из базы). Триггеры: build-ai-base/build-ai-cpu/
+  build-ai-cuda, push-ai-base, workers-recreate, запуск AI-воркера на GPU/CPU-хосте,
+  обновить образ воркера. КРИТИЧНЫЕ грабли: ModuleNotFoundError workers.common
+  (крэш-луп), ModuleNotFoundError webrtcvad, устаревший worker-ai-base в Harbor, образ
+  работает с bind-mount но падает без него. Источники: docker/workers/ai-base.Dockerfile,
+  ai.cpu.Dockerfile, ai.cuda.Dockerfile, workers/Makefile, docs/worker-ai-deploy.md.
 ---
 
 # Сборка и деплой образа AI-воркера (worker-ai)
@@ -34,12 +34,13 @@ Make-таргеты (`workers/Makefile`): `build-ai-base` (тегирует ОБ
 `AI_BASE_IMAGE` и локальный `AI_BASE_LOCAL` — за один build), `push-ai-base` (только push
 `AI_BASE_IMAGE` в Harbor — для раздачи на другие хосты), `build-ai-cpu`, `build-ai-cuda
 [CUDA_ARCH=86 TORCH_CUDA_ARCH=8.6 WITH_LLAMACPP=0]` (оба зависят от `build-ai-base` и
-передают `--build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL)`), `worker-ai-up` / `worker-ai-recreate`
-/ `worker-ai-down` (on-server CPU dev-server).
+передают `--build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL)`). worker-ai — обычный сервис
+`docker-compose.yml`, пересоздаётся `workers-recreate` (все 6 воркеров) или напрямую
+`docker compose up -d --force-recreate --no-deps worker-ai` (только он один).
 
 ## ⚠️ ВАЖНО: запускать AI-таргеты ТОЛЬКО из корня репо
 
-Таргеты для AI-воркера — **`build-ai-base`, `push-ai-base`, `build-ai-cpu`, `build-ai-cuda`, `worker-ai-recreate`, `worker-ai-up`** — ОБЯЗАТЕЛЬНО запускаются из корня репо:
+Таргеты для AI-воркера — **`build-ai-base`, `push-ai-base`, `build-ai-cpu`, `build-ai-cuda`, `workers-recreate`** — ОБЯЗАТЕЛЬНО запускаются из корня репо:
 ```bash
 make push-ai-base        # ✓ правильно
 make -C workers push-ai-base  # ✗ НЕПРАВИЛЬНО — Dockerfile-пути не разрешатся
@@ -80,13 +81,18 @@ make -C workers push-ai-base  # ✗ НЕПРАВИЛЬНО — Dockerfile-пут
 
 ## On-server пересоздание (saFin CPU dev-server)
 
-Прод-контейнер `xakki-convertor-worker-ai` использует 4 compose-файла (из `.env.local`
-`COMPOSE_FILE`): base + worker-ai + fluent-logging + limits. `worker-ai-recreate` пересоздаёт
-ТОЛЬКО worker-ai на свежий образ, сохраняя fluentd-логи + memory/cpu-лимиты:
+worker-ai — обычный сервис `docker-compose.yml`, поднимается тем же `COMPOSE_FILE`
+(`docker-compose.yml:docker/fluent-logging.yml:docker/limits.yml`), что и остальные 5
+воркеров: лимиты (`deploy.resources.limits`) — инлайн в самом сервисе, логи — через
+общий `x-logging` в `docker/fluent-logging.yml` (`log_format: "auto"`, как у прочих
+python-воркеров). Пересоздать ТОЛЬКО worker-ai на свежий образ:
 ```bash
-make worker-ai-recreate        # $(WORKER_AI_DC) up -d --force-recreate --no-deps worker-ai
+docker compose up -d --force-recreate --no-deps worker-ai
 ```
-Лимиты/логи worker-ai — инлайн в `docker-compose.worker-ai.yml` (не в `docker/limits.yml`).
+Или все 6 воркеров разом (из корня репо — см. предупреждение выше):
+```bash
+make workers-recreate
+```
 
 ## Обновление образа (чек-лист)
 
@@ -96,7 +102,7 @@ make worker-ai-recreate        # $(WORKER_AI_DC) up -d --force-recreate --no-dep
    пересоберёт свежий `AI_BASE_LOCAL` из текущих исходников (см. грабля 1) перед сборкой
    рабочего образа.
 2. STANDALONE-гейт (см. выше).
-3. Пересоздать: `make worker-ai-recreate` (saFin) или `docker rm -f worker-ai` + `docker run …`.
+3. Пересоздать: `docker compose up -d --force-recreate --no-deps worker-ai` (saFin, только он один; или `make workers-recreate` для всех 6) либо `docker rm -f worker-ai` + `docker run …`.
 
 Чтобы раздать свежую базу на хост БЕЗ репозитория (ручная сборка Dockerfile'ом напрямую,
 `AI_BASE_IMAGE=<Harbor-тег>`, без Makefile) — отдельно: `make push-ai-base` (пушит

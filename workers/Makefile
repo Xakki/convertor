@@ -74,13 +74,13 @@ gateway-logs: ## Tail логи ws-gateway
 	$(DC) logs -f ws-gateway
 
 .PHONY: build-workers
-build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway ## Build all on-server worker images (AI worker is remote — see build-ai-base / build-ai-cuda / build-ai-cpu)
+build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway build-ai-cpu ## Build all on-server worker images incl. worker-ai:cpu (two-stage ai-base→cpu flow stays Makefile-driven)
 
-# Пересоздать ТОЛЬКО контейнеры воркеров из свежих :latest-образов, не трогая
+# Пересоздать ТОЛЬКО контейнеры воркеров из свежих :latest/:cpu-образов, не трогая
 # php/nginx/keydb/mariadb/ws-gateway. --no-deps — чтобы up не поднимал зависимости.
 .PHONY: workers-recreate
-workers-recreate: ## Recreate только worker-контейнеры (не трогает php/nginx/gateway/keydb/mariadb)
-	$(DC) up -d --no-deps worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data
+workers-recreate: ## Recreate все 6 worker-контейнеров, вкл. worker-ai (не трогает php/nginx/gateway/keydb/mariadb)
+	$(DC) up -d --no-deps worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
 
 .PHONY: build-data-test
 build-data-test: build-data ## Build worker-data:test (test deps pre-baked, не попадает в :latest)
@@ -116,7 +116,7 @@ build-workers-test: build-data-test build-ffmpeg-test build-image-test build-lib
 #   ai.cuda  (FROM ai-base + CUDA ML stack)   → LOCAL build on GPU host, NOT published.
 #   ai.cpu   (FROM ai-base + CPU ML stack)    → LOCAL build for CI / CPU-only runs.
 #
-# Run instructions and model-sharing volumes: see docker-compose.worker-ai.yml header.
+# Run instructions and model-sharing volumes: see worker-ai service in docker-compose.yml.
 HARBOR_NS       ?= harbor.xakki.ru/convertor
 AI_BASE_IMAGE   ?= $(HARBOR_NS)/worker-ai-base:latest
 AI_BASE_LOCAL   ?= worker-ai-base:local
@@ -166,75 +166,26 @@ build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (FROM 
 	    --build-arg APP_GID=$(APP_GID) \
 	    -f docker/workers/ai.cpu.Dockerfile .
 
-.PHONY: worker-ai-check
-worker-ai-check: ## Validate docker-compose.worker-ai.yml (standalone home compose)
-	docker compose -f docker-compose.worker-ai.yml config -q
-
-# On-server run of the AI worker as part of the convertor stack — prod worker mode
-# (WS-client, connects to ws-gateway and takes conv.ai jobs; the FastAPI dev-UI at
-# /worker-ai/ is retired, see docker-compose.worker-ai.yml `command`). Explicit -f
-# because the root Makefile unexports COMPOSE_FILE and `docker compose` only
-# auto-loads .env (not .env.local), so the worker-ai overlay would otherwise be
-# dropped. Image/env come from the exported vars (set DOCKER_IMAGE_AI=...:cpu in
-# .env.local). Full 4-file set matches the live deployment's COMPOSE_FILE
-# (.env.local): base + worker-ai + fluent-logging + limits. worker-ai's own
-# logging/limits are inline in docker-compose.worker-ai.yml; the two overlays are
-# included so the file set is identical to the running container's and `up` never
-# recreates it with a narrower set.
-WORKER_AI_DC = $(DC) -f docker-compose.yml -f docker-compose.worker-ai.yml -f docker/fluent-logging.yml -f docker/limits.yml
-
-.PHONY: worker-ai-up
-worker-ai-up: ## Run the AI worker (prod, CPU) on this host as part of the stack
-	$(WORKER_AI_DC) up -d worker-ai
-
-.PHONY: worker-ai-recreate
-worker-ai-recreate: ## Force-recreate ONLY worker-ai to pick up a rebuilt image (keeps its overlays)
-	$(WORKER_AI_DC) up -d --force-recreate --no-deps worker-ai
-
-.PHONY: worker-ai-down
-worker-ai-down: ## Stop & remove the on-server AI worker
-	$(WORKER_AI_DC) rm -sf worker-ai
-
-.PHONY: worker-ai-logs
-worker-ai-logs: ## Tail the on-server AI worker logs
-	$(WORKER_AI_DC) logs -f worker-ai
-
-##@ Remote worker host (WS-клиент-only хост: без php/mariadb/nginx/keydb/ws-gateway/metrics-exporter)
-
-# 6 remote-capable сервисов (5 non-AI + AI) — общий список для up/recreate/down/logs
-# ниже. ws-gateway и metrics-exporter НЕ входят — остаются только на главном сервере.
-REMOTE_WORKER_SVCS = worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
-
-.PHONY: build-workers-remote
-build-workers-remote: build-libreoffice build-ffmpeg build-image build-data build-ai-cpu ## Build images для remote CPU-хоста (5 non-AI + AI:cpu); переиспользует build-* / build-ai-cpu, без дублирования docker build
-
-# --no-deps + fluent-bit ЯВНО в списке сервисов: без этого --no-deps не поднимет
-# sidecar для worker-ai — у него НЕТ depends_on: fluent-bit (логгинг инлайнится прямо
-# в docker-compose.worker-ai.yml, см. шапку файла), в отличие от 5 non-AI воркеров
-# (depends_on прописан в docker/fluent-logging.yml). logrotate НЕ поднимаем: он
-# ротирует файловые логи (mysql slowlog + JSON-volume) — на воркер-only хосте их
-# никто не пишет, воркеры логируют только в stdout через fluentd log-driver.
-.PHONY: remote-workers-up
-remote-workers-up: ## Up ТОЛЬКО 6 remote-воркеров + fluent-bit (без php/mariadb/nginx/keydb/ws-gateway/metrics-exporter)
-	$(WORKER_AI_DC) up -d --no-deps fluent-bit $(REMOTE_WORKER_SVCS)
-
-.PHONY: remote-workers-recreate
-remote-workers-recreate: ## Force-recreate 6 remote-воркеров (подхватить свежесобранные образы; fluent-bit не трогает)
-	$(WORKER_AI_DC) up -d --force-recreate --no-deps $(REMOTE_WORKER_SVCS)
-
-.PHONY: remote-workers-down
-remote-workers-down: ## Stop & remove 6 remote-воркеров + fluent-bit
-	$(WORKER_AI_DC) rm -sf fluent-bit $(REMOTE_WORKER_SVCS)
-
-.PHONY: remote-workers-logs
-remote-workers-logs: ## Tail логи 6 remote-воркеров + fluent-bit
-	$(WORKER_AI_DC) logs -f fluent-bit $(REMOTE_WORKER_SVCS)
-
 ##@ Queue / Workers
 
 .PHONY: worker-logs
-worker-logs: ## Tail logs for on-server worker services (worker-ai runs via a separate compose file — see worker-ai-logs)
-	$(DC) logs -f worker-libreoffice worker-ffmpeg worker-image worker-data
+worker-logs: ## Tail logs for all 6 on-server worker services incl. worker-ai
+	$(DC) logs -f worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
+
+# fluent-bit (log shipper sidecar) comes from docker/fluent-log/docker-fluent.yml,
+# included via docker/fluent-logging.yml — already part of $(DC)'s default
+# COMPOSE_FILE (root .env), no extra -f needed.
+.PHONY: fluent-up
+fluent-up: ## Up fluent-bit log-shipper sidecar
+	$(DC) up -d fluent-bit
+
+.PHONY: fluent-restart
+fluent-restart: ## Restart fluent-bit (pick up conf.d changes)
+	$(DC) restart fluent-bit
+
+.PHONY: fluent-logs
+fluent-logs: ## Tail fluent-bit sidecar logs
+	$(DC) logs -f fluent-bit
 
 .PHONY: queue-status
 queue-status: ## Show queue lengths in KeyDB (db 2)
@@ -277,11 +228,11 @@ test-python-libreoffice: build-libreoffice-test ## Unit + integration tests for 
 test-python-metrics: build-metrics-test ## Unit tests for metrics-exporter (needs prometheus_client — only in its image)
 	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/metrics-exporter:test,workers/tests/test_metrics_exporter.py)
 
-# AI worker is remote/Harbor-built; its image isn't built on-server. Its unit
-# tests need httpx + the dev-server stack (worker.py / devserver import the heavy
-# STT/TTS libs lazily). Runs in the pre-baked worker-ffmpeg:test image — test deps
-# (fastapi, uvicorn, python-multipart, webrtcvad-wheels, av, numpy, websockets)
-# are baked in via workers/requirements-test.txt.
+# worker-ai has no dedicated :test image of its own (build-ai-cpu/-cuda don't bake
+# one) — its unit tests need httpx + the dev-server stack (worker.py / devserver
+# import the heavy STT/TTS libs lazily). Runs in the pre-baked worker-ffmpeg:test
+# image — test deps (fastapi, uvicorn, python-multipart, webrtcvad-wheels, av,
+# numpy, websockets) are baked in via workers/requirements-test.txt.
 .PHONY: test-python-ai
 test-python-ai: build-ffmpeg-test ## AI-worker + dev-server unit tests (runs in worker-ffmpeg:test image, no Harbor pull)
 	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:test,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py)

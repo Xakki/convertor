@@ -85,88 +85,93 @@ cp .env.local_example .env.local
 
 | Переменная | Значение | Почему |
 |---|---|---|
-| `COMPOSE_PROJECT_NAME` | своё уникальное, НЕ `xakki-convertor` | **Критично.** `WORKER_ID` каждого воркера = hostname контейнера = `${COMPOSE_PROJECT_NAME}-worker-*` (docker-compose.yml/docker-compose.worker-ai.yml), и ЭТО ЖЕ имя используется дословно как имя KeyDB-consumer'а в `XREADGROUP` (`workers/gateway/ws_server.py`). Одинаковый `COMPOSE_PROJECT_NAME` на двух хостах → два физически разных контейнера претендуют на одно имя consumer'а — gateway не различит их, reclaim/ack начнут путаться. |
+| `COMPOSE_PROJECT_NAME` | своё уникальное, НЕ `xakki-convertor` | **Критично.** `WORKER_ID` каждого воркера = hostname контейнера = `${COMPOSE_PROJECT_NAME}-worker-*` (`docker-compose.yml`), и ЭТО ЖЕ имя используется дословно как имя KeyDB-consumer'а в `XREADGROUP` (`workers/gateway/ws_server.py`). Одинаковый `COMPOSE_PROJECT_NAME` на двух хостах → два физически разных контейнера претендуют на одно имя consumer'а — gateway не различит их, reclaim/ack начнут путаться. |
 | `WORKER_API_TOKEN` | реальный токен | Единственная обязательная переменная без дефолта — пустая строка блокирует старт воркера (`WsClientConfig.validate()`), это НАМЕРЕННО (без него был бы reconnect-storm против недоступного/неавторизованного gateway). |
 | `GATEWAY_WS_URL` | `wss://convertor.xakki.pro/ws/worker/` | Публичный WS-эндпоинт. |
 | `API_BASE_URL` | `https://convertor.xakki.pro` | Корень API, БЕЗ `/api`-суффикса (см. троубл-шутинг ниже — если забыть, воркер тихо падает на локальный дефолт). |
-| `DOCKER_IMAGE_AI` | `xakki-convertor/worker-ai:cpu` | Локально собранный образ (см. «Сборка» ниже) — Harbor-тег из трекаемого `.env` сюда не подходит, рабочий образ не публикуется. |
-| `GRAYLOG_HOST`/`GRAYLOG_PORT`/`GRAYLOG_URI` | `log.variantgood.com` / `443` / `/gelf` | Тот же публичный Graylog, что и у главного сервера — общий лог-путь. |
-| `HOST_NAME`/`HOST_IP` | реальные host/IP remote-машины (или оставить как авто-вычисляет Makefile) | Лейблы fluent-bit-сайдкара — по ним в Graylog отличают remote-хост от главного сервера. |
-| `EXT_FLUENT_PORT` | **явно пустое** (`EXT_FLUENT_PORT=`) | См. отдельный разбор ниже — это не «просто не упоминать переменную». |
+| `AI_VARIANT`/`AI_RUNTIME` | опционально: `cuda`/`nvidia` на GPU-хосте | По умолчанию `cpu`/`runc` (см. `docker-compose.yml` сервис `worker-ai`) — задавать нужно только на GPU-хосте. |
 
-### Почему `EXT_FLUENT_PORT=` должна быть явно пустой, а не просто отсутствовать
+`GRAYLOG_HOST`/`GRAYLOG_PORT`/`GRAYLOG_URI`/`HOST_NAME`/`HOST_IP`/`EXT_FLUENT_PORT`
+**настраивать не нужно вообще** — с 2026-07 `worker-ai` живёт прямо в
+`docker-compose.yml` как обычный сервис на общем `x-logging`
+(`docker/fluent-logging.yml`), наравне с остальными 5 воркерами: все 6 шлют
+логи через один и тот же `${EXT_FLUENT_PORT}`, а трекаемый `.env` уже задаёт
+для него верное значение на любом хосте (никакого отдельного захардкоженного
+адреса у `worker-ai` больше нет — это был баг, зафиксированный и починенный).
+`HOST_NAME`/`HOST_IP` корневой `Makefile` сам вычисляет через
+`hostname`/`hostname -I`. Переопределять что-либо из этого в `.env.local`
+remote-хоста имеет смысл, только если авто-значение неинформативно (напр.
+generic-имя VM) — тогда просто задайте нужную переменную явно.
 
-Трекаемый `.env` (общий для всех хостов, включая remote) уже задаёт
-`EXT_FLUENT_PORT=127.0.0.1:10094` — это порт per-project fluent-bit-сайдкара
-**на главном сервере**, специально уведённый с 24224 на 10094, потому что на
-главном сервере порт 127.0.0.1:24224 уже занят ДРУГИМ, не относящимся к
-`convertor`, хостовым fluent-bit-шиппером. `-include .env.local` в корневом
-`Makefile` идёт ПОСЛЕ `include .env` — если `.env.local` просто не упоминает
-`EXT_FLUENT_PORT`, значение 10094 из трекаемого `.env` остаётся в силе
-НЕИЗМЕННЫМ (переменную нужно перезаписать явно, «отсутствие строки» ничего не
-«развключает»).
+### `WORKER_HOST` — явный host/node-идентификатор воркера (registry-08)
 
-Одновременно `worker-ai` логирует не через `${EXT_FLUENT_PORT}`, а в свой
-ЗАХАРДКОЖЕННЫЙ адрес `127.0.0.1:24224` (`docker-compose.worker-ai.yml`,
-инлайновый `x-logging`-блок, не через общий `docker/fluent-logging.yml`). На
-remote-хосте конфликтующего стороннего шиппера на 24224 нет — если оставить
-`EXT_FLUENT_PORT=10094` (унаследованное из трекаемого `.env`), fluent-bit-
-сайдкар remote-хоста поднимется НЕ на 24224, а `worker-ai` продолжит слать
-логи на хардкод 24224 — мимо сайдкара, в никуда (либо в чужой процесс, если
-он там случайно слушает).
+До registry-08 не было ни одного явного поля, отличающего физический хост
+инстанса — только соглашение по именованию `WORKER_ID`/`COMPOSE_PROJECT_NAME`
+(таблица выше). Теперь каждый воркер репортит `host` в register-payload'е
+(`workers/common/ws_client.py::_worker_host()`), и он виден отдельной колонкой
+на `/admin` → Воркеры.
 
-Явная `EXT_FLUENT_PORT=` (пустая строка) чинит оба конца сразу:
-- порт самого сайдкара — `docker/fluent-log/docker-fluent.yml` использует
-  `${EXT_FLUENT_PORT:-127.0.0.1:24224}` — пустая строка триггерит `:-`-фолбэк
-  так же, как отсутствие переменной → сайдкар слушает `127.0.0.1:24224`;
-- адрес, на который шлют логи 5 non-AI воркеров — `docker/fluent-logging.yml`
-  использует `${EXT_FLUENT_PORT}` БЕЗ дефолта → рендерится в пустую строку,
-  а docker'овский `fluentd`-log-driver трактует пустой `fluentd-address`
-  так же, как отсутствие опции — фолбэк на встроенный дефолт драйвера
-  `localhost:24224` (проверено эмпирически: `docker run --log-opt
-  fluentd-address=` не падает и ведёт себя как omitted-опция).
+Источник — **`HOST_NAME`**, автовычисляемый корневым `Makefile` (`hostname`) —
+`docker-compose.yml` прокидывает его каждому воркеру, включая `worker-ai`, как
+`WORKER_HOST`. Отдельную переменную под это заводить не нужно и переопределять
+для fluent-bit-лейблов/`WORKER_HOST` тоже — один и тот же авто-`HOST_NAME`
+кормит обе цели.
 
-Итог — все 6 воркеров и сайдкар remote-хоста сходятся на одном и том же
-`:24224`, без правки самих compose-файлов.
+Приоритет источника в самом Python-коде (на случай запуска БЕЗ compose,
+напр. `docker run` из quickstart-секции `docs/worker-ai-deploy.md`):
+`WORKER_HOST` env → `NODE_NAME` env (алиас) → hostname контейнера (фолбэк,
+нестабилен между пересозданиями контейнера, если он не запиннен
+`hostname:`-директивой). Без `WORKER_HOST` worker-ai's
+`hostname: "${COMPOSE_PROJECT_NAME}-worker-ai"` уже даёт стабильный фолбэк —
+но `WORKER_HOST` явнее и не зависит от этого пиннинга.
 
 ## Сборка образов
 
 ```bash
-make build-workers-remote
+make build-workers
 ```
 
-Собирает: `worker-libreoffice`, `worker-ffmpeg` (общий образ для
-worker-ffmpeg-audio/video), `worker-image`, `worker-data` (обычные
+Собирает все 6 worker-образов: `worker-libreoffice`, `worker-ffmpeg` (общий
+образ для worker-ffmpeg-audio/video), `worker-image`, `worker-data` (обычные
 `build-*`-таргеты) + `worker-ai:cpu` (через `build-ai-cpu`, который сам
 сначала пересобирает свежий `worker-ai-base` локально — см.
 `docs/worker-ai-deploy.md`, «Двухслойная схема»). GPU на remote-хосте не
-предполагается — если он есть, собрать `build-ai-cuda` отдельно и
-переопределить `DOCKER_IMAGE_AI=xakki-convertor/worker-ai:cuda` в
-`.env.local` (см. `docs/worker-ai-deploy.md`).
+предполагается — если он есть, собрать `build-ai-cuda` отдельно и задать
+`AI_VARIANT=cuda` + `AI_RUNTIME=nvidia` в `.env.local` (см.
+`docs/worker-ai-deploy.md`).
 
 ## Запуск
 
 ```bash
-make remote-workers-up
+make fluent-up
+make workers-recreate
 ```
 
-Поднимает ТОЛЬКО 6 сервисов-воркеров + `fluent-bit` (явно перечислены в
-таргете — `--no-deps` иначе не завёл бы сайдкар для `worker-ai`, у которого
-нет `depends_on: fluent-bit`, см. комментарий в `workers/Makefile`).
-`logrotate` из того же сабмодуля НЕ поднимается — он ротирует файловые логи
-(mysql slowlog + JSON-volume), а воркеры на remote-хосте пишут только в
-stdout через `fluentd`-driver, ротировать нечего.
+`workers-recreate` поднимает (либо пересоздаёт из свежих образов) все 6
+сервисов-воркеров, включая `worker-ai` (`--no-deps` — не трогает
+php/mariadb/nginx/keydb/ws-gateway, которые на remote-хосте вообще не
+поднимаются). `fluent-up` поднимает сайдкар `fluent-bit` (сабмодуль
+`docker/fluent-log`) отдельно. `logrotate` из того же сабмодуля НЕ поднимаем:
+он ротирует файловые логи (mysql slowlog + JSON-volume), а воркеры на
+remote-хосте пишут только в stdout через `fluentd`-driver, ротировать
+нечего.
 
 Обновление после пересборки образов:
 ```bash
-make build-workers-remote
-make remote-workers-recreate
+make build-workers
+make workers-recreate
 ```
 
-Остановка / логи:
+Логи:
 ```bash
-make remote-workers-down
-make remote-workers-logs
+make worker-logs   # все 6 воркеров, включая worker-ai
+make fluent-logs   # сайдкар fluent-bit
+```
+
+Остановка (на remote-хосте, кроме воркеров + fluent-bit, ничего и не
+поднималось):
+```bash
+docker compose stop worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai fluent-bit
 ```
 
 ## Верификация после запуска
@@ -174,7 +179,6 @@ make remote-workers-logs
 1. **Config валиден** (запускать на remote-хосте после `.env.local`):
    ```bash
    make docker-check
-   make docker-check-worker-ai   # тот же 4-файловый набор, что используют remote-таргеты
    ```
 2. **Handshake прошёл** — в логах `ws-gateway` (на ГЛАВНОМ сервере) должен
    появиться `ready`-фрейм с `workerId` remote-воркера на каждый из 6 типов
@@ -184,6 +188,9 @@ make remote-workers-logs
    # на главном сервере
    make -C workers gateway-logs | grep -i ready
    ```
+   Дополнительно: `/admin` → Воркеры на главном сервере — колонка `Host`
+   у всех 6 remote-инстансов должна показывать значение `HOST_NAME` вашего
+   remote-хоста (registry-08, см. раздел «`WORKER_HOST`» выше), не прочерк.
 3. **Одна живая конвертация на категорию** — прогнать через публичный API по
    одному файлу на document/image/audio/video/data/ai и убедиться, что задачу
    забрал именно remote-воркер (по `workerId` в логах gateway/API, не
@@ -199,7 +206,7 @@ make remote-workers-logs
 | WS закрывается сразу с `close 1008 unauthorized` (см. лог воркера) | `WORKER_API_TOKEN` пуст/не совпадает с тем, что знает gateway/Symfony. | Сверить `WORKER_API_TOKEN` в `.env.local` remote-хоста с актуальным значением на главном сервере. |
 | Воркер падает при старте: `GATEWAY_WS_URL пуст — некуда подключаться` | `GATEWAY_WS_URL` не задан/пуст И воркер запущен НЕ в prod worker-режиме (в котором есть встроенный прод-дефолт) — например, случайно собран/запущен devserver-путь. | Явно задать `GATEWAY_WS_URL=wss://convertor.xakki.pro/ws/worker/` в `.env.local`; убедиться, что `command` контейнера — `python3 -m workers.<type>`, не `--devserver`. |
 | Воркер стартует, но HTTP-запросы к API уходят на `http://localhost:8080` | `API_BASE_URL` не задан — это дефолт из `WsClientConfig.from_env` (`workers/common/ws_client.py`), применяемый ТОЛЬКО когда прод-дефолт для конкретного воркера тоже не сработал (нештатный запуск). | Явно задать `API_BASE_URL=https://convertor.xakki.pro` (без пути) в `.env.local`. |
-| Логи воркеров не доходят до Graylog (в интерфейсе Graylog пусто по `HOST_NAME` remote-хоста) | Чаще всего — `EXT_FLUENT_PORT` унаследован из трекаемого `.env` (10094) вместо явно пустого; сайдкар и `worker-ai` слушают/пишут на разные порты (см. раздел выше). Реже — сабмодуль `docker/fluent-log` не инициализирован, или нет исходящей связности до `log.variantgood.com:443`. | Проверить `EXT_FLUENT_PORT=` (пустая строка!) в `.env.local`; `docker compose logs fluent-bit` на предмет ошибок исходящего соединения; preflight-curl №3 выше. |
+| Логи воркеров не доходят до Graylog (в интерфейсе Graylog пусто по `HOST_NAME` remote-хоста) | Чаще всего — сабмодуль `docker/fluent-log` не инициализирован (`git submodule update --init docker/fluent-log`), `fluent-bit` не поднят (`make fluent-up`) или нет исходящей связности до `log.variantgood.com:443`. Все 6 воркеров и сайдкар настраивать под remote-хост отдельно не нужно — общий `${EXT_FLUENT_PORT}` уже верен на любом хосте (см. раздел выше). | `docker compose logs fluent-bit` на предмет ошибок исходящего соединения; убедиться, что `make fluent-up` выполнен; preflight-curl №3 выше. |
 
 ## AI на CPU — ограничение производительности
 
@@ -218,5 +225,5 @@ production-SLA для `conv.ai` без хотя бы одного GPU-ворке
   (GPU/CPU, двухслойная `ai-base` схема).
 - `docs/queue-contract.md`, `docs/queue-streams.md` — контракт очередей и
   WS-транспорт (воркер — WS-клиент gateway, не трогает KeyDB/S3 напрямую).
-- `workers/Makefile` — исходники таргетов `build-workers-remote` /
-  `remote-workers-{up,recreate,down,logs}`.
+- `workers/Makefile` — исходники таргетов `build-workers`, `workers-recreate`,
+  `worker-logs`, `fluent-up`/`fluent-restart`/`fluent-logs`.

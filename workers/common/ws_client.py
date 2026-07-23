@@ -39,6 +39,7 @@ import os
 import re
 import shutil
 import socket
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -71,17 +72,154 @@ def _compose_version() -> str:
     return f"{base}.{build}" if build else base
 
 
-def _load_snapshot() -> tuple[float, float, float]:
-    """cpu/mem/load снимок для ready/ping (S1: транспорт-only, сервер только логирует).
+def _cgroup_ncpu() -> int:
+    """Число ядер, доступных ЭТОМУ контейнеру — cgroup v2 `cpu.max` (`<quota> <period>`,
+    выставляется `--cpus`/compose `deploy.resources.limits.cpus`), иначе `os.cpu_count()`
+    (хост целиком виден — контейнер не ограничен по CPU)."""
+    with suppress(OSError, ValueError, IndexError, ZeroDivisionError):
+        quota_raw, period_raw = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if quota_raw != "max":
+            return max(1, round(int(quota_raw) / int(period_raw)))
+    return os.cpu_count() or 1
 
-    Держим ТРИВИАЛЬНО: load = os.getloadavg()[0] нормирован на число ядер (зажат 0..1);
-    cpu/mem = 0.0 best-effort (psutil ради данных, которые пока никто не потребляет, НЕ тянем).
+
+def _cgroup_mem_fraction() -> float | None:
+    """Доля используемой памяти 0..1: cgroup v2 `memory.current`/`memory.max`
+    (реальный лимит КОНТЕЙНЕРА, не хоста — почему предпочитаем его psutil'ю, которая
+    видела бы память хоста целиком и вводила бы в заблуждение). Без делегированного
+    memory-контроллера (`memory.max` отсутствует, или "max" = без лимита) — фолбэк на
+    `/proc/meminfo` (MemTotal-MemAvailable)/MemTotal (доля хоста, best-effort). None —
+    оба источника недоступны (не-Linux, экзотическое окружение без /proc)."""
+    with suppress(OSError, ValueError, ZeroDivisionError):
+        current = int(Path("/sys/fs/cgroup/memory.current").read_text().strip())
+        max_raw = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+        if max_raw != "max":
+            limit = int(max_raw)
+            if limit > 0:
+                return max(0.0, min(1.0, current / limit))
+    with suppress(OSError, ValueError, ZeroDivisionError):
+        fields: dict[str, int] = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, _, rest = line.partition(":")
+            if key in ("MemTotal", "MemAvailable"):
+                fields[key] = int(rest.strip().split()[0])
+        total = fields.get("MemTotal", 0)
+        avail = fields.get("MemAvailable")
+        if total > 0 and avail is not None:
+            return max(0.0, min(1.0, (total - avail) / total))
+    return None
+
+
+class _CpuUsageSampler:
+    """Дельта CPU-usage между последовательными снимками — instant CPU% не читается
+    напрямую ни из cgroup, ни из /proc: оба источника дают КУМУЛЯТИВНЫЕ счётчики
+    (usage_usec / jiffies), фракция появляется только из дельты между двумя вызовами.
+
+    Инстанс-скоуплен на `WsClient` (НЕ module-level singleton) — иначе несколько
+    WsClient в одном процессе (ffmpeg `run_dual()`: audio+video клиенты) или
+    параллельные тесты делили бы состояние и путали дельты друг друга.
+
+    Первый вызов после старта процесса — нет предыдущего снимка → `None` (честно
+    "метрика ещё не готова", не выдуманный 0.0); второй и последующие вызовы
+    (следующий ready/ping, ~секунды-десятки секунд спустя) дают реальную фракцию.
     """
+
+    def __init__(self) -> None:
+        self._cg_usage_usec: int | None = None
+        self._cg_wall: float | None = None
+        self._proc_busy: int | None = None
+        self._proc_total: int | None = None
+
+    def sample(self) -> float | None:
+        cgroup = self._sample_cgroup()
+        if cgroup is not None:
+            return cgroup
+        return self._sample_proc()
+
+    def _sample_cgroup(self) -> float | None:
+        usage_usec: int | None = None
+        with suppress(OSError, ValueError, IndexError):
+            for line in Path("/sys/fs/cgroup/cpu.stat").read_text().splitlines():
+                if line.startswith("usage_usec "):
+                    usage_usec = int(line.split()[1])
+                    break
+        if usage_usec is None:
+            return None
+        now = time.monotonic()
+        prev_usage, prev_wall = self._cg_usage_usec, self._cg_wall
+        self._cg_usage_usec, self._cg_wall = usage_usec, now
+        if prev_usage is None or prev_wall is None:
+            return None
+        delta_wall_usec = (now - prev_wall) * 1_000_000
+        delta_usage = usage_usec - prev_usage
+        if delta_wall_usec <= 0 or delta_usage < 0:  # clock/counter glitch — no sample
+            return None
+        return max(0.0, min(1.0, delta_usage / (delta_wall_usec * _cgroup_ncpu())))
+
+    def _sample_proc(self) -> float | None:
+        parsed: tuple[int, int] | None = None
+        with suppress(OSError, ValueError, IndexError):
+            first_line = Path("/proc/stat").read_text().splitlines()[0]
+            parts = first_line.split()
+            if parts[0] == "cpu":
+                # user nice system idle iowait irq softirq (steal/guest ignored — busy
+                # enough for a monitoring-only fraction, not accounting-grade precision).
+                user, nice, system, idle, iowait, irq, softirq = (int(x) for x in parts[1:8])
+                parsed = (idle + iowait, user + nice + system + idle + iowait + irq + softirq)
+        if parsed is None:
+            return None
+        idle_total, total = parsed
+        prev_busy, prev_total = self._proc_busy, self._proc_total
+        self._proc_busy, self._proc_total = total - idle_total, total
+        if prev_busy is None or prev_total is None:
+            return None
+        delta_total = total - prev_total
+        if delta_total <= 0:
+            return None
+        delta_busy = (total - idle_total) - prev_busy
+        return max(0.0, min(1.0, delta_busy / delta_total))
+
+
+def _load_snapshot(cpu_sampler: _CpuUsageSampler) -> tuple[float | None, float | None, float]:
+    """cpu/mem/load снимок для ready/ping.
+
+    cpu/mem — реальные метрики контейнера (cgroup v2, фолбэк /proc*, см.
+    `_CpuUsageSampler`/`_cgroup_mem_fraction`) как доля 0..1; `None`, если снять не
+    удалось (первый cpu-снимок процесса — нужна дельта; либо окружение без cgroup
+    И без /proc, напр. не-Linux) — потребители (gateway → PHP → admin-страница)
+    обязаны трактовать `None` как "метрика недоступна", НЕ как 0.
+
+    load = os.getloadavg()[0] нормирован на число ядер (зажат 0..1) — без изменений
+    с Phase 0/1, отдельная метрика от cpu (load учитывает очередь на CPU, не только
+    занятость)."""
+    cpu = cpu_sampler.sample()
+    mem = _cgroup_mem_fraction()
     load = 0.0
     with suppress(OSError, AttributeError):
         ncpu = os.cpu_count() or 1
         load = max(0.0, min(1.0, os.getloadavg()[0] / ncpu))
-    return 0.0, 0.0, load
+    return cpu, mem, load
+
+
+def _worker_host() -> str:
+    """Явный host/node-идентификатор воркера, репортится в register-payload'е
+    (`host` ключ) — Phase 2 (registry-08): раньше не было ни одного явного поля
+    отличающего физический хост инстанса, только соглашение по именованию
+    WORKER_ID/COMPOSE_PROJECT_NAME (docs/workers-remote-deploy.md).
+
+    Приоритет: `WORKER_HOST` env → `NODE_NAME` env (алиас — некоторые оркестраторы
+    прокидывают его вместо WORKER_HOST) → hostname контейнера (тот же фолбэк, что
+    `_instance_id()` использует для своей host-части — см. там: ОБЕ точки идут через
+    эту функцию, чтобы значение никогда не разошлось между instanceId и явным полем
+    `host`)."""
+    host = os.getenv("WORKER_HOST", "").strip() or os.getenv("NODE_NAME", "").strip()
+    if host:
+        return host
+    with suppress(OSError):
+        h = socket.gethostname().strip()
+        if h:
+            return h
+    return "unknown"
 
 
 def _default_worker_id() -> str:
@@ -335,6 +473,9 @@ class _ConnState:
         self.progress: dict[str, asyncio.Task] = {}       # jobId → progress-цикл
         self.awaiting_pong = False                        # ждём pong на последний ping?
         self.effective_inline_max: int = inline_max       # адоптируется из ready-ack gateway
+        # registry-09: текущая (пере)регистрация по запросу gateway — не больше
+        # одной одновременно на соединение (см. `_on_reregister`).
+        self.reregister: asyncio.Task | None = None
 
 
 class WsClient:
@@ -368,6 +509,10 @@ class WsClient:
         self._on_pong = on_pong           # необязательный наблюдатель pong-событий
         self._on_reconnect_start = on_reconnect_start  # вызывается ПОСЛЕ обрыва, перед backoff
         self._capabilities = capabilities
+        # Инстанс-скоуплено (не module-level!) — см. _CpuUsageSampler docstring:
+        # несколько WsClient в одном процессе (ffmpeg dual audio/video) не должны
+        # делить дельта-состояние cpu-семплинга.
+        self._cpu_sampler = _CpuUsageSampler()
         self._stop = asyncio.Event()
         self._ready_ok = False            # был ли успешный connect+ready в текущей попытке
         # Диагностика обрыва: человекочитаемая причина конца ПОСЛЕДНЕЙ сессии —
@@ -558,21 +703,24 @@ class WsClient:
         1. `WORKER_INSTANCE_ID` env (`instance_id_override`) — оператор пиннит явно
            (напр. одинаковое значение по интенту деплоя); санитизируется так же, как
            автогенерируемое значение — оператор не обязан помнить charset контракта.
-        2. `<hostname>:<worker_id>` — стабильно между реконнектами (worker_id и hostname
-           не меняются в течение жизни процесса/контейнера); различает несколько
+        2. `<host>:<worker_id>` — стабильно между реконнектами (worker_id и host не
+           меняются в течение жизни процесса/контейнера); различает несколько
            WsClient-инстансов ОДНОГО процесса (ffmpeg `run_dual()` даёт им разные
            worker_id — `<base>-audio`/`<base>-video`, см. `build_dual_configs`); различает
            два ХОСТА с одинаковым `WORKER_ID`, если оператор его явно запиннил одинаково
-           (иначе один hostname сам по себе не гарантирует разделение — `worker_id` без
-           WORKER_ID env и так уже = hostname, см. `_default_worker_id`).
+           (иначе один host сам по себе не гарантирует разделение — `worker_id` без
+           WORKER_ID env и так уже = host, см. `_default_worker_id`).
+
+        `host`-часть идёт через `_worker_host()` — ТУ ЖЕ функцию, что отдаёт явное
+        поле `host` в `_build_register_body()` (registry-08): раньше здесь был
+        отдельный прямой вызов `socket.gethostname()`, из-за чего явный `host`
+        (если бы читался из WORKER_HOST env) мог разойтись с host-частью
+        instanceId. Один источник — расхождение невозможно by construction.
         """
         override = self._cfg.instance_id_override.strip()
         if override:
             return _sanitize_instance_id(override)
-        host = "unknown"
-        with suppress(OSError):
-            host = socket.gethostname().strip() or "unknown"
-        return _sanitize_instance_id(f"{host}:{self._cfg.worker_id}")
+        return _sanitize_instance_id(f"{_worker_host()}:{self._cfg.worker_id}")
 
     def _build_register_body(self) -> dict:
         caps = self._capabilities or {}
@@ -609,6 +757,9 @@ class WsClient:
             "matrix_categories": matrix_categories,
             "image": None,
             "version": self._cfg.version,
+            # host (registry-08): явный host/node-идентификатор, ТА ЖЕ функция, что
+            # даёт host-часть instanceId (см. _instance_id()) — не отдельная деривация.
+            "host": _worker_host(),
         }
 
     async def _register(self) -> None:
@@ -637,7 +788,7 @@ class WsClient:
         а gateway, ожидающий её и не получивший (старый воркер), не трекает
         liveness для этого соединения, но продолжает диспетчить задачи как обычно.
         """
-        cpu, mem, load = _load_snapshot()
+        cpu, mem, load = _load_snapshot(self._cpu_sampler)
         await ws.send(json.dumps({
             "type": "ready",
             "workerId": self._cfg.worker_id,
@@ -657,6 +808,7 @@ class WsClient:
         tasks = (
             list(state.inflight.values())
             + list(state.progress.values())
+            + ([state.reregister] if state.reregister is not None else [])
             + list(loops)
         )
         for task in tasks:
@@ -708,8 +860,55 @@ class WsClient:
                     if isinstance(val, int) and not isinstance(val, bool) and val > 0:
                         state.effective_inline_max = val
                         logger.debug("gateway inlineMax adopted", extra={"inlineMax": val})
+                elif ftype == "re-register":
+                    self._on_reregister(state, frame)
                 else:
                     logger.debug("gateway frame ignored", extra={"type": ftype})
+
+    def _on_reregister(self, state: _ConnState, frame: dict) -> None:
+        """Контроль-фрейм `re-register` от gateway (registry-09): «PHP не знает
+        такого инстанса — зарегистрируйся заново».
+
+        Мотивация: `_register()` раньше выполнялся РОВНО один раз на соединение
+        и молча глотал сбой — воркер, проигравший гонку register при деплое,
+        оставался невидим для админ-панели до следующего реконнекта (то есть
+        потенциально навсегда). Теперь gateway, увидев инстанс в `unknown`
+        liveness-ответа PHP, адресно просит его повторить register.
+
+        Запускается ОТДЕЛЬНОЙ задачей (reader не блокируется HTTP-запросом) и
+        строго по одной за раз: gateway уже rate-limit'ит фреймы, но повторный
+        фрейм на фоне ещё не завершившегося register не должен плодить
+        параллельные POST'ы. Ошибка register остаётся non-fatal (см. сам
+        `_register`) — задача конвертации этим путём не затрагивается вовсе.
+        """
+        if self._capabilities is None:
+            logger.debug("re-register ignored — воркер не объявляет capabilities")
+            return
+        existing = state.reregister
+        if existing is not None and not existing.done():
+            logger.debug("re-register already in flight — пропускаем повторный фрейм")
+            return
+        logger.info(
+            "gateway requested re-register",
+            extra={
+                "workerId": self._cfg.worker_id,
+                "reason": frame.get("reason") if isinstance(frame.get("reason"), str) else None,
+            },
+        )
+        task = asyncio.create_task(self._register())
+        # `_register` сам глотает все исключения, но done-callback обязателен на
+        # случай неожиданного (напр. отмена при teardown) — иначе «Task exception
+        # never retrieved».
+        task.add_done_callback(self._reregister_task_done)
+        state.reregister = task
+
+    @staticmethod
+    def _reregister_task_done(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning("re-register task failed (non-fatal)", exc_info=exc)
 
     def _on_job(self, ws, state: _ConnState, frame: dict) -> None:
         """Принять фрейм `job`: запустить обработку ОТДЕЛЬНОЙ задачей. Дубликат jobId в
@@ -743,7 +942,7 @@ class WsClient:
         пропущенных», а не единичный дедлайн — устойчив к WAN-скачкам латентности (§6.6)."""
         missed = 0
         while True:
-            cpu, mem, load = _load_snapshot()
+            cpu, mem, load = _load_snapshot(self._cpu_sampler)
             state.awaiting_pong = True
             try:
                 await ws.send(json.dumps({

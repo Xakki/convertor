@@ -46,7 +46,7 @@ class FakeGateway:
 
     def __init__(
         self, *, jobs=None, answer_ping=True, send_twice=False, close_after_ready=False,
-        send_ack=False, ack_inline_max=None,
+        send_ack=False, ack_inline_max=None, send_reregister=0, send_unknown_frame=False,
     ):
         self._jobs = list(jobs or [])
         self._answer_ping = answer_ping
@@ -54,6 +54,12 @@ class FakeGateway:
         self._close_after_ready = close_after_ready
         self._send_ack = send_ack
         self._ack_inline_max = ack_inline_max  # None → 262144 дефолт
+        # registry-09: сколько контроль-фреймов `re-register` протолкнуть после
+        # handshake (self-healing регистрации), и нужен ли ещё один заведомо
+        # НЕИЗВЕСТНОЙ клиенту формы (проверка forward-compat: старый клиент
+        # обязан игнорировать неизвестный тип, а не падать/рвать соединение).
+        self._send_reregister = send_reregister
+        self._send_unknown_frame = send_unknown_frame
         self.readys: list[dict] = []
         self.results: list[dict] = []
         self.fails: list[dict] = []
@@ -78,6 +84,10 @@ class FakeGateway:
         if self._send_ack:
             inline_max = self._ack_inline_max if self._ack_inline_max is not None else 262144
             await ws.send(json.dumps({"type": "ready-ack", "inlineMax": inline_max}))
+        for _ in range(self._send_reregister):
+            await ws.send(json.dumps({"type": "re-register", "reason": "no capability row"}))
+        if self._send_unknown_frame:
+            await ws.send(json.dumps({"type": "totally-unknown-frame", "x": 1}))
         # Протолкнуть заскриптованные задачи.
         for job in self._jobs:
             await ws.send(json.dumps(job))
@@ -224,7 +234,11 @@ async def test_connect_auth_ready_carries_identity(tmp_path):
     assert ready["workerType"] == "image"
     assert ready["slots"] == 1
     assert ready["version"] == "0.1.7"
-    for key in ("cpu", "mem", "load"):
+    # cpu — дельта-метрика (см. _CpuUsageSampler): первый снимок процесса не имеет
+    # предыдущей точки для дельты → легитимно None на самом первом ready. mem/load —
+    # инстант-метрики (cgroup gauge / getloadavg), доступны уже на первом снимке.
+    assert "cpu" in ready and (ready["cpu"] is None or isinstance(ready["cpu"], (int, float)))
+    for key in ("mem", "load"):
         assert key in ready and isinstance(ready[key], (int, float))
 
 
@@ -1066,6 +1080,66 @@ async def test_no_register_when_no_capabilities(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# registry-09: контроль-фрейм `re-register` (self-healing регистрации)
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reregister_frame_triggers_second_register_post(tmp_path):
+    """Gateway попросил перерегиться (PHP не знает строки инстанса) — воркер
+    делает ЕЩЁ ОДИН POST /register тем же телом. Это и есть выход из ситуации
+    «проиграл гонку register при деплое и остался невидим навсегда»."""
+    gw = FakeGateway(send_reregister=1)
+    sym = FakeSymfony()
+
+    async def noop(job, progress):
+        return ResultSignal.completed(data=b"", ext="txt")
+
+    caps = {"isAi": False, "routing_keys": ["image"], "matrix": {"png": ["jpg"]}}
+    async with _running(gw, tmp_path, noop, sym, capabilities=caps):
+        await _wait_for(
+            lambda: len([r for r in sym.requests if "/register" in r.url.path]) >= 2
+        )
+
+    reg_reqs = [r for r in sym.requests if "/register" in r.url.path]
+    assert len(reg_reqs) >= 2
+    assert json.loads(reg_reqs[-1].content)["workerType"] == "image"
+
+
+@pytest.mark.asyncio
+async def test_unknown_control_frame_is_ignored_not_fatal(tmp_path):
+    """Forward-compat в обратную сторону: неизвестный тип фрейма не роняет
+    воркера и не рвёт сессию — ровно та гарантия, благодаря которой воркер
+    СТАРОГО билда переживает `re-register` от нового gateway."""
+    gw = FakeGateway(send_unknown_frame=True, jobs=[_job(job_id="after-unknown-1")])
+    sym = FakeSymfony()
+
+    async def noop(job, progress):
+        return ResultSignal.completed(data=b"OK", mime="text/plain", ext="txt")
+
+    async with _running(gw, tmp_path, noop, sym):
+        await _wait_for(lambda: len(gw.results) >= 1)
+
+    assert gw.results[0]["jobId"] == "after-unknown-1"
+
+
+@pytest.mark.asyncio
+async def test_reregister_without_capabilities_is_noop(tmp_path):
+    """Воркер, не объявляющий capabilities, регистрироваться не умеет вовсе —
+    запрос gateway для него молчаливый no-op, а не крэш."""
+    gw = FakeGateway(send_reregister=2)
+    sym = FakeSymfony()
+
+    async def noop(job, progress):
+        return ResultSignal.completed(data=b"", ext="txt")
+
+    async with _running(gw, tmp_path, noop, sym):  # capabilities=None
+        await _wait_for(lambda: len(gw.readys) >= 1)
+        await asyncio.sleep(0.1)
+
+    assert [r for r in sym.requests if "/register" in r.url.path] == []
+
+
+# --------------------------------------------------------------------------
 # instanceId (registry-02: ключ capability строки — (workerType, instanceId))
 # --------------------------------------------------------------------------
 
@@ -1207,3 +1281,115 @@ def test_is_ai_declared_false_does_not_warn(tmp_path, caplog):
         body = client._build_register_body()
     assert body["isAi"] is False
     assert not any("isAi" in r.message for r in caplog.records)
+
+
+# --------------------------------------------------------------------------
+# host field (registry-08: явный host/node-идентификатор воркера)
+# --------------------------------------------------------------------------
+
+def test_worker_host_env_override(monkeypatch):
+    """WORKER_HOST env — высший приоритет источника host."""
+    monkeypatch.setenv("WORKER_HOST", "gpu-host-1")
+    monkeypatch.delenv("NODE_NAME", raising=False)
+    assert ws_client_mod._worker_host() == "gpu-host-1"
+
+
+def test_worker_host_node_name_fallback(monkeypatch):
+    """NODE_NAME — алиас, применяется только когда WORKER_HOST не задан."""
+    monkeypatch.delenv("WORKER_HOST", raising=False)
+    monkeypatch.setenv("NODE_NAME", "k8s-node-3")
+    assert ws_client_mod._worker_host() == "k8s-node-3"
+
+
+def test_worker_host_falls_back_to_hostname(monkeypatch):
+    """Без обоих env — фолбэк на hostname контейнера (непустая строка)."""
+    monkeypatch.delenv("WORKER_HOST", raising=False)
+    monkeypatch.delenv("NODE_NAME", raising=False)
+    host = ws_client_mod._worker_host()
+    assert host and host != "unknown"
+
+
+def test_register_body_carries_host(tmp_path, monkeypatch):
+    """register-payload несёт host — ровно то, что отдаёт _worker_host()."""
+    monkeypatch.setenv("WORKER_HOST", "xbook-remote")
+    cfg = _cfg(9999, tmp_path, worker_id="w-img-1")
+    caps = {"routing_keys": ["image"], "isAi": False, "matrix": {}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    body = client._build_register_body()
+    assert body["host"] == "xbook-remote"
+
+
+def test_instance_id_uses_same_host_source_as_register_host(tmp_path, monkeypatch):
+    """instanceId host-часть и явное поле host НЕ расходятся — обе идут через
+    _worker_host() (задача: «keep it consistent... so the value doesn't diverge»)."""
+    monkeypatch.setenv("WORKER_HOST", "xbook-remote")
+    cfg = _cfg(9999, tmp_path, worker_id="w-img-1")
+    caps = {"routing_keys": ["image"], "isAi": False, "matrix": {}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    body = client._build_register_body()
+    assert body["instanceId"] == "xbook-remote:w-img-1"
+    assert body["host"] == "xbook-remote"
+
+
+def test_instance_id_override_does_not_affect_register_host(tmp_path, monkeypatch):
+    """WORKER_INSTANCE_ID пиннит instanceId в обход host-деривации — но явное
+    поле host по-прежнему репортит реальный WORKER_HOST независимо (два разных
+    поля; пиннинг одного не должен молча стирать другое)."""
+    monkeypatch.setenv("WORKER_HOST", "xbook-remote")
+    cfg = _cfg(9999, tmp_path, worker_id="w-img-1", instance_id_override="pinned-id.1")
+    caps = {"routing_keys": ["image"], "isAi": False, "matrix": {}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    body = client._build_register_body()
+    assert body["instanceId"] == "pinned-id.1"
+    assert body["host"] == "xbook-remote"
+
+
+# --------------------------------------------------------------------------
+# cpu/mem real metrics (Phase 2: psutil-free cgroup/procfs sampling)
+# --------------------------------------------------------------------------
+
+def test_cpu_sampler_first_call_returns_none():
+    """Первый снимок процесса — нет предыдущей точки для дельты → None, НЕ
+    выдуманный 0.0 (потребитель обязан отличать «недоступно» от «занятость 0%»)."""
+    sampler = ws_client_mod._CpuUsageSampler()
+    assert sampler.sample() is None
+
+
+def test_cpu_sampler_second_call_returns_fraction_in_range():
+    """Второй вызов (есть дельта) — реальная фракция 0..1. /proc/stat как минимум
+    всегда читаем на Linux CI, даже без делегированного cgroup-контроллера."""
+    sampler = ws_client_mod._CpuUsageSampler()
+    sampler.sample()
+    time.sleep(0.05)
+    second = sampler.sample()
+    assert second is None or 0.0 <= second <= 1.0
+
+
+def test_cpu_sampler_isolated_between_instances():
+    """Два независимых сэмплера (напр. ffmpeg dual audio/video WsClient) не
+    делят дельта-состояние — свежий инстанс снова начинает с None."""
+    a = ws_client_mod._CpuUsageSampler()
+    b = ws_client_mod._CpuUsageSampler()
+    a.sample()
+    time.sleep(0.02)
+    a.sample()  # a теперь "прогрет" (есть предыдущая точка для дельты)
+    assert b.sample() is None, "свежий сэмплер b не должен унаследовать состояние a"
+
+
+def test_mem_fraction_available_on_linux():
+    """/proc/meminfo как минимум всегда читаем на Linux CI — mem не должен быть
+    None в тестовом окружении (легитимный None — только не-Linux/экзотика без
+    /proc, вне контура этого тестового набора)."""
+    mem = ws_client_mod._cgroup_mem_fraction()
+    assert mem is not None
+    assert 0.0 <= mem <= 1.0
+
+
+def test_load_snapshot_returns_documented_contract():
+    """_load_snapshot() — контракт (cpu: float|None, mem: float|None, load: float),
+    все внутри 0..1 когда не None."""
+    sampler = ws_client_mod._CpuUsageSampler()
+    cpu, mem, load = ws_client_mod._load_snapshot(sampler)
+    assert cpu is None or (isinstance(cpu, float) and 0.0 <= cpu <= 1.0)
+    assert mem is None or (isinstance(mem, float) and 0.0 <= mem <= 1.0)
+    assert isinstance(load, float) and 0.0 <= load <= 1.0

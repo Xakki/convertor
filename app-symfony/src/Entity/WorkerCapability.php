@@ -73,6 +73,32 @@ class WorkerCapability
     private WorkerLivenessStatus $status = WorkerLivenessStatus::Alive;
 
     /**
+     * Liveness-метрики инстанса (Phase 1 "дешёвые победы" над registry-06/07):
+     * cpu/mem/load из `metrics` батч-пуша gateway (см. `liveness.py:_Instance.to_payload()`
+     * и {@see WorkerCapabilityRepository::updateLiveness()}). NULL, пока воркер
+     * ни разу не прислал liveness с `metrics` (register() их не несёт вовсе) —
+     * потребители обязаны обрабатывать null. НЕ входит в критерии маршрутизации
+     * — чистый монитор-сигнал для admin-страницы, как и {@see $status}.
+     *
+     * @var array{cpu: float|null, mem: float|null, load: float|null}|null
+     */
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $metrics = null;
+
+    /**
+     * Явный host/node-идентификатор воркера (registry-08): раньше НЕ было ни
+     * одного явного поля, отличающего физический хост инстанса — только
+     * соглашение по именованию WORKER_ID/COMPOSE_PROJECT_NAME
+     * (docs/workers-remote-deploy.md). Приходит из register-payload'а
+     * (`host` ключ, см. {@see \App\Controller\Api\WorkerController::register()}
+     * и `workers/common/ws_client.py::_worker_host()`). NULL — воркер ещё не
+     * прислал host (старый Python-билд, либо строка предшествует этой колонке) —
+     * потребители обязаны обрабатывать null, как и {@see $metrics}.
+     */
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    private ?string $host = null;
+
+    /**
      * @param array<string, mixed> $capabilities
      */
     public function __construct(string $workerType, string $instanceId, array $capabilities)
@@ -119,6 +145,36 @@ class WorkerCapability
     public function setStatus(WorkerLivenessStatus $status): self
     {
         $this->status = $status;
+
+        return $this;
+    }
+
+    /**
+     * @return array{cpu: float|null, mem: float|null, load: float|null}|null
+     */
+    public function getMetrics(): ?array
+    {
+        return $this->metrics;
+    }
+
+    /**
+     * @param array{cpu: float|null, mem: float|null, load: float|null}|null $metrics
+     */
+    public function setMetrics(?array $metrics): self
+    {
+        $this->metrics = $metrics;
+
+        return $this;
+    }
+
+    public function getHost(): ?string
+    {
+        return $this->host;
+    }
+
+    public function setHost(?string $host): self
+    {
+        $this->host = $host;
 
         return $this;
     }

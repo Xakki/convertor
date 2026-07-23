@@ -57,7 +57,7 @@ services:
 
     # media-воркеры: cpu намеренно щедрый — 7d-пик снят в idle-окно (реальная
     # конвертация ffmpeg/libreoffice/imagemagick cpu+mem-спайкова); mem не занижать (OOM убьёт задачу).
-    # worker-ai — лимиты в docker-compose.worker-ai.yml (сервис определён там, не в 3-файловом наборе).
+    # worker-ai — лимиты инлайн в самом сервисе (docker-compose.yml), не здесь.
     worker-data:
         deploy:
             mode: global

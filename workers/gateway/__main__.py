@@ -55,7 +55,12 @@ async def main() -> None:
         # internal endpoint, см. workers/gateway/liveness.py. Best-effort/
         # non-fatal — сбой push НИКОГДА не роняет gateway (телеметрия).
         liveness_task = asyncio.create_task(
-            run_liveness_push_loop(gateway.get_liveness_aggregator(), liveness_relay, cfg),
+            run_liveness_push_loop(
+                gateway.get_liveness_aggregator(),
+                liveness_relay,
+                cfg,
+                gateway.request_reregister,
+            ),
             name="liveness-push",
         )
         logger.info(

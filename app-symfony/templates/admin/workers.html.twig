@@ -14,7 +14,13 @@
    `status` (alive/disconnected/unknown) и `stale` (lastSeen старше TTL) —
    ДВА РАЗНЫХ факта, показываем раздельными бейджами, не схлопываем в один
    светофор: воркер может быть alive по статусу, но давно не пинговать (или
-   наоборот, недавно отметился как disconnected, но TTL ещё не истёк). #}
+   наоборот, недавно отметился как disconnected, но TTL ещё не истёк).
+
+   registry-09: `status` теперь ИСТИНА, а не последняя дельта — WS-Gateway шлёт
+   полный снапшот подключённых, а Symfony сверяет с ним таблицу и гасит молчащих
+   (App\Service\Worker\WorkerLivenessReconciler). Поэтому нормальная картина
+   свежеупавшего воркера — «не подключён» (красный) + «свежий»: он отвалился
+   только что, до GC-TTL ещё далеко. #}
 <section id="workers" class="mt-8" aria-labelledby="workers-heading"
          x-data="adminWorkers()" x-init="init()">
     <div class="flex items-center justify-between">
@@ -55,6 +61,7 @@
             <thead>
                 <tr class="text-left text-xs uppercase tracking-wider text-zinc-500">
                     <th class="px-4 py-3">Тип / инстанс</th>
+                    <th class="px-4 py-3">Host</th>
                     <th class="px-4 py-3">Статус</th>
                     <th class="px-4 py-3">Свежесть</th>
                     <th class="px-4 py-3">Образ / версия</th>
@@ -75,9 +82,18 @@
                                       title="Статичный снимок матрицы из registry-03 seed-миграции, не живой процесс">
                                     Seed
                                 </span>
+                                <span x-show="w.isAi" x-cloak
+                                      class="rounded-full bg-indigo-500/15 px-2 py-0.5 text-indigo-300"
+                                      title="Воркер объявил isAi=true в capabilities">
+                                    AI
+                                </span>
                                 <span class="font-mono" x-text="w.instanceId"></span>
                             </div>
                         </td>
+                        {# host (registry-08): явный host/node-идентификатор из register-payload'а.
+                           null у строк, зарегистрированных до этого поля / старым Python-билдом
+                           — честный прочерк, не выдумываем значение. #}
+                        <td class="px-4 py-3 font-mono text-xs text-zinc-400" x-text="w.host || '—'"></td>
                         <td class="px-4 py-3">
                             {# Факт №1: liveness-статус (alive/disconnected/unknown) —
                                НЕ то же самое, что свежесть lastSeen (соседняя колонка). #}
@@ -122,7 +138,7 @@
                         </td>
                     </tr>
                     <tr x-show="expanded" x-cloak>
-                        <td colspan="7" class="bg-zinc-950/40 px-4 py-4">
+                        <td colspan="8" class="bg-zinc-950/40 px-4 py-4">
                             <h4 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
                                 Матрица пар (source → target)
                             </h4>
@@ -138,13 +154,50 @@
                             <p x-show="Object.keys(w.matrix).length === 0" x-cloak class="text-xs text-zinc-500">
                                 Матрица пуста.
                             </p>
+
+                            {# Streams/routingKeys и matrix_categories — сырые capabilities-поля,
+                               не пересчитываются, показываются как объявил воркер. #}
+                            <h4 class="mb-2 mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                                Streams / routing keys
+                            </h4>
+                            <p class="text-xs text-zinc-300">
+                                <span class="text-zinc-500">streams:</span>
+                                <span class="font-mono" x-text="w.streams && w.streams.length ? w.streams.join(', ') : '—'"></span>
+                            </p>
+                            <p class="mt-1 text-xs text-zinc-300">
+                                <span class="text-zinc-500">routingKeys:</span>
+                                <span class="font-mono" x-text="w.routingKeys && w.routingKeys.length ? w.routingKeys.join(', ') : '—'"></span>
+                            </p>
+                            <p class="mt-1 text-xs text-zinc-300" x-show="w.matrix_categories && Object.keys(w.matrix_categories).length" x-cloak>
+                                <span class="text-zinc-500">matrix_categories:</span>
+                                <template x-for="(category, from) in w.matrix_categories" :key="from">
+                                    <span class="ml-1 font-mono" x-text="from + '→' + category"></span>
+                                </template>
+                            </p>
+
+                            {# cpu/mem/load из последнего liveness-пуша (Phase 1 "дешёвые
+                               победы"). null, пока воркер ни разу не пинговал — честно
+                               показываем прочерк, не выдумываем нули. #}
+                            <h4 class="mb-2 mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                                Метрики (последний liveness-пуш)
+                            </h4>
+                            <template x-if="w.metrics">
+                                <div class="flex flex-wrap gap-3 text-xs text-zinc-300">
+                                    <span>CPU: <span class="font-mono" x-text="fmtMetric(w.metrics.cpu)"></span></span>
+                                    <span>MEM: <span class="font-mono" x-text="fmtMetric(w.metrics.mem)"></span></span>
+                                    <span>Load: <span class="font-mono" x-text="fmtMetric(w.metrics.load)"></span></span>
+                                </div>
+                            </template>
+                            <p x-show="!w.metrics" x-cloak class="text-xs text-zinc-500">
+                                Нет данных — воркер ещё не присылал метрики.
+                            </p>
                         </td>
                     </tr>
                 </tbody>
             </template>
             <tbody>
                 <tr x-show="!loading && workers.length === 0" x-cloak>
-                    <td colspan="7" class="px-4 py-6 text-center text-sm text-zinc-500">Нет данных</td>
+                    <td colspan="8" class="px-4 py-6 text-center text-sm text-zinc-500">Нет данных</td>
                 </tr>
             </tbody>
         </table>
@@ -208,8 +261,26 @@
                 return new Date(iso).toLocaleString('ru-RU');
             },
 
+            // cpu/mem/load приходят как доля 0..1 (см. workers/common/ws_client.py
+            // _load_snapshot) — показываем процентом; null (метрика ещё не пришла) — прочерком.
+            fmtMetric(value) {
+                if (value === null || value === undefined) {
+                    return '—';
+                }
+                return (value * 100).toFixed(1) + '%';
+            },
+
+            // registry-09: `disconnected` теперь ставит не только чистый обрыв
+            // WS, но и сверка по авторитетному снапшоту gateway (инстанс, о
+            // котором ни один gateway не отчитался целое окно тишины). Это
+            // прямое утверждение «воркер СЕЙЧАС не подключён» — поэтому
+            // красный и однозначная подпись, а не жёлтый «что-то не так».
             statusLabel(status) {
-                const map = { alive: 'alive', disconnected: 'disconnected', unknown: 'unknown' };
+                const map = {
+                    alive: 'на связи',
+                    disconnected: 'не подключён',
+                    unknown: 'нет данных',
+                };
                 return map[status] || status;
             },
 
@@ -218,7 +289,7 @@
                     return 'bg-green-500/15 text-green-400';
                 }
                 if (status === 'disconnected') {
-                    return 'bg-yellow-500/15 text-yellow-400';
+                    return 'bg-red-500/15 text-red-400';
                 }
                 return 'bg-zinc-700 text-zinc-300';
             },
@@ -228,7 +299,7 @@
                     return 'bg-green-400';
                 }
                 if (status === 'disconnected') {
-                    return 'bg-yellow-400';
+                    return 'bg-red-400';
                 }
                 return 'bg-zinc-400';
             },

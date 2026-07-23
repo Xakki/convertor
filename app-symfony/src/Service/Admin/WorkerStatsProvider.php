@@ -69,7 +69,13 @@ final readonly class WorkerStatsProvider
      *         status: string,
      *         stale: bool,
      *         pairCount: int,
-     *         matrix: array<string, list<string>>
+     *         matrix: array<string, list<string>>,
+     *         isAi: bool,
+     *         streams: list<string>,
+     *         routingKeys: list<string>,
+     *         matrix_categories: array<string, string>,
+     *         metrics: array{cpu: float|null, mem: float|null, load: float|null}|null,
+     *         host: string|null
      *     }>
      * }
      */
@@ -101,7 +107,11 @@ final readonly class WorkerStatsProvider
      *     workerType: string, instanceId: string, isSeed: bool,
      *     image: string|null, version: string|null, lastSeen: string,
      *     status: string, stale: bool, pairCount: int,
-     *     matrix: array<string, list<string>>
+     *     matrix: array<string, list<string>>,
+     *     isAi: bool, streams: list<string>, routingKeys: list<string>,
+     *     matrix_categories: array<string, string>,
+     *     metrics: array{cpu: float|null, mem: float|null, load: float|null}|null,
+     *     host: string|null
      * }
      */
     private function toRow(WorkerCapability $cap, \DateTimeImmutable $staleThreshold): array
@@ -116,17 +126,30 @@ final readonly class WorkerStatsProvider
             $pairCount += count($targets);
         }
 
+        /** @var list<string> $streams */
+        $streams = is_array($blob['streams'] ?? null) ? array_values($blob['streams']) : [];
+        /** @var list<string> $routingKeys */
+        $routingKeys = is_array($blob['routingKeys'] ?? null) ? array_values($blob['routingKeys']) : [];
+        /** @var array<string, string> $matrixCategories */
+        $matrixCategories = is_array($blob['matrix_categories'] ?? null) ? $blob['matrix_categories'] : [];
+
         return [
-            'workerType' => $cap->getWorkerType(),
-            'instanceId' => $cap->getInstanceId(),
-            'isSeed'     => $cap->getInstanceId() === self::SEED_INSTANCE_ID,
-            'image'      => isset($blob['image'])   && is_string($blob['image']) ? $blob['image'] : null,
-            'version'    => isset($blob['version']) && is_string($blob['version']) ? $blob['version'] : null,
-            'lastSeen'   => $cap->getLastSeen()->format(\DateTimeInterface::ATOM),
-            'status'     => $cap->getStatus()->value,
-            'stale'      => $cap->getLastSeen() < $staleThreshold,
-            'pairCount'  => $pairCount,
-            'matrix'     => $matrix,
+            'workerType'        => $cap->getWorkerType(),
+            'instanceId'        => $cap->getInstanceId(),
+            'isSeed'            => $cap->getInstanceId() === self::SEED_INSTANCE_ID,
+            'image'             => isset($blob['image'])   && is_string($blob['image']) ? $blob['image'] : null,
+            'version'           => isset($blob['version']) && is_string($blob['version']) ? $blob['version'] : null,
+            'lastSeen'          => $cap->getLastSeen()->format(\DateTimeInterface::ATOM),
+            'status'            => $cap->getStatus()->value,
+            'stale'             => $cap->getLastSeen() < $staleThreshold,
+            'pairCount'         => $pairCount,
+            'matrix'            => $matrix,
+            'isAi'              => (bool) ($blob['isAi'] ?? false),
+            'streams'           => $streams,
+            'routingKeys'       => $routingKeys,
+            'matrix_categories' => $matrixCategories,
+            'metrics'           => $cap->getMetrics(),
+            'host'              => $cap->getHost(),
         ];
     }
 }

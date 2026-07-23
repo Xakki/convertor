@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Controller\Admin;
 
 use App\Entity\User;
+use App\Enum\WorkerLivenessStatus;
 use App\Repository\WorkerCapabilityRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
@@ -109,14 +110,15 @@ final class WorkerControllerTest extends WebTestCase
 
         $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
         $repo->upsert(self::TEST_WORKER_TYPE, self::TEST_INSTANCE_ID, [
-            'workerType'  => self::TEST_WORKER_TYPE,
-            'instanceId'  => self::TEST_INSTANCE_ID,
-            'isAi'        => false,
-            'streams'     => [self::TEST_WORKER_TYPE],
-            'routingKeys' => [self::TEST_WORKER_TYPE],
-            'matrix'      => ['zzzfrom' => ['zzzto1', 'zzzto2']],
-            'image'       => null,
-            'version'     => '9.9.9-test',
+            'workerType'        => self::TEST_WORKER_TYPE,
+            'instanceId'        => self::TEST_INSTANCE_ID,
+            'isAi'              => true,
+            'streams'           => [self::TEST_WORKER_TYPE],
+            'routingKeys'       => [self::TEST_WORKER_TYPE],
+            'matrix'            => ['zzzfrom' => ['zzzto1', 'zzzto2']],
+            'matrix_categories' => ['zzzfrom' => self::TEST_WORKER_TYPE],
+            'image'             => null,
+            'version'           => '9.9.9-test',
         ]);
 
         $client->request('GET', '/api/v1/admin/workers', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
@@ -139,6 +141,126 @@ final class WorkerControllerTest extends WebTestCase
         self::assertNull($row['image']);
         self::assertSame(2, $row['pairCount']);
         self::assertSame(['zzzfrom' => ['zzzto1', 'zzzto2']], $row['matrix']);
+        self::assertTrue($row['isAi']);
+        self::assertSame([self::TEST_WORKER_TYPE], $row['streams']);
+        self::assertSame([self::TEST_WORKER_TYPE], $row['routingKeys']);
+        self::assertSame(['zzzfrom' => self::TEST_WORKER_TYPE], $row['matrix_categories']);
+        self::assertNull($row['metrics'], 'register() alone never carries metrics — only a liveness push does');
+    }
+
+    /**
+     * A liveness push with `metrics` (cpu/mem/load) must surface on the admin
+     * page — Phase 1 "cheap wins" over registry-06/07.
+     */
+    public function testWorkersSurfacesMetricsFromLivenessPush(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $repo->upsert(self::TEST_WORKER_TYPE, self::TEST_INSTANCE_ID, [
+            'workerType'  => self::TEST_WORKER_TYPE,
+            'instanceId'  => self::TEST_INSTANCE_ID,
+            'isAi'        => false,
+            'streams'     => [self::TEST_WORKER_TYPE],
+            'routingKeys' => [self::TEST_WORKER_TYPE],
+            'matrix'      => [],
+        ]);
+        $repo->updateLiveness([[
+            'workerType' => self::TEST_WORKER_TYPE,
+            'instanceId' => self::TEST_INSTANCE_ID,
+            'status'     => WorkerLivenessStatus::Alive,
+            'lastSeenAt' => new \DateTimeImmutable(),
+            'metrics'    => ['cpu' => 0.55, 'mem' => 0.2, 'load' => 0.05],
+        ]]);
+        // updateLiveness() writes via native SQL and does NOT refresh the
+        // managed entity (unlike upsert()) — clear the identity map so the
+        // admin read below actually re-queries the row instead of returning
+        // the stale in-memory instance from the upsert() call above.
+        static::getContainer()->get(EntityManagerInterface::class)->clear();
+
+        $client->request('GET', '/api/v1/admin/workers', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        $row  = null;
+        foreach ($data['workers'] as $w) {
+            if ($w['workerType'] === self::TEST_WORKER_TYPE && $w['instanceId'] === self::TEST_INSTANCE_ID) {
+                $row = $w;
+                break;
+            }
+        }
+
+        self::assertNotNull($row);
+        self::assertSame(['cpu' => 0.55, 'mem' => 0.2, 'load' => 0.05], $row['metrics']);
+    }
+
+    /**
+     * registry-08: явный host/node-идентификатор из register() surfaces на
+     * admin-странице; строки без host (register до этого поля, старый билд)
+     * не ломают страницу — null.
+     */
+    public function testWorkersSurfacesHostFromRegister(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $repo->upsert(self::TEST_WORKER_TYPE, self::TEST_INSTANCE_ID, [
+            'workerType'  => self::TEST_WORKER_TYPE,
+            'instanceId'  => self::TEST_INSTANCE_ID,
+            'isAi'        => false,
+            'streams'     => [self::TEST_WORKER_TYPE],
+            'routingKeys' => [self::TEST_WORKER_TYPE],
+            'matrix'      => [],
+            'host'        => 'xbook-remote',
+        ], 'xbook-remote');
+
+        $client->request('GET', '/api/v1/admin/workers', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        $row  = null;
+        foreach ($data['workers'] as $w) {
+            if ($w['workerType'] === self::TEST_WORKER_TYPE && $w['instanceId'] === self::TEST_INSTANCE_ID) {
+                $row = $w;
+                break;
+            }
+        }
+
+        self::assertNotNull($row);
+        self::assertSame('xbook-remote', $row['host']);
+    }
+
+    public function testWorkersHostIsNullWhenNeverSent(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $repo->upsert(self::TEST_WORKER_TYPE, self::TEST_INSTANCE_ID, [
+            'workerType'  => self::TEST_WORKER_TYPE,
+            'instanceId'  => self::TEST_INSTANCE_ID,
+            'isAi'        => false,
+            'streams'     => [self::TEST_WORKER_TYPE],
+            'routingKeys' => [self::TEST_WORKER_TYPE],
+            'matrix'      => [],
+        ]);
+
+        $client->request('GET', '/api/v1/admin/workers', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        $row  = null;
+        foreach ($data['workers'] as $w) {
+            if ($w['workerType'] === self::TEST_WORKER_TYPE && $w['instanceId'] === self::TEST_INSTANCE_ID) {
+                $row = $w;
+                break;
+            }
+        }
+
+        self::assertNotNull($row);
+        self::assertNull($row['host']);
     }
 
     private function persistUser(bool $admin): User

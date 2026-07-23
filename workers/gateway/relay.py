@@ -183,7 +183,9 @@ class RelayClient:
         )
         return False, resp.status_code
 
-    async def post_liveness(self, instances: list[dict]) -> tuple[bool, dict | None]:
+    async def post_liveness(
+        self, instances: list[dict], meta: dict | None = None
+    ) -> tuple[bool, dict | None]:
         """Push a liveness batch (`workers/gateway/liveness.py`). Returns
         `(ok, parsed_body)`: `ok=True` only on 2xx WITH a parseable JSON object
         body (so `unknown` can be read); every other outcome — network error,
@@ -194,11 +196,22 @@ class RelayClient:
         requirement) — contrast with `_post_with_status` (used by
         result/fail/dlq-fail), which only cares about the status code, not the
         body shape.
+
+        `meta` (registry-09) — additive top-level envelope keys merged next to
+        `instances`: `snapshot`/`authoritative`/`gatewayId`. They tell PHP
+        whether this batch is a FULL alive-set snapshot it may reconcile
+        against, or a plain delta. Kept OUT of the per-instance records
+        deliberately: an older PHP build ignores unknown top-level keys and
+        keeps applying the deltas exactly as before (backward compatible), and
+        `instances` never grows a per-row copy of a connection-wide fact.
         """
         url = self._base + LIVENESS_PATH
+        payload: dict = {"instances": instances}
+        if meta:
+            payload.update(meta)
         try:
             resp = await self._get_client().post(
-                url, json={"instances": instances}, headers=self._headers(),
+                url, json=payload, headers=self._headers(),
                 timeout=LIVENESS_TIMEOUT_S,
             )
         except httpx.HTTPError as exc:

@@ -85,10 +85,6 @@ ps: ## Show running containers
 docker-check:  ## Check docker config
 	@$(DC) config -q
 
-.PHONY: docker-check-worker-ai
-docker-check-worker-ai:  ## Print resolved config with docker-compose.worker-ai.yml in the set (verify worker-ai still gets shared fluent-bit logging)
-	$(DC) -f docker-compose.yml -f docker/fluent-logging.yml -f docker/limits.yml -f docker-compose.worker-ai.yml config
-
 ##@ Logs
 
 .PHONY: logs

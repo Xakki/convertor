@@ -6,7 +6,7 @@ SaaS-сервис конвертации файлов всех форматов:
 
 - **Backend:** PHP 8.5 + Symfony 7 (REST API `/api/v1/`, JWT, OpenAPI через NelmioApiDoc)
 - **Frontend:** Twig + Alpine.js 3 + HTMX + Tailwind CSS (без тяжёлых SPA, всё с CDN)
-- **Воркеры:** Python 3.12 — по одному контейнеру на категорию (libreoffice/document, ffmpeg audio+video, image, data; AI — отдельный remote-воркер)
+- **Воркеры:** Python 3.12 — по одному контейнеру на категорию (libreoffice/document, ffmpeg audio+video, image, data, AI — CPU по умолчанию, GPU через `AI_VARIANT=cuda`+`AI_RUNTIME=nvidia`)
 - **Очереди:** KeyDB Streams (Redis-совместимый) + Symfony Messenger
 - **WS-Gateway:** асинхронный Python-сервис — единственный мост между очередями и воркерами
 - **БД:** MariaDB 11 + Doctrine ORM
@@ -14,11 +14,11 @@ SaaS-сервис конвертации файлов всех форматов:
 
 ## Архитектура
 
-Сервис поднимается одним docker-compose стеком из **12 сервисов**:
+Сервис поднимается одним docker-compose стеком из **13 сервисов**:
 
-`php`, `cron`, `mariadb`, `keydb`, `nginx`, `worker-libreoffice`, `worker-ffmpeg-audio`, `worker-ffmpeg-video`, `worker-image`, `worker-data`, `ws-gateway`, `metrics-exporter`.
+`php`, `cron`, `mariadb`, `keydb`, `nginx`, `worker-libreoffice`, `worker-ffmpeg-audio`, `worker-ffmpeg-video`, `worker-image`, `worker-data`, `worker-ai`, `ws-gateway`, `metrics-exporter`.
 
-AI-воркер — через отдельный `docker-compose.worker-ai.yml` (в `make up` его нет). On-server запускается как полноценный prod CPU-воркер (подключается по внутреннему `ws://ws-gateway:8091`); удалённые GPU-хосты (напр. домашний WSL+GPU) поднимают тот же воркер и подключаются к публичному `wss://` — оба независимые consumer'ы `conv.ai`, задачи балансируются между ними.
+`worker-ai` (CPU-образ по умолчанию, `image: ${COMPOSE_PROJECT_NAME}/worker-ai:${AI_VARIANT:-cpu}`) поднимается вместе со всеми (`make up`), подключаясь по внутреннему `ws://ws-gateway:8091`; удалённые GPU-хосты (напр. домашний WSL+GPU) поднимают тот же воркер с `AI_VARIANT=cuda`/`AI_RUNTIME=nvidia` и подключаются к публичному `wss://` — оба независимые consumer'ы `conv.ai`, задачи балансируются между ними.
 
 ### Транспорт: WS-Gateway как единственный читатель очередей
 
