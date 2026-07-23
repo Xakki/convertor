@@ -187,6 +187,46 @@ final class WorkerRegisterControllerTest extends WebTestCase
     }
 
     // -------------------------------------------------------------------------
+    // workerType — валидация по App\Enum\WorkerType
+    // -------------------------------------------------------------------------
+
+    /**
+     * Неизвестный workerType (не входит в App\Enum\WorkerType) → 400, upsert НЕ
+     * вызывается — невалидная регистрация не должна долетать до репозитория.
+     */
+    public function testRegisterReturns400OnUnknownWorkerTypeAndDoesNotUpsert(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::never())->method('upsert');
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $registry = $this->createMock(ConversionRegistry::class);
+        $registry->expects(self::never())->method('invalidateMatrix');
+        $container->set(ConversionRegistry::class, $registry);
+
+        $payload = array_merge(self::VALID_PAYLOAD, ['workerType' => 'bogus']);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame(
+            'workerType "bogus" is not a known worker type (allowed: document, image, audio, video, data, ai)',
+            $body['error'] ?? null,
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // Невалидные запросы → 400
     // -------------------------------------------------------------------------
 
@@ -250,6 +290,7 @@ final class WorkerRegisterControllerTest extends WebTestCase
         return [
             'missing workerType'     => [array_diff_key($base, ['workerType' => true]), 'workerType'],
             'empty workerType'       => [array_merge($base, ['workerType' => '']), 'workerType'],
+            'unknown workerType'     => [array_merge($base, ['workerType' => 'bogus']), 'workerType'],
             'missing instanceId'     => [array_diff_key($base, ['instanceId' => true]), 'instanceId'],
             'empty instanceId'       => [array_merge($base, ['instanceId' => '']), 'instanceId'],
             'too long instanceId'    => [array_merge($base, ['instanceId' => str_repeat('a', 129)]), 'instanceId'],

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Service\Admin;
 
+use App\Enum\WorkerType;
 use App\Repository\ConversionRepository;
 use App\Service\Admin\PrometheusMetricsParser;
 use App\Service\Admin\QueueStatsProvider;
@@ -49,7 +50,7 @@ final class QueueStatsProviderTest extends TestCase
         foreach ($data['streams'] as $s) {
             $byType[$s['type']] = $s;
         }
-        self::assertSame(QueueStatsProvider::STREAM_TYPES, array_keys($byType));
+        self::assertSame(array_map(static fn (WorkerType $t): string => $t->value, WorkerType::cases()), array_keys($byType));
 
         // conv.dead НЕ попал в таблицу типов.
         self::assertArrayNotHasKey('dead', $byType);
@@ -84,7 +85,7 @@ final class QueueStatsProviderTest extends TestCase
         self::assertNull($data['deadLetter']);
         self::assertNotNull($data['exporterError']);
         // Строки типов всё равно есть (значения null), DB-сигнал доступен.
-        self::assertCount(\count(QueueStatsProvider::STREAM_TYPES), $data['streams']);
+        self::assertCount(\count(WorkerType::cases()), $data['streams']);
         self::assertNull($data['streams'][0]['length']);
         self::assertSame(0, $data['dbStuck']['count']);
     }

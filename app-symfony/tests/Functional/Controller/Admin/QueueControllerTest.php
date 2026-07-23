@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Controller\Admin;
 
 use App\Entity\User;
+use App\Enum\WorkerType;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
@@ -73,8 +74,8 @@ final class QueueControllerTest extends WebTestCase
         // Каждый канонический тип conv.<type> присутствует в таблице.
         self::assertArrayHasKey('streams', $data);
         $types = array_column($data['streams'], 'type');
-        foreach (['document', 'image', 'audio', 'video', 'data', 'ai'] as $type) {
-            self::assertContains($type, $types, "тип {$type} присутствует");
+        foreach (WorkerType::cases() as $workerType) {
+            self::assertContains($workerType->value, $types, "тип {$workerType->value} присутствует");
         }
 
         // DB-сигнал доступен независимо от exporter'а.

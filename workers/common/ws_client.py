@@ -252,10 +252,12 @@ def _safe_dir_name(job_id: str) -> str:
 # --------------------------------------------------------------------------
 
 # Допустимые типы воркера — самостоятельный whitelist (§4/§6.2), валидируется ДО connect'а.
-# NB: раньше комментарий утверждал, что список зеркалит `WorkerController::ALLOWED_TYPES` —
-# та PHP-константа УДАЛЕНА 2026-07-03 (`17b1ac8`, вместе с claim-by-type action); сейчас
-# у списка нет PHP-аналога. Вывод списка из реестра — отдельная grooming-карточка
-# `worker-type-lists-hardcode`, не трогать здесь.
+# Намеренно НЕЗАВИСИМАЯ статическая копия канонического набора из PHP-enum'а
+# `App\Enum\WorkerType` — это граница процесса (resilience): воркер обязан
+# провалидировать свой конфиг и стартовать ДО подключения к gateway, даже если
+# PHP/БД недоступны, поэтому вывести список из enum'а в рантайме нельзя.
+# Синхронизацию с `WorkerType.php` держит drift-guard
+# `workers/tests/test_worker_type_drift.py` (`make test-drift` из корня репо).
 ALLOWED_WORKER_TYPES = ("ai", "document", "image", "audio", "video", "data")
 
 # Контракт `instanceId` (registry-02): непустая строка, ≤128 символов, только

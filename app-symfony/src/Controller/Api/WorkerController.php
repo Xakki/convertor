@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
+use App\Enum\WorkerType;
 use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionRegistry;
 use App\Service\Queue\ConversionResultPersister;
@@ -97,6 +98,11 @@ final class WorkerController extends AbstractController
     {
         if (! isset($data['workerType']) || ! is_string($data['workerType']) || $data['workerType'] === '') {
             return 'workerType must be a non-empty string';
+        }
+        if (WorkerType::tryFrom($data['workerType']) === null) {
+            $allowed = implode(', ', array_map(static fn (WorkerType $t): string => $t->value, WorkerType::cases()));
+
+            return 'workerType "' . $data['workerType'] . '" is not a known worker type (allowed: ' . $allowed . ')';
         }
         if (
             ! isset($data['instanceId'])

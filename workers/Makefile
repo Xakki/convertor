@@ -246,9 +246,12 @@ test-python-ai: build-ffmpeg-test ## AI-worker + dev-server unit tests (runs in 
 # (register-round-trip: dump-matrix.php --json vs Python CAPABILITIES). Часть
 # `make test-php-live` (test-db-setup гарантирует live-стек); standalone-вызов ниже
 # по-прежнему работает, если стек уже поднят руками.
+# test_worker_type_drift.py — второй, независимый drift-guard в том же таргете:
+# чистый text-parse (без docker/DB), сверяет PHP-enum WorkerType с 3 статическими
+# зеркалами (ws_client.py, keydb.py, messenger.yaml).
 .PHONY: test-drift
-test-drift: ## Routing register-round-trip: Python CAPABILITIES vs live dump-matrix.php (needs docker+php+DB; run via test-php-live)
-	PYTHONPATH=. pytest workers/tests/test_routing_drift.py -v
+test-drift: ## Drift guards: routing (dump-matrix.php vs CAPABILITIES, needs docker+php+DB) + worker-type (enum vs 3 static mirrors)
+	PYTHONPATH=. pytest workers/tests/test_routing_drift.py workers/tests/test_worker_type_drift.py -v
 
 # REDIS_DB=3 — та же изоляция, что test-e2e (.env.test: db3 отделяет
 # тест-стримы/ключи от прод-db2). Без этого gateway-тесты, использующие

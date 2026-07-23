@@ -6,6 +6,7 @@ namespace App\Tests\Functional\Controller\Admin;
 
 use App\Entity\User;
 use App\Enum\WorkerLivenessStatus;
+use App\Enum\WorkerType;
 use App\Repository\WorkerCapabilityRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
@@ -90,8 +91,8 @@ final class WorkerControllerTest extends WebTestCase
         // they must be present, flagged isSeed=true, status='unknown'.
         $seedRows  = array_filter($data['workers'], static fn (array $w): bool => $w['isSeed'] === true);
         $seedTypes = array_column($seedRows, 'workerType');
-        foreach (['document', 'image', 'audio', 'video', 'data', 'ai'] as $type) {
-            self::assertContains($type, $seedTypes, "seed workerType {$type} присутствует");
+        foreach (WorkerType::cases() as $workerType) {
+            self::assertContains($workerType->value, $seedTypes, "seed workerType {$workerType->value} присутствует");
         }
         foreach ($seedRows as $row) {
             self::assertSame('__seed__', $row['instanceId']);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Admin;
 
 use App\Entity\Conversion;
+use App\Enum\WorkerType;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionRegistry;
 use Symfony\Contracts\HttpClient\Exception\ExceptionInterface as HttpClientExceptionInterface;
@@ -36,16 +37,6 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  */
 final readonly class QueueStatsProvider
 {
-    /**
-     * Канонический набор job-стримов `conv.<type>` — источник истины
-     * `config/packages/messenger.yaml` (транспорты conv.document…conv.ai) и
-     * `workers/gateway/keydb.py::WORKER_TYPES`. Показываем каждый, даже если
-     * exporter по нему ещё не эмитил метрику (пустой стрим = нет gauge-строки).
-     *
-     * @var list<string>
-     */
-    public const array STREAM_TYPES = ['document', 'image', 'audio', 'video', 'data', 'ai'];
-
     /** Consumer-группа стримов (совпадает с `keydb.py::GROUP`). */
     private const string GROUP = 'convertor';
 
@@ -89,7 +80,8 @@ final readonly class QueueStatsProvider
         $available = $scrape['available'];
 
         $streams = [];
-        foreach (self::STREAM_TYPES as $type) {
+        foreach (WorkerType::cases() as $workerType) {
+            $type   = $workerType->value;
             $stream = 'conv.' . $type;
 
             if (! $available) {

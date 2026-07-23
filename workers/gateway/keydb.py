@@ -35,6 +35,11 @@ JOB_META_TTL = 86400            # 24 h
 # но семантически отдельный knob: истёкший хеш → читатель падает на строку БД.
 CONV_STATUS_TTL_S = 86400       # 24 h
 STALE_IDLE_MS = 300_000         # 5 min — порог XAUTOCLAIM reclaim
+# Типы воркеров, чьи стримы `conv.<type>` gateway читает через XREADGROUP/XAUTOCLAIM.
+# Намеренно НЕЗАВИСИМАЯ статическая копия канонического набора из PHP-enum'а
+# `App\Enum\WorkerType` — gateway обязан стартовать и обслуживать стримы даже
+# если PHP/БД недоступны. Синхронизацию держит drift-guard
+# `workers/tests/test_worker_type_drift.py` (`make test-drift` из корня репо).
 WORKER_TYPES = ("ai", "document", "image", "audio", "video", "data")
 # Верхняя граница записей PEL, возобновляемых за один read_pending при reconnect.
 PENDING_BATCH = 100
