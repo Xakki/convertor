@@ -13,7 +13,14 @@ gateway на каждый свободный кредит читает одну 
   id `0`, §6.6 путь «a»), затем читать новые (`>`);
 - на каждый свободный кредит `reclaim_stale()` (неблок.) ИДЁТ ПЕРЕД `read_new()`
   (блок.) — иначе блокирующее чтение голодало бы stale-reclaim (s1-02 nit #1);
-- `cpu`/`mem`/`load`/`version` только принимаются и логируются — не потребляются (S1).
+- `version` (ready) только принимается и логируется — не потребляется (S1).
+- `cpu`/`mem`/`load` (ready + ping) регистрируются в `LivenessAggregator`
+  (registry-06, `workers/gateway/liveness.py`) по `(workerType, instanceId)` и
+  батчем пушатся в PHP отдельной периодической задачей — см. `_handle_ping` /
+  `handle()` (record_connect/record_ping/record_disconnect). `instanceId`
+  (ready-фрейм, аддитивное поле) отсутствует у старых воркеров — их
+  соединения просто не трекаются для liveness, диспетч задач не зависит от
+  этого поля никак.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ from websockets.exceptions import ConnectionClosed
 
 from workers.gateway.config import Config
 from workers.gateway.keydb import MAX_RETRIES, WORKER_TYPES, KeyDbGateway, stream_for
+from workers.gateway.liveness import LivenessAggregator
 from workers.gateway.relay import RelayClient
 
 logger = logging.getLogger(__name__)
@@ -49,6 +57,13 @@ class WorkerSession:
     worker_type: str      # ∈ WORKER_TYPES
     slots: int            # число кредитов (S1 = 1)
     stream: str           # conv.<worker_type>
+    # instanceId (registry-06): та же строка, что воркер шлёт в register()
+    # (registry-02, ws_client.py::_instance_id()) — теперь ЕЩЁ и в ready-фрейме
+    # (ws_client.py::_send_ready), чтобы gateway мог ключевать liveness-агрегацию
+    # по (workerType, instanceId). None — старый воркер без этого поля в ready
+    # ИЛИ невалидное значение; такое соединение просто не трекается для liveness
+    # (см. LivenessAggregator.record_connect), job-диспетч не зависит от этого поля.
+    instance_id: str | None = None
 
 
 class Credits:
@@ -111,6 +126,18 @@ def _extract_bearer(headers) -> str | None:
     return token or None
 
 
+def _as_float(value) -> float | None:
+    """Coerce a ping-frame telemetry value to float, or None (missing/garbage).
+    Defensive against a malformed/adversarial worker frame — mirrors the
+    already-existing `_clamp_percent` coercion style used for progress frames."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _clamp_percent(value) -> int:
     """percent из progress-фрейма → int в 0..100; невалидный/None → 0."""
     try:
@@ -138,11 +165,18 @@ class WsGateway:
     """WS-сервер + кредитный dispatch поверх KeyDB-слоя (s1-02)."""
 
     def __init__(
-        self, cfg: Config, keydb: KeyDbGateway, relay: RelayClient | None = None
+        self,
+        cfg: Config,
+        keydb: KeyDbGateway,
+        relay: RelayClient | None = None,
+        liveness: LivenessAggregator | None = None,
     ) -> None:
         self._cfg = cfg
         self._keydb = keydb
         self._relay = relay  # None → lazy-init собственного (см. _get_relay)
+        # None → собственный агрегатор (registry-06); инжектируется в тестах,
+        # чтобы assert'ить на нём напрямую без гонки с реальным push-циклом.
+        self._liveness = liveness if liveness is not None else LivenessAggregator()
         # Per-type handoff-очереди для idle-reclaim (s1-06): reclaim-цикл кладёт
         # переклеймленные записи, _dispatch забирает их до reclaim_stale/read_new.
         # Без maxsize — очередь органически ограничена: каждый цикл XAUTOCLAIM
@@ -155,6 +189,11 @@ class WsGateway:
     def get_handoff_queues(self) -> dict[str, asyncio.Queue]:
         """Per-type handoff-очереди для idle-reclaim (s1-06)."""
         return self._handoff
+
+    def get_liveness_aggregator(self) -> LivenessAggregator:
+        """Агрегатор liveness (registry-06) — читается `run_liveness_push_loop`,
+        запущенным рядом отдельной asyncio-задачей из `__main__.py`."""
+        return self._liveness
 
     def _get_relay(self) -> RelayClient:
         """Ленивая инициализация relay-клиента (создаём в async-контексте, не в
@@ -207,6 +246,9 @@ class WsGateway:
                 "stream": session.stream,
             },
         )
+        # registry-06: агрегатор сам логирует WARNING, если instanceId
+        # отсутствует/невалиден — здесь просто передаём, что есть.
+        self._liveness.record_connect(session.worker_type, session.instance_id)
 
         # Диспетч и чтение входящих фреймов — параллельно; закрытие соединения
         # (клиентом) завершает reader → отменяем dispatcher. Кредитный учёт общий:
@@ -224,6 +266,10 @@ class WsGateway:
             for task in (reader, dispatcher):
                 with suppress(asyncio.CancelledError, ConnectionClosed):
                     await task
+            # registry-06: обрыв WS → следующий liveness-батч репортит инстанс
+            # disconnected (сигнал ТОЛЬКО для админ-вью — НЕ трогает
+            # routing-матрицу, gateway её вообще не читает/не пишет).
+            self._liveness.record_disconnect(session.worker_type, session.instance_id)
 
     async def _handshake(self, ws: ServerConnection) -> WorkerSession | None:
         """Прочитать и провалидировать фрейм `ready`. Ошибка → close 1008 + None."""
@@ -269,12 +315,17 @@ class WsGateway:
                 "load": frame.get("load"),
             },
         )
+        # instanceId (registry-06) — аддитивное поле ready-фрейма (ws_client.py
+        # ::_send_ready). Старый воркер его не шлёт → None, а не отказ handshake:
+        # instanceId используется ТОЛЬКО для liveness-агрегации, не для маршрутизации.
+        instance_id_raw = frame.get("instanceId")
+        instance_id = instance_id_raw if isinstance(instance_id_raw, str) and instance_id_raw else None
         # Сообщить воркеру авторитетный порог inline — воркер адоптирует его в _deliver.
         await ws.send(json.dumps({
             "type": "ready-ack",
             "inlineMax": self._cfg.ws_result_inline_max,
         }))
-        return WorkerSession(worker_id, worker_type, slots, stream_for(worker_type))
+        return WorkerSession(worker_id, worker_type, slots, stream_for(worker_type), instance_id)
 
     # ------------------------------------------------------------------
     # Dispatch
@@ -379,7 +430,7 @@ class WsGateway:
 
                 ftype = frame.get("type")
                 if ftype == "ping":
-                    await self._handle_ping(ws, frame)
+                    await self._handle_ping(ws, session, frame)
                 elif ftype == "result":
                     await self._handle_result(session, credits, frame)
                 elif ftype == "fail":
@@ -422,17 +473,24 @@ class WsGateway:
                 extra={"jobId": job_id, "conversionId": conv_id, "error": str(exc)},
             )
 
-    @staticmethod
-    async def _handle_ping(ws: ServerConnection, frame: dict) -> None:
+    async def _handle_ping(
+        self, ws: ServerConnection, session: WorkerSession, frame: dict
+    ) -> None:
         """`ping{cpu,mem,load}` → `pong` по тому же WS (liveness, §4/§6.6).
 
         Критерий reconnect («N пропущенных ping'ов», backoff) — на СТОРОНЕ ВОРКЕРА
-        (s1-08); сервер лишь отвечает `pong`. cpu/mem/load в S1 только логируются
-        (не потребляются). Кредит НЕ занимается, stream НЕ читается, XACK нет."""
+        (s1-08); сервер лишь отвечает `pong`. Кредит НЕ занимается, stream НЕ
+        читается, XACK нет. registry-06: cpu/mem/load теперь ЕЩЁ и агрегируются
+        по `(workerType, instanceId)` для периодического push в PHP — см.
+        `workers/gateway/liveness.py`; сам ping/pong-путь этим не меняется."""
         logger.debug(
             "ping telemetry (accepted, not consumed)",
             extra={"cpu": frame.get("cpu"), "mem": frame.get("mem"),
                    "load": frame.get("load")},
+        )
+        self._liveness.record_ping(
+            session.worker_type, session.instance_id,
+            _as_float(frame.get("cpu")), _as_float(frame.get("mem")), _as_float(frame.get("load")),
         )
         await ws.send(json.dumps({"type": "pong"}))
 

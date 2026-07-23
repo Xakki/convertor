@@ -46,6 +46,12 @@ parameters:
     env(FILE_RETENTION_HOURS_TARIFF_PAID): '720'      # ось tariff: paid, 720 = 30 суток
     env(FILE_RETENTION_HOURS_CATEGORY_VIDEO): '48'    # ось category: video
 
+    # Long-TTL GC worker_capabilities (registry-06, Symfony Scheduler, ежечасно).
+    # Часы; строки с last_seen старше — удаляются, КРОМЕ seed (instance_id=
+    # '__seed__', см. WorkerCapabilityGcService). 168 = 7 суток — "long-TTL":
+    # заведомо больше любого разумного окна простоя/деплоя воркера.
+    env(WORKER_CAPABILITY_GC_TTL_HOURS): '168'
+
     # Доверенные прокси для getClientIp() (guest rate-limit по IP). По умолчанию —
     # приватные диапазоны (Symfony keyword `private_ranges`): доверяем nginx в
     # docker-сети. В проде можно сузить до конкретного адреса фронта.
@@ -224,3 +230,24 @@ services:
     App\Controller\Admin\Api\ConversionLogController:
         arguments:
             $graylogUrl: '%env(GRAYLOG_URL)%'
+
+    # registry-04: `public: true` ТОЛЬКО для CLI-тулинга `bin/dump-matrix.php` —
+    # это standalone-скрипт (не App\Command\*), который сам грузит Kernel и
+    # достаёт сервисы напрямую из контейнера, а не через autowire-конструктор.
+    # Application-код эти сервисы никогда так не получает — везде обычный DI.
+    App\Service\Conversion\ConversionRegistry:
+        public: true
+
+    App\Repository\WorkerCapabilityRepository:
+        public: true
+
+    # Long-TTL GC worker_capabilities по расписанию (Scheduler) — registry-06.
+    App\Service\Worker\WorkerCapabilityGcService:
+        arguments:
+            $ttlHours: '%env(int:WORKER_CAPABILITY_GC_TTL_HOURS)%'
+
+    # Обзор воркеров admin-панели (registry-07) — TTL ТОТ ЖЕ env, что реальный
+    # GC выше (WorkerCapabilityGcService), намеренно не второй литерал.
+    App\Service\Admin\WorkerStatsProvider:
+        arguments:
+            $ttlHours: '%env(int:WORKER_CAPABILITY_GC_TTL_HOURS)%'

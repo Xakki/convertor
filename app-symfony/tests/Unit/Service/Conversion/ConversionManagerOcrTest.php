@@ -10,11 +10,11 @@ use App\Entity\User;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
-use App\Service\Conversion\ConversionRegistry;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
+use App\Tests\Support\SeedsConversionRegistry;
 use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
@@ -29,6 +29,8 @@ use Symfony\Component\Messenger\Stamp\TransportNamesStamp;
 
 final class ConversionManagerOcrTest extends TestCase
 {
+    use SeedsConversionRegistry;
+
     /**
      * @param array{ocr?: bool, expectAi: bool} $opts
      *
@@ -39,7 +41,7 @@ final class ConversionManagerOcrTest extends TestCase
         $ocr      = $opts['ocr'] ?? false;
         $expectAi = $opts['expectAi'];
 
-        $registry = new ConversionRegistry();
+        $registry = $this->newSeedRegistry();
 
         $quota = $this->createMock(QuotaService::class);
         // Generous upload ceiling so the new size gate is a no-op on these paths.
@@ -206,7 +208,7 @@ final class ConversionManagerOcrTest extends TestCase
 
     public function testUnsupportedOcrPairRejected(): void
     {
-        $registry = new ConversionRegistry();
+        $registry = $this->newSeedRegistry();
         $manager  = new ConversionManager(
             $registry,
             $this->createStub(ConversionRepository::class),
@@ -249,7 +251,7 @@ final class ConversionManagerOcrTest extends TestCase
         $bus->method('dispatch')->willThrowException(new \RuntimeException('transport down'));
 
         $manager = new ConversionManager(
-            new ConversionRegistry(),
+            $this->newSeedRegistry(),
             $this->createStub(ConversionRepository::class),
             $quota,
             $em,
@@ -277,7 +279,7 @@ final class ConversionManagerOcrTest extends TestCase
         $s3Client->method('putObject')->willThrowException(new \RuntimeException('S3 down'));
 
         $manager = new ConversionManager(
-            new ConversionRegistry(),
+            $this->newSeedRegistry(),
             $this->createStub(ConversionRepository::class),
             $quota,
             $this->createStub(EntityManagerInterface::class),
@@ -293,8 +295,9 @@ final class ConversionManagerOcrTest extends TestCase
     /**
      * Unsupported-format ordering guarantee: an archive conversion (zip→tar.gz)
      * is rejected as unsupported BEFORE quota is touched — neither check() nor
-     * charge() runs. Archive was removed from workerCapabilities() (Stage 7 deferred),
-     * so isSupported() returns false → InvalidArgumentException (→ 400 via controller).
+     * charge() runs. No registered worker declares the `archive` category
+     * (Stage 7 deferred — no seed/DB entry), so isSupported() returns false →
+     * InvalidArgumentException (→ 400 via controller).
      */
     public function testArchiveRejectedBeforeQuotaCheck(): void
     {
@@ -303,7 +306,7 @@ final class ConversionManagerOcrTest extends TestCase
         $quota->expects($this->never())->method('charge');
 
         $manager = new ConversionManager(
-            new ConversionRegistry(),
+            $this->newSeedRegistry(),
             $this->createStub(ConversionRepository::class),
             $quota,
             $this->createStub(EntityManagerInterface::class),
@@ -424,7 +427,7 @@ final class ConversionManagerOcrTest extends TestCase
         );
 
         $manager = new ConversionManager(
-            new ConversionRegistry(),
+            $this->newSeedRegistry(),
             $this->createStub(ConversionRepository::class),
             $quota,
             $em,
@@ -468,7 +471,7 @@ final class ConversionManagerOcrTest extends TestCase
     private function buildManager(QuotaService $quota, S3Client $s3Client): ConversionManager
     {
         return new ConversionManager(
-            new ConversionRegistry(),
+            $this->newSeedRegistry(),
             $this->createStub(ConversionRepository::class),
             $quota,
             $this->createStub(EntityManagerInterface::class),

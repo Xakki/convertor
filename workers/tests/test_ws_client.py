@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
@@ -1062,3 +1063,147 @@ async def test_no_register_when_no_capabilities(tmp_path):
 
     reg_reqs = [r for r in sym.requests if "/register" in r.url.path]
     assert reg_reqs == [], "register не должен вызываться без capabilities"
+
+
+# --------------------------------------------------------------------------
+# instanceId (registry-02: ключ capability строки — (workerType, instanceId))
+# --------------------------------------------------------------------------
+
+_INSTANCE_ID_RE = re.compile(r"[A-Za-z0-9._:-]+")
+
+
+def test_instance_id_present_and_well_formed(tmp_path):
+    """instanceId непустой, ≤128 символов, из контрактного charset."""
+    cfg = _cfg(9999, tmp_path, worker_id="w-img-1")
+    caps = {"routing_keys": ["image"], "isAi": False, "matrix": {}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    instance_id = client._build_register_body()["instanceId"]
+    assert instance_id
+    assert len(instance_id) <= 128
+    assert _INSTANCE_ID_RE.fullmatch(instance_id)
+
+
+def test_instance_id_stable_across_calls(tmp_path):
+    """Повторные вызовы _build_register_body() (реконнект того же процесса) дают
+    ОДИН и тот же instanceId — иначе флапающий воркер плодил бы новые capability-строки
+    вместо обновления одной (см. карточку registry-02, требование #1)."""
+    cfg = _cfg(9999, tmp_path, worker_id="w-img-1")
+    caps = {"routing_keys": ["image"], "isAi": False, "matrix": {}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    first = client._build_register_body()["instanceId"]
+    second = client._build_register_body()["instanceId"]
+    assert first == second
+
+
+def test_instance_id_differs_between_ffmpeg_dual_clients(tmp_path):
+    """ffmpeg run_dual() поднимает два WsClient (audio/video) с разными worker_id
+    (build_dual_configs: `<base>-audio`/`<base>-video`) — их instanceId тоже должны
+    различаться (instanceId выводится из worker_id, так что различие приходит
+    автоматически, без спец-кейса под ffmpeg)."""
+    from workers.ffmpeg.__main__ import build_dual_configs
+
+    base = _cfg(9999, tmp_path, worker_id="ffmpeg-host1", worker_type="audio")
+    cfg_audio, cfg_video = build_dual_configs(base)
+    caps = {"routing_keys": ["audio"], "isAi": False, "matrix": {}}
+    client_audio = WsClient(cfg_audio, lambda job, progress: None, capabilities=caps)
+    client_video = WsClient(cfg_video, lambda job, progress: None, capabilities=caps)
+    id_audio = client_audio._build_register_body()["instanceId"]
+    id_video = client_video._build_register_body()["instanceId"]
+    assert id_audio != id_video
+
+
+def test_instance_id_env_override_honored(tmp_path):
+    """WORKER_INSTANCE_ID (WsClientConfig.instance_id_override) пиннит instanceId явно,
+    в обход авто-генерации из hostname+worker_id."""
+    cfg = _cfg(9999, tmp_path, worker_id="w-img-1", instance_id_override="pinned-id.1")
+    caps = {"routing_keys": ["image"], "isAi": False, "matrix": {}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    body = client._build_register_body()
+    assert body["instanceId"] == "pinned-id.1"
+
+
+def test_instance_id_env_override_sanitized(tmp_path):
+    """Оператор мог передать override вне charset контракта — санитизируется,
+    не крашит и не отправляется как есть (сервер 400-ит на нарушении формы)."""
+    cfg = _cfg(9999, tmp_path, worker_id="w-img-1", instance_id_override="bad value!/@")
+    caps = {"routing_keys": ["image"], "isAi": False, "matrix": {}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    body = client._build_register_body()
+    assert _INSTANCE_ID_RE.fullmatch(body["instanceId"])
+    assert " " not in body["instanceId"]
+
+
+# --------------------------------------------------------------------------
+# isAi source (registry-02: caps["isAi"] вместо worker_type == "ai")
+# --------------------------------------------------------------------------
+
+def test_is_ai_true_only_for_ai_worker_capabilities(tmp_path):
+    """AI-воркер объявляет isAi=True в своих CAPABILITIES — тело register должно
+    прокидывать именно его, а не выводить из worker_type."""
+    from workers.ai.worker import CAPABILITIES as AI_CAPABILITIES
+
+    cfg = _cfg(9999, tmp_path, worker_type="ai")
+    client = WsClient(cfg, lambda job, progress: None, capabilities=AI_CAPABILITIES)
+    assert client._build_register_body()["isAi"] is True
+
+
+@pytest.mark.parametrize(
+    "capabilities_path",
+    [
+        "workers.ffmpeg.worker:AUDIO_CAPABILITIES",
+        "workers.ffmpeg.worker:VIDEO_CAPABILITIES",
+        "workers.ffmpeg.worker:FfmpegWorker.CAPABILITIES",
+        "workers.libreoffice.worker:LibreOfficeWorker.CAPABILITIES",
+        "workers.data.worker:DataWorker.CAPABILITIES",
+        "workers.image.worker:ImageWorker.CAPABILITIES",
+    ],
+)
+def test_is_ai_false_for_non_ai_worker_capabilities(tmp_path, capabilities_path):
+    """Все non-AI воркеры объявляют isAi=False явно (не полагаясь на .get() дефолт) —
+    поведение не должно молча зависеть от отсутствия ключа."""
+    module_path, attr_path = capabilities_path.split(":")
+    import importlib
+
+    try:
+        obj = importlib.import_module(module_path)
+    except ModuleNotFoundError as exc:
+        # Этот файл гоняется общим `make test-gateway` в образе worker-data:test, где НЕ
+        # установлены тяжёлые опциональные зависимости других воркеров (напр. pdf2image
+        # у image-воркера) — это ограничение окружения, а не дефект под тестом. Реальная
+        # CAPABILITIES-декларация каждого воркера всё равно проверяется его собственным
+        # test-python-<worker> сьютом внутри СВОЕГО образа.
+        pytest.skip(f"{module_path} unimportable in this container (missing optional dep): {exc}")
+    for part in attr_path.split("."):
+        obj = getattr(obj, part)
+    caps = obj
+    assert "isAi" in caps, f"{capabilities_path} must declare isAi explicitly"
+    assert caps["isAi"] is False
+
+    cfg = _cfg(9999, tmp_path, worker_type="image")
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    assert client._build_register_body()["isAi"] is False
+
+
+def test_is_ai_missing_key_warns_and_defaults_false(tmp_path, caplog):
+    """CAPABILITIES без ключа `isAi` (гипотетический будущий воркер, забывший его
+    объявить) — эффективное значение остаётся False (best-effort register не падает),
+    но отсутствие ключа ЛОГИРУЕТСЯ WARNING'ом — отличимо от осознанного isAi=False."""
+    cfg = _cfg(9999, tmp_path, worker_type="image")
+    caps = {"routing_keys": ["image"], "matrix": {}}  # нет ключа isAi
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    with caplog.at_level("WARNING", logger="workers.common.ws_client"):
+        body = client._build_register_body()
+    assert body["isAi"] is False
+    assert any("isAi" in r.message for r in caplog.records)
+
+
+def test_is_ai_declared_false_does_not_warn(tmp_path, caplog):
+    """CAPABILITIES с явным `isAi: False` — тишина, никакого WARNING (отличие от
+    отсутствующего ключа — см. test_is_ai_missing_key_warns_and_defaults_false)."""
+    cfg = _cfg(9999, tmp_path, worker_type="image")
+    caps = {"routing_keys": ["image"], "isAi": False, "matrix": {}}
+    client = WsClient(cfg, lambda job, progress: None, capabilities=caps)
+    with caplog.at_level("WARNING", logger="workers.common.ws_client"):
+        body = client._build_register_body()
+    assert body["isAi"] is False
+    assert not any("isAi" in r.message for r in caplog.records)

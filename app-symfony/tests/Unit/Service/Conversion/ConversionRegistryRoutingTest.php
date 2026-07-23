@@ -6,15 +6,18 @@ namespace App\Tests\Unit\Service\Conversion;
 
 use App\Enum\FileCategory;
 use App\Service\Conversion\ConversionRegistry;
+use App\Tests\Support\SeedsConversionRegistry;
 use PHPUnit\Framework\TestCase;
 
 final class ConversionRegistryRoutingTest extends TestCase
 {
+    use SeedsConversionRegistry;
+
     private ConversionRegistry $registry;
 
     protected function setUp(): void
     {
-        $this->registry = new ConversionRegistry();
+        $this->registry = $this->newSeedRegistry();
     }
 
     public function testRasterOcrPairIsSupportedAndRoutesToImageNonAi(): void

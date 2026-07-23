@@ -7,8 +7,11 @@ namespace App\Tests\Functional\Controller\Api;
 use App\Entity\Conversion;
 use App\Entity\FileStorage;
 use App\Entity\User;
+use App\Entity\WorkerCapability;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
+use App\Enum\WorkerLivenessStatus;
+use App\Repository\WorkerCapabilityRepository;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
@@ -568,6 +571,447 @@ final class InternalWorkerControllerTest extends WebTestCase
         self::assertNotNull($reloaded);
         self::assertSame(ConversionStatus::Failed, $reloaded->getStatus());
         self::assertSame('current-attempt DLQ entry', $reloaded->getErrorMessage());
+    }
+
+    // -------------------------------------------------------------------------
+    // liveness (registry-06)
+    // -------------------------------------------------------------------------
+
+    public function testLivenessReturns401WithNoToken(): void
+    {
+        $client = static::createClient();
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json'],
+            '{"instances":[]}',
+        );
+        self::assertSame(401, $client->getResponse()->getStatusCode());
+    }
+
+    /** The public worker token must NOT authenticate on the internal firewall. */
+    public function testLivenessReturns401WithPublicWorkerToken(): void
+    {
+        $client = static::createClient();
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-worker-token'],
+            '{"instances":[]}',
+        );
+        self::assertSame(401, $client->getResponse()->getStatusCode());
+    }
+
+    public function testLivenessReturns400WhenInstancesMissing(): void
+    {
+        $client = static::createClient();
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            '{}',
+        );
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+    }
+
+    public function testLivenessReturns400WhenInstancesNotArray(): void
+    {
+        $client = static::createClient();
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            '{"instances":"nope"}',
+        );
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+    }
+
+    /**
+     * Malformed-batch policy (registry-06 decision, see controller docblock):
+     * ANY invalid entry rejects the WHOLE batch, including entries that would
+     * otherwise be perfectly valid — proven here by pairing one malformed
+     * entry with one well-formed entry for a REAL row and asserting that
+     * row's lastSeen was NOT bumped despite being valid.
+     */
+    public function testLivenessReturns400OnMalformedEntryAndAppliesNothingFromTheBatch(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'liveness-malformed-batch');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode([
+                'instances' => [
+                    [
+                        'workerType' => $cap->getWorkerType(),
+                        'instanceId' => $cap->getInstanceId(),
+                        'status'     => 'alive',
+                        'lastSeenAt' => '2099-01-01T00:00:00Z',
+                    ],
+                    [
+                        'workerType' => 'image',
+                        'instanceId' => 'x',
+                        'status'     => 'not-a-real-status',
+                        'lastSeenAt' => '2099-01-01T00:00:00Z',
+                    ],
+                ],
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+        self::assertLessThan(
+            new \DateTimeImmutable('2098-01-01'),
+            $reloaded->getLastSeen(),
+            'the well-formed sibling entry must NOT have been applied — whole batch rejected',
+        );
+    }
+
+    public function testLivenessUpdatesLastSeenForKnownInstance(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'liveness-known');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode([
+                'instances' => [[
+                    'workerType' => $cap->getWorkerType(),
+                    'instanceId' => $cap->getInstanceId(),
+                    'status'     => 'alive',
+                    'lastSeenAt' => '2099-06-15T12:00:00Z',
+                    'metrics'    => ['cpu' => 0.42, 'mem' => 0.31, 'load' => 1.5],
+                ]],
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(1, $body['updated']);
+        self::assertSame([], $body['unknown']);
+
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame('2099-06-15 12:00:00', $reloaded->getLastSeen()->format('Y-m-d H:i:s'));
+        self::assertSame(WorkerLivenessStatus::Alive, $reloaded->getStatus());
+    }
+
+    /**
+     * Idempotent-retry regression guard (review finding): `updateLiveness()`
+     * is deliberately SELECT-based, not affected-rows-based, because
+     * MySQL/MariaDB's default affected-rows semantics count CHANGED rows,
+     * not MATCHED ones — a gateway retry that resends the SAME batch (same
+     * `lastSeenAt`, nothing actually changes on the second write) would
+     * report `affected=0` under a naive implementation, and a known worker
+     * would be misreported as `unknown`, forcing a spurious re-register.
+     * This test pins that behaviour: pushing the identical entry twice must
+     * report `updated` (not `unknown`) BOTH times, and must never create a
+     * second row.
+     */
+    public function testLivenessIdempotentRetryWithIdenticalLastSeenStillReportsUpdated(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'liveness-idempotent-retry');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $payload = json_encode([
+            'instances' => [[
+                'workerType' => $cap->getWorkerType(),
+                'instanceId' => $cap->getInstanceId(),
+                'status'     => 'alive',
+                'lastSeenAt' => '2099-06-15T12:00:00Z',
+            ]],
+        ], JSON_THROW_ON_ERROR);
+
+        // First push.
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            $payload,
+        );
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $firstBody = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(1, $firstBody['updated']);
+        self::assertSame([], $firstBody['unknown']);
+
+        // Retry — byte-identical payload, so the row's last_seen/status do
+        // NOT actually change on this second write.
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            $payload,
+        );
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $secondBody = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(1, $secondBody['updated'], 'a no-op retry must still be reported as updated, not unknown');
+        self::assertSame([], $secondBody['unknown']);
+
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame('2099-06-15 12:00:00', $reloaded->getLastSeen()->format('Y-m-d H:i:s'));
+
+        // No second row was fabricated for the same composite key.
+        $matching = array_filter(
+            $repo->findAllCapabilities(),
+            static fn (WorkerCapability $c): bool => $c->getWorkerType() === $cap->getWorkerType()
+                && $c->getInstanceId()                                   === $cap->getInstanceId(),
+        );
+        self::assertCount(1, $matching, 'the idempotent retry must not create a duplicate row');
+    }
+
+    /**
+     * `metrics` absent entirely (not just null) is a valid entry — the wire
+     * contract makes it optional. Also proves `status` is actually PERSISTED
+     * (not just accepted-and-ignored the way `metrics` is — grooming
+     * decision, see the controller docblock): pushing `disconnected` for a
+     * row that {@see registerCapability()} just created as `alive` must flip
+     * the stored status.
+     */
+    public function testLivenessAcceptsEntryWithoutMetricsAndPersistsDisconnectedStatus(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'liveness-no-metrics');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+        self::assertSame(WorkerLivenessStatus::Alive, $cap->getStatus(), 'precondition: register() sets alive');
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode([
+                'instances' => [[
+                    'workerType' => $cap->getWorkerType(),
+                    'instanceId' => $cap->getInstanceId(),
+                    'status'     => 'disconnected',
+                    'lastSeenAt' => '2099-01-01T00:00:00Z',
+                ]],
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(1, $body['updated']);
+
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame(WorkerLivenessStatus::Disconnected, $reloaded->getStatus());
+    }
+
+    /**
+     * register() unconditionally resets `status` to `alive` on reconnect —
+     * even if the instance was previously marked `disconnected` by a
+     * liveness push. Without this, a worker that reconnects after a WS drop
+     * would read as disconnected forever until the next liveness tick.
+     */
+    public function testRegisterResetsStatusToAliveOnReconnect(): void
+    {
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $cap  = $this->registerCapability('gc-test-fixture', 'reconnect-reset');
+
+        $repo->updateLiveness([[
+            'workerType' => $cap->getWorkerType(),
+            'instanceId' => $cap->getInstanceId(),
+            'status'     => WorkerLivenessStatus::Disconnected,
+            'lastSeenAt' => new \DateTimeImmutable(),
+        ]]);
+
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $disconnected = $repo->find($cap->getId());
+        self::assertNotNull($disconnected);
+        self::assertSame(WorkerLivenessStatus::Disconnected, $disconnected->getStatus(), 'precondition');
+
+        // Same repository call the register() endpoint makes on reconnect.
+        $repo->upsert($cap->getWorkerType(), $cap->getInstanceId(), [
+            'workerType'  => $cap->getWorkerType(),
+            'instanceId'  => $cap->getInstanceId(),
+            'isAi'        => false,
+            'streams'     => [],
+            'routingKeys' => [],
+            'matrix'      => [],
+        ]);
+
+        $em->clear();
+        $reconnected = $repo->find($cap->getId());
+        self::assertNotNull($reconnected);
+        self::assertSame(WorkerLivenessStatus::Alive, $reconnected->getStatus());
+    }
+
+    /**
+     * Central no-fabrication guarantee (registry-06): an unrecognized
+     * (workerType, instanceId) is reported in `unknown`, and — the part a
+     * naive upsert-style implementation would get wrong — NO row is created
+     * for it.
+     */
+    public function testLivenessReportsUnknownInstanceAndCreatesNoRow(): void
+    {
+        $client          = static::createClient();
+        $repo            = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $unknownType     = 'gc-test-fixture';
+        $unknownInstance = 'never-registered-' . bin2hex(random_bytes(4));
+
+        self::assertSame(
+            [],
+            array_filter(
+                $repo->findAllCapabilities(),
+                static fn (WorkerCapability $c): bool => $c->getWorkerType() === $unknownType && $c->getInstanceId() === $unknownInstance,
+            ),
+            'precondition: this instance must not already exist',
+        );
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode([
+                'instances' => [[
+                    'workerType' => $unknownType,
+                    'instanceId' => $unknownInstance,
+                    'status'     => 'alive',
+                    'lastSeenAt' => '2099-01-01T00:00:00Z',
+                ]],
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(0, $body['updated']);
+        self::assertSame([['workerType' => $unknownType, 'instanceId' => $unknownInstance]], $body['unknown']);
+
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $stillMissing = array_filter(
+            $repo->findAllCapabilities(),
+            static fn (WorkerCapability $c): bool => $c->getWorkerType() === $unknownType && $c->getInstanceId() === $unknownInstance,
+        );
+        self::assertSame([], $stillMissing, 'liveness push for an unknown instance must NEVER create a row');
+    }
+
+    /**
+     * A batch mixing a known and an unknown instance: the known one updates,
+     * the unknown one is reported — proves per-key resolution, not
+     * all-or-nothing at the DB layer (distinct from the malformed-INPUT
+     * all-or-nothing policy tested above, which is about VALIDATION, not
+     * unknown-key handling).
+     */
+    public function testLivenessHandlesMixedKnownAndUnknownInstancesInOneBatch(): void
+    {
+        $client    = static::createClient();
+        $cap       = $this->registerCapability('gc-test-fixture', 'liveness-mixed-known');
+        $repo      = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $unknownId = 'never-registered-' . bin2hex(random_bytes(4));
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode([
+                'instances' => [
+                    [
+                        'workerType' => $cap->getWorkerType(),
+                        'instanceId' => $cap->getInstanceId(),
+                        'status'     => 'alive',
+                        'lastSeenAt' => '2099-03-03T03:03:03Z',
+                    ],
+                    [
+                        'workerType' => 'gc-test-fixture',
+                        'instanceId' => $unknownId,
+                        'status'     => 'alive',
+                        'lastSeenAt' => '2099-01-01T00:00:00Z',
+                    ],
+                ],
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(1, $body['updated']);
+        self::assertSame([['workerType' => 'gc-test-fixture', 'instanceId' => $unknownId]], $body['unknown']);
+
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame('2099-03-03 03:03:03', $reloaded->getLastSeen()->format('Y-m-d H:i:s'));
+    }
+
+    public function testLivenessAcceptsEmptyInstancesArray(): void
+    {
+        $client = static::createClient();
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            '{"instances":[]}',
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(0, $body['updated']);
+        self::assertSame([], $body['unknown']);
+    }
+
+    /**
+     * Registers a real capability row (workerType/instanceId not colliding
+     * with any registry-03 seed type) via the same repository the register()
+     * endpoint uses, so liveness tests exercise a genuinely "known" instance.
+     */
+    private function registerCapability(string $workerType, string $instanceId): WorkerCapability
+    {
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $cap  = $repo->upsert($workerType, $instanceId, [
+            'workerType'  => $workerType,
+            'instanceId'  => $instanceId,
+            'isAi'        => false,
+            'streams'     => [],
+            'routingKeys' => [],
+            'matrix'      => [],
+        ]);
+        $this->toRemove[] = $cap;
+
+        return $cap;
     }
 
     private function persistPendingConversion(EntityManagerInterface $em): Conversion

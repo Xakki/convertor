@@ -12,8 +12,8 @@ namespace App\Service\Conversion;
  * home-04 (решение D3): небольшой ФИКСИРОВАННЫЙ список — 2-3 показательные
  * пары на категорию, а не полная матрица {@see ConversionRegistry} (та слишком
  * велика для dropdown). Список НЕ строится на лету из реестра — каждая пара
- * вручную сверена с {@see ConversionRegistry::workerCapabilities()} (или её
- * DB-аналогом) и должна оставаться валидной; при изменении матрицы
+ * вручную сверена с DB-backed матрицей {@see ConversionRegistry} (единственный
+ * источник с registry-05) и должна оставаться валидной; при изменении матрицы
  * синхронизировать вручную.
  *
  * @see \App\Twig\ConversionExtension прокидывает {@see self::grouped()} в Twig

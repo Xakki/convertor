@@ -22,9 +22,18 @@ FAIL_PATH = "/api/v1/internal/worker/fail"
 # DLQ-финализация (conv-dead-no-consumer): gateway → Symfony по conversionId
 # напрямую (без jobId — DLQ-записи его не несут), см. dlq_consumer.py.
 DLQ_FAIL_PATH = "/api/v1/internal/worker/dlq-fail"
+# Liveness-батч (registry-06): агрегированные ping'и по (workerType, instanceId),
+# см. workers/gateway/liveness.py. UPDATE-ONLY на стороне PHP — сюда НЕ идёт
+# ack/кредит-логика result/fail, короче таймаут (телеметрия, не персист задачи).
+LIVENESS_PATH = "/api/v1/internal/worker/liveness"
 # Таймаут одного relay-запроса. Persist (S3+БД) обычно быстрый; при зависании
 # лучше не ack'ать и дать записи остаться pending, чем висеть на сокете.
 RELAY_TIMEOUT_S = 30.0
+# Короче RELAY_TIMEOUT_S: liveness — чистая телеметрия на своём отдельном
+# периодическом тике (workers/gateway/liveness.py::run_liveness_push_loop), не
+# на пути ack/кредита job'ов — зависший PHP не должен держать HTTP-соединение
+# дольше, чем разумно для маленького JSON-батча.
+LIVENESS_TIMEOUT_S = 10.0
 
 
 class RelayClient:
@@ -173,6 +182,54 @@ class RelayClient:
             extra={"path": path, "jobId": job_id, "status": resp.status_code},
         )
         return False, resp.status_code
+
+    async def post_liveness(self, instances: list[dict]) -> tuple[bool, dict | None]:
+        """Push a liveness batch (`workers/gateway/liveness.py`). Returns
+        `(ok, parsed_body)`: `ok=True` only on 2xx WITH a parseable JSON object
+        body (so `unknown` can be read); every other outcome — network error,
+        timeout, non-2xx, or a 2xx with an unparsable/non-object body — is
+        `(False, None)`, treated as "push failed, retry next cycle" by the
+        caller. NEVER raises: this is telemetry, a wedged/garbage-returning PHP
+        must not propagate into the liveness push loop (registry-06 resilience
+        requirement) — contrast with `_post_with_status` (used by
+        result/fail/dlq-fail), which only cares about the status code, not the
+        body shape.
+        """
+        url = self._base + LIVENESS_PATH
+        try:
+            resp = await self._get_client().post(
+                url, json={"instances": instances}, headers=self._headers(),
+                timeout=LIVENESS_TIMEOUT_S,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "liveness relay request failed — will retry next cycle",
+                extra={"error": str(exc), "batchSize": len(instances)},
+            )
+            return False, None
+
+        if not (200 <= resp.status_code < 300):
+            logger.warning(
+                "liveness relay non-2xx — will retry next cycle",
+                extra={"status": resp.status_code, "batchSize": len(instances)},
+            )
+            return False, None
+
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            logger.warning(
+                "liveness relay 2xx but body unparsable — will retry next cycle",
+                extra={"error": str(exc)},
+            )
+            return False, None
+        if not isinstance(body, dict):
+            logger.warning(
+                "liveness relay 2xx but body is not a JSON object — will retry next cycle",
+                extra={"bodyType": type(body).__name__},
+            )
+            return False, None
+        return True, body
 
     async def aclose(self) -> None:
         """Закрыть собственный httpx-клиент (инжектированный не трогаем)."""

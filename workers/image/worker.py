@@ -156,6 +156,7 @@ class ImageWorker(StreamConsumerBase):
 
     CAPABILITIES: dict[str, Any] = {
         "routing_keys": ["image"],
+        "isAi": False,
         "matrix": _MATRIX,
     }
 

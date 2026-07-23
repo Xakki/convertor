@@ -98,7 +98,9 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
 
 **`src/Controller/Api/InternalWorkerController.php`** (`/api/v1/internal/worker`,
 firewall `GatewayInternalAuthenticator`, только для gateway, НЕ в Nelmio):
-`POST /result`, `POST /fail`.
+`POST /result`, `POST /fail`, `POST /dlq-fail`, `POST /liveness` (registry-06:
+батч-пуш liveness от WS-Gateway, обновляет `last_seen` по составному ключу
+`(workerType, instanceId)` — UPDATE ONLY, никогда не создаёт capability-строки).
 
 **`src/Controller/Admin/Api/*.php`** (все под `/api/v1/admin`, `ROLE_ADMIN`):
 `AdminApiController` → `GET /ping`; `ConversionLogController` → `GET /conversions`;

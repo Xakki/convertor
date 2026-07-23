@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 CAPABILITIES: dict[str, Any] = {
     "routing_keys": ["ai"],
+    "isAi": True,
     "matrix": {
         # STT: audio → text
         "mp3":  ["txt", "srt", "vtt"],

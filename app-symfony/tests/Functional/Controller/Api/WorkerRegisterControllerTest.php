@@ -22,6 +22,7 @@ final class WorkerRegisterControllerTest extends WebTestCase
 
     private const VALID_PAYLOAD = [
         'workerType'  => 'image',
+        'instanceId'  => 'host-a.image-0',
         'isAi'        => false,
         'streams'     => ['image'],
         'routingKeys' => ['image'],
@@ -53,7 +54,7 @@ final class WorkerRegisterControllerTest extends WebTestCase
         $repo = $this->createMock(WorkerCapabilityRepository::class);
         $repo->expects(self::once())
             ->method('upsert')
-            ->with('image', self::VALID_PAYLOAD);
+            ->with('image', 'host-a.image-0', self::VALID_PAYLOAD);
         $container->set(WorkerCapabilityRepository::class, $repo);
 
         $registry = $this->createMock(ConversionRegistry::class);
@@ -163,13 +164,18 @@ final class WorkerRegisterControllerTest extends WebTestCase
         $base = self::VALID_PAYLOAD;
 
         return [
-            'missing workerType'    => [array_diff_key($base, ['workerType' => true]), 'workerType'],
-            'empty workerType'      => [array_merge($base, ['workerType' => '']), 'workerType'],
-            'isAi not bool'         => [array_merge($base, ['isAi' => 'yes']), 'isAi'],
-            'missing isAi'          => [array_diff_key($base, ['isAi' => true]), 'isAi'],
-            'streams not array'     => [array_merge($base, ['streams' => 'conv.image']), 'streams'],
-            'routingKeys not array' => [array_merge($base, ['routingKeys' => 'image']), 'routingKeys'],
-            'matrix not array'      => [array_merge($base, ['matrix' => 'jpg:png']), 'matrix'],
+            'missing workerType'     => [array_diff_key($base, ['workerType' => true]), 'workerType'],
+            'empty workerType'       => [array_merge($base, ['workerType' => '']), 'workerType'],
+            'missing instanceId'     => [array_diff_key($base, ['instanceId' => true]), 'instanceId'],
+            'empty instanceId'       => [array_merge($base, ['instanceId' => '']), 'instanceId'],
+            'too long instanceId'    => [array_merge($base, ['instanceId' => str_repeat('a', 129)]), 'instanceId'],
+            'bad charset instanceId' => [array_merge($base, ['instanceId' => 'host a/instance#1']), 'instanceId'],
+            'reserved instanceId'    => [array_merge($base, ['instanceId' => '__seed__']), 'reserved'],
+            'isAi not bool'          => [array_merge($base, ['isAi' => 'yes']), 'isAi'],
+            'missing isAi'           => [array_diff_key($base, ['isAi' => true]), 'isAi'],
+            'streams not array'      => [array_merge($base, ['streams' => 'conv.image']), 'streams'],
+            'routingKeys not array'  => [array_merge($base, ['routingKeys' => 'image']), 'routingKeys'],
+            'matrix not array'       => [array_merge($base, ['matrix' => 'jpg:png']), 'matrix'],
         ];
     }
 }

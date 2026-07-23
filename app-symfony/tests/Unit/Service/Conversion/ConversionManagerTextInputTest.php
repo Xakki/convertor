@@ -10,11 +10,11 @@ use App\Entity\User;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
-use App\Service\Conversion\ConversionRegistry;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
+use App\Tests\Support\SeedsConversionRegistry;
 use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
@@ -35,6 +35,8 @@ use Symfony\Component\Messenger\Stamp\TransportNamesStamp;
  */
 final class ConversionManagerTextInputTest extends TestCase
 {
+    use SeedsConversionRegistry;
+
     public function testTextInputReachesS3AndDispatchesToDocumentStream(): void
     {
         $quota = $this->createMock(QuotaService::class);
@@ -65,7 +67,7 @@ final class ConversionManagerTextInputTest extends TestCase
         );
 
         $manager = new ConversionManager(
-            new ConversionRegistry(),
+            $this->newSeedRegistry(),
             $this->createStub(ConversionRepository::class),
             $quota,
             $em,
@@ -79,7 +81,13 @@ final class ConversionManagerTextInputTest extends TestCase
         try {
             $conversion = $manager->createConversion($request);
 
-            self::assertSame('markup', $conversion->getCategory()->value);
+            // registry-05: DB-backed matrix has NO dedicated 'markup' workerType
+            // (registry-03 seed only registers 'document', which declares md/html
+            // directly) — unlike the old hardcode fallback, which had a separate
+            // 'markup' block overriding this pair. Category is 'document' from the
+            // start; streamFor()'s markup→document fold is a no-op here (still
+            // exercised by other pairs where it matters).
+            self::assertSame('document', $conversion->getCategory()->value);
             self::assertFalse($conversion->isAi());
             self::assertSame('md', $conversion->getFromFormat());
             self::assertSame('html', $conversion->getToFormat());
@@ -119,7 +127,7 @@ final class ConversionManagerTextInputTest extends TestCase
         $s3Client->expects($this->never())->method('putObject');
 
         $manager = new ConversionManager(
-            new ConversionRegistry(),
+            $this->newSeedRegistry(),
             $this->createStub(ConversionRepository::class),
             $quota,
             $this->createStub(EntityManagerInterface::class),

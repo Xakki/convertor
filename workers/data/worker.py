@@ -227,6 +227,7 @@ class DataWorker(StreamConsumerBase):
 
     CAPABILITIES: dict[str, Any] = {
         "routing_keys": ["data"],
+        "isAi": False,
         "matrix": SUPPORTED,
     }
 
