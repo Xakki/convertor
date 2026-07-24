@@ -37,3 +37,17 @@
 - Перевести регистрацию воркеров на `worker_id`-based lookup с graceful handling старых записей.
 
 **Reference:** `backend-architecture`, skill `worker-ai-image` (деплой воркеров)
+
+---
+
+**Decisions (grooming 2026-07-24): закрыта как устаревшая — перекрыта эпиком `registry`.**
+
+Сверка с кодом показала, что все три пункта уже решены и карточка описывает состояние, которого больше нет:
+
+1. **Коллизии по `worker_type`** — НЕ актуально. Таблица `worker_capabilities` ключуется UNIQUE по `(worker_type, instance_id)` (`app-symfony/src/Entity/WorkerCapability.php:29`, констрейнт `UNIQ_WORKER_CAPABILITIES_TYPE_INSTANCE`), `upsert()` делает `INSERT … ON DUPLICATE KEY UPDATE` по этому кортежу (`WorkerCapabilityRepository.php:56-83`). `instance_id` генерится воркером и стабилен между реконнектами — два инстанса одного типа НЕ конфликтуют. (Реализовано в эпике `registry`, `worker_id`-based lookup не понадобился — вместо него `instance_id`.)
+2. **Нет админ-вью воркеров** — НЕ актуально. Есть `GET /api/v1/admin/workers` (`src/Controller/Admin/Api/WorkerController.php`), провайдер `src/Service/Admin/WorkerStatsProvider.php`, шаблон `templates/admin/workers.html.twig` (доставлено `[[registry-07-admin-workers-page]]`, done).
+3. **Тихий отсев форматов** — адресовано `[[fix-worker-matrix-categories]]` (done): `_build_register_body()` форвардит `matrix_categories` (`workers/common/ws_client.py:747`).
+
+Остаточный defense-in-depth (воркерский проактивный retry на initial register) вынесен в отдельную карточку `[[worker-register-no-retry]]`. Отдельного health-сигнала на тихий отсев форматов решено не заводить — админ-вью + observability из `[[registry-08-worker-observability]]` покрывают наблюдаемость.
+
+**Status:** closed (obsolete / superseded).

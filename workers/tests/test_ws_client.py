@@ -142,6 +142,38 @@ class FakeSymfony:
         return [r for r in self.requests if r.method == "POST"]
 
 
+class FlakyRegisterSymfony(FakeSymfony):
+    """POST /register проваливается первые `fail_times` вызовов, затем 200
+    (worker-register-no-retry: harness для проверки bounded retry+backoff в `_register()`).
+
+    Провал по умолчанию — `httpx.ConnectError` (реальный NETWORK-level exception, тот же
+    класс, что `_register()`'ный `http.post(...)` реально ловит от httpx.AsyncClient при
+    настоящем обрыве сети/connection-refused/DNS-фейле — httpx под капотом поднимает
+    `ConnectError`/`ConnectTimeout`/`ReadTimeout` и т.п., ВСЕ наследники
+    `httpx.TransportError` → `httpx.HTTPError` → `Exception`, НЕ `CancelledError`).
+    Это НЕ non-2xx HTTP-ответ (`httpx.Response(5xx)` был бы отловлен позже, на
+    `resp.raise_for_status()`) — исключение бросается САМИМ транспортом, до появления
+    какого-либо `Response`, ровно как при реальном обрыве соединения. `exc_factory`
+    параметризует конкретный класс (по умолчанию — `ConnectError`; тест таймаута
+    передаёт `httpx.ConnectTimeout`), чтобы покрыть обе типичные network-drop формы.
+    """
+
+    def __init__(self, *, fail_times: int, exc_factory=None, **kw):
+        super().__init__(**kw)
+        self._fail_times = fail_times
+        self._exc_factory = exc_factory or (lambda: httpx.ConnectError("connection refused"))
+        self._register_calls = 0
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/register"):
+            self.requests.append(request)
+            self._register_calls += 1
+            if self._register_calls <= self._fail_times:
+                raise self._exc_factory()
+            return httpx.Response(200, json={"ok": True})
+        return super()._handle(request)
+
+
 # --------------------------------------------------------------------------
 # Хелперы
 # --------------------------------------------------------------------------
@@ -1077,6 +1109,112 @@ async def test_no_register_when_no_capabilities(tmp_path):
 
     reg_reqs = [r for r in sym.requests if "/register" in r.url.path]
     assert reg_reqs == [], "register не должен вызываться без capabilities"
+
+
+# --------------------------------------------------------------------------
+# worker-register-no-retry: bounded retry+backoff начального self-register
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_register_retries_after_network_error_then_succeeds(tmp_path, monkeypatch):
+    """Обрыв сети (connection refused): первые попытки register падают с `httpx.ConnectError`
+    — РЕАЛЬНЫМ network-level исключением, которое `httpx.AsyncClient.post()` бросает ДО
+    получения какого-либо HTTP-ответа (не non-2xx `Response`, а сбой самого транспорта —
+    ровно то, что происходит при настоящем обрыве соединения/DNS-фейле). Клиент ретраит
+    с backoff и в итоге регистрируется, не сдаваясь после первого же сетевого сбоя."""
+    monkeypatch.setattr(ws_client_mod, "_REGISTER_BACKOFF_BASE_S", 0.01)
+    monkeypatch.setattr(ws_client_mod, "_REGISTER_BACKOFF_JITTER_S", 0.005)
+    gw = FakeGateway()
+    sym = FlakyRegisterSymfony(
+        fail_times=2,  # 2 сетевых провала, 3-я (последняя) попытка — успех
+        exc_factory=lambda: httpx.ConnectError("connection refused"),
+    )
+
+    async def noop(job, progress):
+        return ResultSignal.completed(data=b"", ext="txt")
+
+    caps = {"routing_keys": ["image"], "matrix": {"png": ["jpg"]}}
+    async with _running(gw, tmp_path, noop, sym, capabilities=caps):
+        await _wait_for(lambda: sym._register_calls >= 3, timeout=2.0)
+
+    assert sym._register_calls == 3, "должны были уйти ровно 3 попытки (2 network-провала + успех)"
+
+
+@pytest.mark.asyncio
+async def test_register_retries_after_timeout_then_succeeds(tmp_path, monkeypatch):
+    """Та же network-drop гарантия, но для другой типичной формы обрыва сети — таймаут
+    установки соединения (`httpx.ConnectTimeout`, тоже `httpx.TransportError`, а не HTTP-код).
+    Подтверждает, что retry ловит не только `ConnectError`, а весь класс network-level сбоев,
+    которые реально бросает httpx-клиент из `_register()`."""
+    monkeypatch.setattr(ws_client_mod, "_REGISTER_BACKOFF_BASE_S", 0.01)
+    monkeypatch.setattr(ws_client_mod, "_REGISTER_BACKOFF_JITTER_S", 0.005)
+    gw = FakeGateway()
+    sym = FlakyRegisterSymfony(
+        fail_times=1,  # 1 таймаут, затем успех
+        exc_factory=lambda: httpx.ConnectTimeout("timed out"),
+    )
+
+    async def noop(job, progress):
+        return ResultSignal.completed(data=b"", ext="txt")
+
+    caps = {"routing_keys": ["image"], "matrix": {"png": ["jpg"]}}
+    async with _running(gw, tmp_path, noop, sym, capabilities=caps):
+        await _wait_for(lambda: sym._register_calls >= 2, timeout=2.0)
+
+    assert sym._register_calls == 2, "должны были уйти ровно 2 попытки (1 таймаут + успех)"
+
+
+@pytest.mark.asyncio
+async def test_register_exhausts_retries_non_fatal(tmp_path, monkeypatch, caplog):
+    """Все попытки (_REGISTER_MAX_ATTEMPTS) проваливаются с network-level `ConnectError`
+    (сеть так и не поднялась) — воркер не падает и продолжает обрабатывать задачи; финальный
+    отказ логируется той же non-fatal WARNING, что и раньше (до ретраев)."""
+    import logging
+
+    monkeypatch.setattr(ws_client_mod, "_REGISTER_BACKOFF_BASE_S", 0.01)
+    monkeypatch.setattr(ws_client_mod, "_REGISTER_BACKOFF_JITTER_S", 0.005)
+    gw = FakeGateway(jobs=[_job(job_id="reg-exhaust-1")])
+    sym = FlakyRegisterSymfony(fail_times=999)  # сеть не поднимается ВООБЩЕ ни на одной попытке
+
+    async def noop(job, progress):
+        return ResultSignal.completed(data=b"ok", ext="txt")
+
+    caps = {"routing_keys": ["image"], "matrix": {}}
+    with caplog.at_level(logging.WARNING, logger="workers.common.ws_client"):
+        async with _running(gw, tmp_path, noop, sym, capabilities=caps):
+            await _wait_for(lambda: len(gw.results) >= 1)
+            await _wait_for(lambda: sym._register_calls >= 3, timeout=2.0)
+            await asyncio.sleep(0.05)  # дать финальному WARNING отработать после 3-й попытки
+
+    assert sym._register_calls == 3, "не должно быть больше _REGISTER_MAX_ATTEMPTS попыток"
+    assert gw.results[0]["jobId"] == "reg-exhaust-1", "задача конвертации не завязана на register"
+    assert any(
+        "register failed (non-fatal)" in r.message for r in caplog.records
+    ), "исчерпание попыток должно завершаться той же non-fatal WARNING, что и раньше"
+
+
+@pytest.mark.asyncio
+async def test_register_cancelled_cleanly_mid_backoff(tmp_path, monkeypatch):
+    """Обрыв WS-сессии посреди retry-backoff'а после network-сбоя register — задача
+    отменяется чисто: CancelledError долетает до вызывающего (не глотается), следующая
+    попытка не уходит (никаких зависших задач, никакой повторной регистрации после того,
+    как её отменили)."""
+    monkeypatch.setattr(ws_client_mod, "_REGISTER_BACKOFF_BASE_S", 1.0)
+    monkeypatch.setattr(ws_client_mod, "_REGISTER_BACKOFF_JITTER_S", 0.0)
+    sym = FlakyRegisterSymfony(fail_times=999)  # каждая попытка — network-level ConnectError
+    cfg = _cfg(9999, tmp_path)
+    caps = {"routing_keys": ["image"], "matrix": {}}
+    client = WsClient(
+        cfg, lambda job, progress: None, http_client=sym.client(), capabilities=caps
+    )
+
+    task = asyncio.create_task(client._register())
+    await _wait_for(lambda: sym._register_calls >= 1)  # 1-я попытка уже провалилась и ушла в сон
+    task.cancel()  # имитирует _teardown() при обрыве соединения
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert sym._register_calls == 1, "2-я попытка не должна была уйти — отмена посреди backoff-сна"
 
 
 # --------------------------------------------------------------------------

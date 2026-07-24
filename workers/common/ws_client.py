@@ -36,6 +36,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import socket
@@ -54,6 +55,16 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from workers.common.env import getenv_float, getenv_int
 
 logger = logging.getLogger(__name__)
+
+# Bounded retry для НАЧАЛЬНОГО self-register (_register(), worker-register-no-retry):
+# 3 попытки, экспоненциальный backoff МЕЖДУ ними (1s → 2s → 4s) + небольшой jitter,
+# чтобы флот воркеров не долбил Symfony синхронной волной после рестарта gateway.
+# Не config-derived (в отличие от WS_RECONNECT_BACKOFF_*) — это деталь одной
+# best-effort HTTP-попытки, а не операционная ручка реконнекта WS-сессии.
+_REGISTER_MAX_ATTEMPTS = 3
+_REGISTER_BACKOFF_BASE_S = 1.0
+_REGISTER_BACKOFF_FACTOR = 2.0
+_REGISTER_BACKOFF_JITTER_S = 0.25
 
 
 def _compose_version() -> str:
@@ -765,20 +776,53 @@ class WsClient:
         }
 
     async def _register(self) -> None:
-        """Best-effort self-register on connect. Failure is non-fatal: logged and ignored."""
+        """Best-effort self-register on connect — bounded retry with backoff (worker-register-no-retry).
+
+        Раньше — ровно одна попытка, любой сбой (DNS/timeout/non-2xx) молча глотался, и
+        воркер оставался невидим для админки до следующего reconnect/re-register (§registry-09
+        закрывает это РЕАКТИВНО, по сигналу gateway; здесь — проактивный запас прочности на
+        самом старте, когда Symfony/сеть могли ещё не подняться). `_REGISTER_MAX_ATTEMPTS`
+        попыток с экспоненциальным backoff между ними (§_REGISTER_BACKOFF_BASE_S/_FACTOR) +
+        jitter; идемпотентность — на сервере (upsert по (workerType, instanceId)), поэтому
+        повторные POST'ы безопасны без клиентского dedup.
+
+        Отмена (`asyncio.CancelledError`) НЕ ловится ни на POST, ни на backoff-сне — падает
+        сквозь `except Exception`, т.к. с py3.8 `CancelledError` не `Exception`, а `BaseException`.
+        Explicit `except asyncio.CancelledError: raise` ниже — не костыль под это, а та же
+        документирующая идиома, что уже используется в `run()` (лишний барьер против будущего
+        "поймаю всё подряд" рефакторинга). Итоговый отказ после последней попытки — по-прежнему
+        best-effort: та же WARNING-строка, что и раньше, задача конвертации не завязана на register.
+        """
         if self._capabilities is None:
             return
-        try:
-            http = await self._get_http()
-            url = f"{self._cfg.api_base}/api/v1/worker/register"
-            resp = await http.post(
-                url, headers=self._auth_headers(),
-                json=self._build_register_body(), timeout=5.0,
-            )
-            resp.raise_for_status()
-            logger.info("worker registered", extra={"workerType": self._cfg.worker_type})
-        except Exception as exc:  # noqa: BLE001 — non-fatal: any failure → log + continue
-            logger.warning("register failed (non-fatal)", extra={"error": str(exc)})
+        for attempt in range(1, _REGISTER_MAX_ATTEMPTS + 1):
+            try:
+                http = await self._get_http()
+                url = f"{self._cfg.api_base}/api/v1/worker/register"
+                resp = await http.post(
+                    url, headers=self._auth_headers(),
+                    json=self._build_register_body(), timeout=5.0,
+                )
+                resp.raise_for_status()
+                logger.info("worker registered", extra={"workerType": self._cfg.worker_type})
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — попытка неудачна → retry либо сдаёмся
+                if attempt == _REGISTER_MAX_ATTEMPTS:
+                    logger.warning("register failed (non-fatal)", extra={"error": str(exc)})
+                    return
+                backoff = _REGISTER_BACKOFF_BASE_S * (_REGISTER_BACKOFF_FACTOR ** (attempt - 1))
+                backoff += random.uniform(0, _REGISTER_BACKOFF_JITTER_S)
+                logger.debug(
+                    "register attempt %d/%d failed, retrying in %.2fs",
+                    attempt, _REGISTER_MAX_ATTEMPTS, backoff,
+                    extra={"error": str(exc)},
+                )
+                try:
+                    await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    raise
 
     async def _send_ready(self, ws) -> None:
         """Handshake-фрейм ready (§4): идентичность + маршрутизация + версия + снимок.
