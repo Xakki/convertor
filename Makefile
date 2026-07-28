@@ -1,7 +1,7 @@
 SHELL = /bin/bash
 ### https://makefiletutorial.com/
 
-HOST_NAME := $(shell hostname)
+HOST_NAME ?= $(shell hostname)
 HOST_IP  := $(shell hostname -I 2>/dev/null | awk '{print $$1}' || echo unknown)
 MYSQL_SLOWLOG_PATH := $(CURDIR)/docker/logs
 JSON_LOG_PATH := $(CURDIR)/docker/logs
