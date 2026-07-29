@@ -38,9 +38,14 @@ uBook **работает**: гитигнорнутый `.env.local` задаёт
 6. Doc drift: `docs/workers-remote-deploy.md` утверждает про `include:
    docker/fluent-log/docker-fluent.yml` в compose — grep подтверждает, что это не так. Сабмодуль
    `docker/fluent-log` (v0.1.4) проинициализирован, но `COMPOSE_FILE` на него не ссылается.
-7. Observability gap: у сообщений в Graylog нет полезного `container_name`
-   (`container_name:convertor-remote-xbook*` — пусто), `source` — сырой IP, фильтрация по
-   контейнеру невозможна.
+7. Отклонение от кросс-проектного стандарта (скилл `ai-agents-skills:fluent-logging`): он
+   предписывает проектный сайдкар через `include:` сабмодуля `docker-fluent.yml` в
+   `docker/fluent-logging.yml`. `cab0124` от этого отошёл в пользу host-level shared —
+   отклонение осознанное, но нигде не зафиксировано.
+
+Не проблема (проверено, чтобы не искать заново): фильтрация в Graylog идёт по
+`docker_project:<COMPOSE_PROJECT_NAME>` / `docker_service`, а `source` — IP хоста (общий).
+`container_name` не индексируется — это норма, а не пробел.
 
 **Recommendation (решение не принято):**
 (a) провижинить host-level shared fluent-bit на каждом remote-хосте по образцу
