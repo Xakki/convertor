@@ -45,6 +45,22 @@ Symfony API only. Generic remote-host theory lives in
 sidecar. **No ws-gateway, no metrics-exporter, no php/mariadb/keydb/nginx** —
 those stay only on the main server.
 
+**⚠ `make up` / `make down` are MAIN-SERVER-only — never run them here.**
+`COMPOSE_FILE` in the tracked `.env` is the full stack, so `up` on uBook tries
+to start php/mariadb/nginx/keydb/ws-gateway/metrics-exporter and dies on
+`network common declared as external, but could not be found` (that network
+lives only on saFin) — while `down` has already killed all 6 workers. Use the
+happy-path below. Recorded 2026-07-29 → card
+`.claude/kanban/grooming/remote-host-make-up-footgun.md`.
+
+**⚠ `-fluent-bit` is an ORPHAN container, not a compose service** (since
+`cab0124` moved logging to a shared host-level fluent). `make fluent-up` /
+`fluent-restart` / `fluent-logs` fail here with `no such service: fluent-bit`,
+and the workers ship to `EXT_FLUENT_PORT=127.0.0.1:10094` where nothing
+listens (the orphan sidecar publishes `:24224`) — uBook worker logs are NOT
+reaching Graylog. Card
+`.claude/kanban/grooming/fluent-bit-orphan-remote-host.md`.
+
 **⚠ Other tenants on the same host — DO NOT touch.** uBook also hosts an
 unrelated project (`xakki.pro`, repo `/home/xakki/www/xakki/xakki.pro`):
 `xakkipro-php-1`, `xakkipro-mariadb-1`, `xakkipro-redis-1`, and a standalone
@@ -64,15 +80,23 @@ ssh uBook 'cd /home/xakki/www/xakki/convertor && make build-workers'      # 3. a
 ssh uBook 'cd /home/xakki/www/xakki/convertor && make workers-recreate'   # 4. --no-deps, ~seconds
 ```
 
+- **Never skip step 3.** `workers-recreate` alone recreates containers from the
+  EXISTING local images — after a pull that touched worker code the host comes
+  up healthy, `alive`, `host=uBook`, with fresh metrics, and still runs the OLD
+  code. The DB signals cannot tell the two apart; the decisive check is
+  `git diff --name-only HEAD@{1} HEAD -- workers/ docker/workers/`. When in
+  doubt just run `build-workers` — cache-warm and idempotent (~1 min).
 - **Step 1 is load-bearing.** If `git status` shows uncommitted *tracked*
   changes, STOP and escalate — never stash/checkout/reset on uBook (rollbacks
   need explicit user approval). An untracked `shared-files/` dir is known
   cruft, not a blocker (the project has no shared volume; safe to ignore, and
   worth flagging for deletion).
-- **git submodule** `docker/fluent-log` must be initialised or `make`/`docker
-  compose config` fails: `git submodule update --init docker/fluent-log`
-  (already done on uBook; re-check only if compose config errors on a missing
-  `docker/fluent-log/docker-fluent.yml`).
+- **git submodule** `docker/fluent-log` — initialised on uBook (v0.1.4), but as
+  of 2026-07-29 nothing in `COMPOSE_FILE` references
+  `docker/fluent-log/docker-fluent.yml` and `docker-compose.yml` has no
+  `include:` (verified by grep), so it no longer gates `docker compose config`.
+  `docs/workers-remote-deploy.md` still claims otherwise — drift, see the
+  fluent-bit card.
 - `make build-workers` on a first build after a Dockerfile change ran ~7-8 min
   (torch/ML stack downloads fresh; the BuildKit pip cache mount is empty on
   first run, warm thereafter). apt/base layers hit `CACHED`.
@@ -85,10 +109,14 @@ The proof of a successful deploy lives in the **main-server** DB, because
 
 - Query `worker_capabilities` (via an existing Makefile console/sql target) and
   confirm the uBook rows now have `host = uBook`, non-null `metrics`
-  (cpu/mem/load), and a fresh `last_seen`. **Empty `host` + zero metrics on
-  those rows = the worker is still on an OLD image and did not pick up the new
-  code** — that exact regression is what a uBook update fixes, so it's the
-  decisive check.
+  (cpu/mem/load), and a fresh `last_seen`. Empty `host` + zero metrics = a
+  pre-2026-07-23 image. **Not** a stale-code check in general: an old image
+  built after that fix reports `host`/metrics just fine (see step 3 above).
+  Rows appear ~60-90 s after recreate — query too early and you'll see only the
+  previous `disconnected` rows.
+- Old `instance_id` rows (`<container-id>:...`, `host=NULL`) are never cleaned
+  up and stay `disconnected` forever — filter on `host="uBook"`, don't read the
+  full table.
 - `make -C workers gateway-logs | grep -i "no capability row"` must be EMPTY.
   Wait past the gateway's ~60s liveness-snapshot warmup before trusting it.
 - On uBook itself, `ssh uBook 'docker ps'` should show all 6 workers

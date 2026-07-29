@@ -56,11 +56,11 @@ init: build up migrate ## First-time setup: build + up + migrate (plans are seed
 	@echo -e "$(GREEN)Project initialised!$(RESET)"
 
 .PHONY: up
-up: ## Start all services in background
+up: ## Start full stack — MAIN SERVER only (remote worker hosts: workers-recreate)
 	$(DC) up -d
 
 .PHONY: down
-down: ## Stop and remove containers
+down: ## Stop & remove containers — MAIN SERVER only (remote hosts kill their workers)
 	$(DC) down
 
 .PHONY: restart
