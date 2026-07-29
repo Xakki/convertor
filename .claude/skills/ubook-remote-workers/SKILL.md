@@ -54,12 +54,21 @@ happy-path below. Recorded 2026-07-29 → card
 `.claude/kanban/grooming/remote-host-make-up-footgun.md`.
 
 **⚠ `-fluent-bit` is an ORPHAN container, not a compose service** (since
-`cab0124` moved logging to a shared host-level fluent). `make fluent-up` /
-`fluent-restart` / `fluent-logs` fail here with `no such service: fluent-bit`,
-and the workers ship to `EXT_FLUENT_PORT=127.0.0.1:10094` where nothing
-listens (the orphan sidecar publishes `:24224`) — uBook worker logs are NOT
-reaching Graylog. Card
+`cab0124` moved logging to a host-level shared fluent). Log shipping WORKS —
+uBook's `.env.local` sets `EXT_FLUENT_PORT=0.0.0.0:24224`, the orphan listens
+there, and entries land in Graylog under source `192.168.10.12` (verified
+2026-07-29). But `make fluent-up` / `fluent-restart` / `fluent-logs` fail with
+`no such service: fluent-bit`: if that container ever stops there is no
+supported way to bring it back. Card
 `.claude/kanban/grooming/fluent-bit-orphan-remote-host.md`.
+
+**⚠ `docker compose config` over bare `ssh` LIES here.** `docker compose`
+auto-loads only `.env`; `.env.local` reaches compose solely because the root
+Makefile does `include .env.local` + `export`. So a bare
+`ssh uBook 'docker compose config'` renders the tracked `.env` defaults (e.g.
+`EXT_FLUENT_PORT=127.0.0.1:10094`) and not what the running containers use.
+Read the live values instead — `docker inspect <c> --format
+'{{.HostConfig.LogConfig.Config}}'` — or drive everything through `make`.
 
 **⚠ Other tenants on the same host — DO NOT touch.** uBook also hosts an
 unrelated project (`xakki.pro`, repo `/home/xakki/www/xakki/xakki.pro`):
