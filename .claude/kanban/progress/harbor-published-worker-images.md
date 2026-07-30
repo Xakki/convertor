@@ -144,3 +144,7 @@
 - `docs/workers-remote-deploy.md`, скиллы `image-build-deploy`, `ubook-remote-workers`.
 
 **Status:** todo (groomed 2026-07-30).
+
+## Execution Log
+
+- 2026-07-30 — старт, ветка `task/harbor-published-worker-images`.
