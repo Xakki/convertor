@@ -33,13 +33,13 @@ Symfony API only. Generic remote-host theory lives in
 |---|---|
 | ssh alias | `uBook` (key auth, BatchMode works; it's a tunnel — HostName 127.0.0.1, Port 22100). Always run `ssh uBook '<cmd>'` wrapped in `timeout`. |
 | Repo path | `/home/xakki/www/xakki/convertor` |
-| Compose project | `convertor-remote-xbook` (`COMPOSE_PROJECT_NAME`). Note "xbook" in the project name; the `host` the workers report to the DB is `uBook`. |
+| Compose project | `convertor-remote-ubook` (`COMPOSE_PROJECT_NAME`). The `host` the workers report to the DB is `uBook`. |
 | Docker | 29.x, BuildKit active by default |
 
 ## What runs here — and what is NOT ours
 
 **Convertor's** containers (the only ones this skill touches):
-`convertor-remote-xbook-worker-ai` (cpu), `-worker-ffmpeg-audio`,
+`convertor-remote-ubook-worker-ai` (cpu), `-worker-ffmpeg-audio`,
 `-worker-ffmpeg-video`, `-worker-image`, `-worker-data`,
 `-worker-libreoffice`, plus a local `-fluent-bit` log sidecar. Six workers +
 sidecar. **No ws-gateway, no metrics-exporter, no php/mariadb/keydb/nginx** —

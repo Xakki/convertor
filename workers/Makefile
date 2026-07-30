@@ -169,7 +169,7 @@ push-ai-base: build-ai-base ## Раздать ai-base на другие хост
 	docker push $(AI_BASE_IMAGE)
 
 .PHONY: build-ai-cuda
-build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
+build-ai-cuda: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
 	docker build $(AI_STAGE_BUILD_FLAGS) -t $(AI_CUDA_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
@@ -177,14 +177,18 @@ build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUD
 	    --build-arg WITH_LLAMACPP=$(WITH_LLAMACPP) \
 	    --build-arg APP_UID=$(APP_UID) \
 	    --build-arg APP_GID=$(APP_GID) \
+	    --build-arg APP_VER=$(APP_VER) \
+	    --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
 	    -f docker/workers/ai.cuda.Dockerfile .
 
 .PHONY: build-ai-cpu
-build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (CPU ML stack, GPU не нужен)
+build-ai-cpu: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (CPU ML stack, GPU не нужен)
 	docker build $(AI_STAGE_BUILD_FLAGS) -t $(AI_CPU_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg APP_UID=$(APP_UID) \
 	    --build-arg APP_GID=$(APP_GID) \
+	    --build-arg APP_VER=$(APP_VER) \
+	    --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
 	    -f docker/workers/ai.cpu.Dockerfile .
 
 ##@ Release (Harbor)
