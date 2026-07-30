@@ -104,6 +104,22 @@
      `make docker-check`, не считать её работающей по умолчанию;
    - секции `build:` остаются (dev-сборка + фолбэк на свежем хосте).
 
+   **Корректировка по итогам ревью (реально реализовано иначе):**
+   - **`build` → `missing` как дефолт.** Compose трактует явный `pull_policy: build`
+     как «пересобирать всегда» — с ним `make workers-recreate` и `make up`
+     пересобирали бы все 6 воркеров, включая 3-ГБ AI, то есть ровно противоположное
+     цели задачи. Проверено через `docker compose up --dry-run`.
+   - **remote: `always` → `missing`.** §8 одновременно требовал `always` и обещал
+     «фолбэк на свежем хосте» через секции `build:` — это несовместимо: при `always`
+     compose жёстко падает на неудачном pull вместо сборки. Обновления и так
+     приезжают явным `make pull` из happy-path, поэтому `always` ничего не давал, но
+     ломал фолбэк. Фолбэк при `missing` проверен эмпирически на scratch-стенде
+     (недоступный registry + отсутствующий образ → compose собрал из `build:`).
+   - **`AI_PULL_POLICY` — отдельный ключ.** Единый ключ заставил бы GPU-хост тянуть
+     неопубликованный `worker-ai:latest-cuda` → `pull access denied`, то есть ту же
+     ошибку, которую чинит §9, просто в другом месте. CPU-remote:
+     `AI_PULL_POLICY=always`; GPU-хост: `missing` (собирает cuda локально).
+
 9. **Порядок выкатки (важно!):** `make pull` сохраняет `--ignore-buildable` до тех
    пор, пока образы реально не окажутся в Harbor. Флаг снимается **тем же
    изменением**, которым приезжает первый успешный релиз — иначе uBook откатится
@@ -148,3 +164,27 @@
 ## Execution Log
 
 - 2026-07-30 — старт, ветка `task/harbor-published-worker-images`.
+- `3ba1cd2` — compose `IMAGE_TAG` + `pull_policy`, `IMAGE_NS` → Harbor по умолчанию,
+  `APP_VER` в gateway/metrics-exporter Dockerfile (в самом конце, после всех `COPY` —
+  иначе ломается кэш слоя зависимостей).
+- `d2a8d10` — `release-workers` (cache-warm + тег + явный поимённый список push),
+  `rebuild-workers` (`--no-cache --pull`), `release-guard` (отказ на грязном дереве);
+  удалён `push-gateway`.
+- `516f371` — снят `--ignore-buildable` с `make pull`; доки/скиллы/CLAUDE.md
+  переведены на pull-деплой; починен хардкод образа в
+  `workers/ai/verify_webm_partial.py`.
+- `28ab0d6` — правки по код-ревью: `pull_policy` → `missing`,
+  `AI_PULL_POLICY=always` для CPU-remote, `--pull` отфильтрован для локального
+  AI-шага `rebuild-workers` (тянул `worker-ai-base:local` из Docker Hub),
+  `AI_CUDA_IMAGE`/`AI_CPU_IMAGE` теперь уважают `IMAGE_TAG`, добавлен `bump-i` в
+  `build-gateway`/`build-metrics-exporter`.
+- `7ba7330` — синхронизация доков под финальные значения pull_policy.
+- **Первый релиз: тег `0.1-7ba7330`, SUCCESS.** Запушено 7 образов × 2 тега:
+  `worker-libreoffice`, `worker-ffmpeg`, `worker-image`, `worker-data`,
+  `metrics-exporter`, `ws-gateway` (`:0.1-7ba7330` + `:latest`), `worker-ai`
+  (`:0.1-7ba7330-cpu` + `:latest-cpu`). `:test`-образы в Harbor НЕ попали (§7) —
+  проверено грепом по логу пуша и списком репозиториев. Реально закачано
+  существенно меньше ожидаемых ~3 ГБ: много слоёв уже присутствовало от
+  `worker-ai-base` (`Layer already exists` / `Mounted from`).
+- **Открытый пункт:** Harbor retention + GC (§6) пользователем ещё не подтверждён —
+  на saNl было 30 ГБ свободно из 99. Без GC удаление тегов не освобождает место.
