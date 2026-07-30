@@ -1,21 +1,19 @@
 ## Don't use alone — included into the parent Makefile
 
-# On-server worker image name prefix (COMPOSE_PROJECT_NAME from the root .env).
-IMG = $(COMPOSE_PROJECT_NAME)
+# Namespace образов воркеров (IMAGE_NS из .env; НЕ зависит от стенда — dev и test
+# используют одни и те же образы).
+IMG = $(IMAGE_NS)
 
-# Worker build-версия (§4/§8): полная version = APP_VER (.env) + монотонный build-счётчик
-# из gitignored `.i` в корне репо → напр. "0.1.6". Запекается в образ (ARG→ENV APP_VER +
+# Worker build-версия: полная version = APP_VER (.env) + монотонный build-счётчик из
+# gitignored `.i` в корне репо → напр. "0.1.6". Запекается в образ (ARG→ENV APP_VER +
 # /app/.i); воркер РЕПОРТИТ её в `ready` (транспорт-only, gateway не потребляет).
-# Инкремент — одна строка: bump-i (prereq у build-таргетов воркеров, выполняется раз за make).
 .PHONY: bump-i
 bump-i: ## Инкремент build-счётчика .i (создаёт при отсутствии)
 	@n=$$(cat $(CURDIR)/.i 2>/dev/null || echo 0); n=$$((n+1)); printf '%s' "$$n" > $(CURDIR)/.i; echo "build counter .i → $$n"
 
-# Build one on-server worker image. $(1)=image stem (the /<stem>:latest tag),
-# $(2)=dockerfile stem (docker/workers/<stem>.Dockerfile). Most workers share the
-# stem; metrics-exporter does NOT (tag has no `worker-` prefix, dockerfile is
-# metrics_exporter.Dockerfile) — hence two params. APP_VER + WORKER_BUILD запекают
-# version в образ (worker-Dockerfile'ы: ARG→ENV APP_VER + echo WORKER_BUILD > /app/.i).
+# Build one on-server worker image. $(1)=image stem (тег /<stem>:latest),
+# $(2)=dockerfile stem (docker/workers/<stem>.Dockerfile). У большинства воркеров
+# stem общий; у metrics-exporter — нет, отсюда два параметра.
 define build_img
 docker build -t $(IMG)/$(1):latest \
     --build-arg APP_VER=$(APP_VER) \
@@ -57,7 +55,7 @@ build-gateway: ## Build ws-gateway image (Harbor-suitable)
 	$(call build_img,ws-gateway,gateway)
 
 .PHONY: push-gateway
-push-gateway: build-gateway ## Build + push ws-gateway в Harbor (проект convertor); нужен `make harbor-login`
+push-gateway: build-gateway ## Build + push ws-gateway в Harbor (нужен `make harbor-login`)
 	docker tag $(IMG)/ws-gateway:latest $(HARBOR_NS)/ws-gateway:latest
 	docker push $(HARBOR_NS)/ws-gateway:latest
 
@@ -70,7 +68,7 @@ gateway-down: ## Stop & remove только ws-gateway
 	$(DC) rm -sf ws-gateway
 
 .PHONY: gateway-recreate
-gateway-recreate: ## Force-recreate ТОЛЬКО ws-gateway на свежий образ, --no-deps (keydb НЕ трогает; depends_on: service_healthy иначе тянет keydb в пересоздание)
+gateway-recreate: ## Force-recreate ТОЛЬКО ws-gateway на свежий образ, --no-deps (иначе depends_on тянет keydb)
 	$(DC) up -d --force-recreate --no-deps ws-gateway
 
 .PHONY: gateway-logs
@@ -78,9 +76,9 @@ gateway-logs: ## Tail логи ws-gateway
 	$(DC) logs -f ws-gateway
 
 .PHONY: build-workers
-build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway build-ai-cpu ## Build all on-server worker images incl. worker-ai:cpu (two-stage ai-base→cpu flow stays Makefile-driven)
+build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway ## Build все on-server образы КРОМЕ worker-ai (у него своя двухступенчатая сборка: build-ai-cpu / build-ai-cuda)
 
-# Пересоздать ТОЛЬКО контейнеры воркеров из свежих :latest/:cpu-образов, не трогая
+# Пересоздать ТОЛЬКО контейнеры воркеров из свежих образов, не трогая
 # php/nginx/keydb/mariadb/ws-gateway. --no-deps — чтобы up не поднимал зависимости.
 .PHONY: workers-recreate
 workers-recreate: ## Recreate все 6 worker-контейнеров, вкл. worker-ai (не трогает php/nginx/gateway/keydb/mariadb)
@@ -111,48 +109,43 @@ build-workers-test: build-data-test build-ffmpeg-test build-image-test build-lib
 
 ##@ Build worker-ai (remote / Harbor + local GPU)
 
-# New two-layer scheme:
-#   ai-base  (light: code + pure-python deps) → build-ai-cpu/build-ai-cuda ВСЕГДА
+# Двухслойная схема:
+#   ai-base  (light: код + pure-python deps) → build-ai-cpu/build-ai-cuda ВСЕГДА
 #            пересобирают ai-base ЛОКАЛЬНО (AI_BASE_LOCAL) перед сборкой рабочего
-#            образа — гарантирует, что working-образ никогда не подтянет протухший
-#            Harbor-тег. push-ai-base — отдельный шаг, только для раздачи базы на
-#            другие хосты (remote-воркеры тянут AI_BASE_IMAGE из Harbor).
-#   ai.cuda  (FROM ai-base + CUDA ML stack)   → LOCAL build on GPU host, NOT published.
-#   ai.cpu   (FROM ai-base + CPU ML stack)    → LOCAL build for CI / CPU-only runs.
-#
-# Run instructions and model-sharing volumes: see worker-ai service in docker-compose.yml.
+#            образа: working-образ никогда не подтянет протухший Harbor-тег.
+#            push-ai-base — отдельный шаг, только для раздачи базы на другие хосты.
+#   ai.cuda  (FROM ai-base + CUDA ML stack)   → LOCAL build на GPU-хосте, не публикуется.
+#   ai.cpu   (FROM ai-base + CPU ML stack)    → LOCAL build для CI / CPU-only.
 HARBOR_NS       ?= harbor.xakki.ru/convertor
 AI_BASE_IMAGE   ?= $(HARBOR_NS)/worker-ai-base:latest
 AI_BASE_LOCAL   ?= worker-ai-base:local
 AI_CUDA_IMAGE   ?= $(IMG)/worker-ai:cuda
 AI_CPU_IMAGE    ?= $(IMG)/worker-ai:cpu
 
-# Compute capability as integer (e.g. 86 for RTX 3080/3090).
-# Run: nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-# Then strip the dot: "8.6" → 86.
+# Compute capability целым числом (86 для RTX 3080/3090):
+#   nvidia-smi --query-gpu=compute_cap --format=csv,noheader → "8.6" → 86.
 CUDA_ARCH       ?= 86
-# Dotted form for TORCH_CUDA_ARCH_LIST (derived from CUDA_ARCH).
 TORCH_CUDA_ARCH ?= $(shell echo $(CUDA_ARCH) | sed 's/\([0-9]*\)\([0-9]\)/\1.\2/')
-# Set to 1 to compile and embed llama-cpp-python with CUDA (larger image, slower build).
-# Default 0: Ollama backend works without it; the code path is always present (lazy import).
+# 1 = вкомпилировать llama-cpp-python с CUDA (образ больше, сборка дольше).
+# 0 (дефолт): backend Ollama работает без него, код-путь всегда есть (lazy import).
 WITH_LLAMACPP   ?= 0
-# App user UID/GID baked into the working images. Default 1000 (host-matchable, so
-# bind mounts + the /data volume stay writable). Override to match the build host:
+# UID/GID приложения, запекаемые в рабочие образы. 1000 = host-matchable, чтобы
+# bind-mount'ы и том /data оставались записываемыми:
 #   make build-ai-cuda APP_UID=$(id -u) APP_GID=$(id -g)
 APP_UID         ?= 1000
 APP_GID         ?= 1000
 
 .PHONY: build-ai-base
-build-ai-base: ## Build the LIGHT ai-base image (code + pure-python deps, no ML); тегирует Harbor-тег + локальный
+build-ai-base: ## Build LIGHT ai-base (код + pure-python deps, без ML); тегирует Harbor-тег + локальный
 	docker build -t $(AI_BASE_IMAGE) -t $(AI_BASE_LOCAL) \
 	    -f docker/workers/ai-base.Dockerfile .
 
 .PHONY: push-ai-base
-push-ai-base: build-ai-base ## Раздать ai-base на другие хосты: push $(AI_BASE_IMAGE) в Harbor (build-ai-cpu/cuda сами по себе от push не зависят)
+push-ai-base: build-ai-base ## Раздать ai-base на другие хосты: push в Harbor (build-ai-cpu/cuda от push не зависят)
 	docker push $(AI_BASE_IMAGE)
 
 .PHONY: build-ai-cuda
-build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (FROM ai-base + CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
+build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
 	docker build -t $(AI_CUDA_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
@@ -163,7 +156,7 @@ build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (FRO
 	    -f docker/workers/ai.cuda.Dockerfile .
 
 .PHONY: build-ai-cpu
-build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (FROM ai-base + CPU ML stack, no GPU required)
+build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (CPU ML stack, GPU не нужен)
 	docker build -t $(AI_CPU_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg APP_UID=$(APP_UID) \
@@ -173,35 +166,33 @@ build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (FROM 
 ##@ Queue / Workers
 
 .PHONY: worker-logs
-worker-logs: ## Tail logs for all 6 on-server worker services incl. worker-ai
+worker-logs: ## Tail logs всех 6 on-server воркеров вкл. worker-ai
 	$(DC) logs -f worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
 
-# fluent-bit (log shipper sidecar) comes from docker/fluent-log/docker-fluent.yml,
-# included via docker/fluent-logging.yml — already part of $(DC)'s default
-# COMPOSE_FILE (root .env), no extra -f needed.
+# Свой fluent-bit нужен ТОЛЬКО remote-хосту (на главном сервере логи шлём в общий
+# host-wide сборщик на ${EXT_FLUENT_PORT}, и порт уже занят им).
 .PHONY: fluent-up
-fluent-up: ## Up fluent-bit log-shipper sidecar
-	$(DC) up -d fluent-bit
+fluent-up: ## REMOTE-хост: поднять свой fluent-bit-сайдкар (на главном сервере не нужен — там общий)
+	$(DC_FLUENT) up -d fluent-bit
 
 .PHONY: fluent-restart
-fluent-restart: ## Restart fluent-bit (pick up conf.d changes)
-	$(DC) restart fluent-bit
+fluent-restart: ## Restart fluent-bit-сайдкара (подхватить изменения conf.d)
+	$(DC_FLUENT) restart fluent-bit
 
 .PHONY: fluent-logs
-fluent-logs: ## Tail fluent-bit sidecar logs
-	$(DC) logs -f fluent-bit
+fluent-logs: ## Tail логи fluent-bit-сайдкара
+	$(DC_FLUENT) logs -f fluent-bit
 
 .PHONY: queue-status
-queue-status: ## Show queue lengths in KeyDB (db 2)
-	@echo "=== Queue lengths (KeyDB db 2) ==="
+queue-status: ## Показать длины очередей в KeyDB (индекс БД = REDIS_QUEUE_DB)
 	@docker exec $(KEYDB_CONT) keydb-cli -a "$(REDIS_PASSWORD)" -n $(REDIS_QUEUE_DB) \
 	    eval "local ks=redis.call('keys','queue:*') local out={} for _,k in ipairs(ks) do out[#out+1]=k..': '..redis.call('llen',k) end return out" 0
 
 ##@ Worker tests
 
-# Per-worker unit runs: each worker's tests execute inside the pre-baked :test
-# image (test deps baked in — no pip install at runtime).
-# Source is bind-mounted read-only; PYTHONPATH=/src brings in the working tree.
+# Per-worker unit runs: тесты каждого воркера идут внутри pre-baked :test образа
+# (test-deps запечены — никакого pip install в runtime). Стенд НЕ нужен.
+# Исходники bind-mount'ятся read-only; PYTHONPATH=/src подключает рабочее дерево.
 # $(1)=image  $(2)=test files
 define RUN_PYTEST_TEST
 docker run --rm \
@@ -210,97 +201,78 @@ docker run --rm \
 endef
 
 .PHONY: test-python
-test-python: test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai ## Run the unit suite per-worker INSIDE each worker image (excludes e2e + routing-drift; see test-e2e / test-drift)
+test-python: test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai ## Unit-сюита по воркерам ВНУТРИ их образов (без e2e и drift; стенд не нужен)
 
 .PHONY: test-python-data
-test-python-data: build-data-test ## Unit tests for worker-data (+ shared common: stream_consumer, envelope, safe_path) + WS transport
-	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-data:test,workers/tests/test_data_worker.py workers/tests/test_stream_consumer.py workers/tests/test_envelope_golden.py workers/tests/test_safe_path.py workers/tests/test_data_ws_transport.py)
+test-python-data: build-data-test ## Unit тесты worker-data (+ shared common: stream_consumer, envelope, safe_path) + WS transport
+	$(call RUN_PYTEST_TEST,$(IMG)/worker-data:test,workers/tests/test_data_worker.py workers/tests/test_stream_consumer.py workers/tests/test_envelope_golden.py workers/tests/test_safe_path.py workers/tests/test_data_ws_transport.py)
 
 .PHONY: test-python-ffmpeg
-test-python-ffmpeg: build-ffmpeg-test ## Unit + integration tests for worker-ffmpeg (real ffmpeg binary) + WS transport (dual-connection assert)
-	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:test,workers/tests/test_ffmpeg_worker.py workers/tests/test_ffmpeg_integration.py workers/tests/test_ffmpeg_ws_transport.py)
+test-python-ffmpeg: build-ffmpeg-test ## Unit + integration тесты worker-ffmpeg (реальный ffmpeg) + WS transport
+	$(call RUN_PYTEST_TEST,$(IMG)/worker-ffmpeg:test,workers/tests/test_ffmpeg_worker.py workers/tests/test_ffmpeg_integration.py workers/tests/test_ffmpeg_ws_transport.py)
 
 .PHONY: test-python-image
-test-python-image: build-image-test ## Unit + OCR-integration tests for worker-image (+ cross-worker unsupported-format matrix) + WS transport
-	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-image:test,workers/tests/test_image_worker_ocr.py workers/tests/test_image_worker_stream.py workers/tests/test_image_worker_ocr_integration.py workers/tests/test_unsupported_formats.py workers/tests/test_image_ws_transport.py)
+test-python-image: build-image-test ## Unit + OCR-integration тесты worker-image (+ unsupported-format матрица) + WS transport
+	$(call RUN_PYTEST_TEST,$(IMG)/worker-image:test,workers/tests/test_image_worker_ocr.py workers/tests/test_image_worker_stream.py workers/tests/test_image_worker_ocr_integration.py workers/tests/test_unsupported_formats.py workers/tests/test_image_ws_transport.py)
 
 .PHONY: test-python-libreoffice
-test-python-libreoffice: build-libreoffice-test ## Unit + integration tests for worker-libreoffice (real soffice/pandoc/pdftotext) + WS transport
-	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-libreoffice:test,workers/tests/test_libreoffice_worker.py workers/tests/test_libreoffice_integration.py workers/tests/test_libreoffice_ws_transport.py)
+test-python-libreoffice: build-libreoffice-test ## Unit + integration тесты worker-libreoffice (реальные soffice/pandoc/pdftotext) + WS transport
+	$(call RUN_PYTEST_TEST,$(IMG)/worker-libreoffice:test,workers/tests/test_libreoffice_worker.py workers/tests/test_libreoffice_integration.py workers/tests/test_libreoffice_ws_transport.py)
 
 .PHONY: test-python-metrics
-test-python-metrics: build-metrics-test ## Unit tests for metrics-exporter (needs prometheus_client — only in its image)
-	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/metrics-exporter:test,workers/tests/test_metrics_exporter.py)
+test-python-metrics: build-metrics-test ## Unit тесты metrics-exporter (prometheus_client есть только в его образе)
+	$(call RUN_PYTEST_TEST,$(IMG)/metrics-exporter:test,workers/tests/test_metrics_exporter.py)
 
-# worker-ai has no dedicated :test image of its own (build-ai-cpu/-cuda don't bake
-# one) — its unit tests need httpx + the dev-server stack (worker.py / devserver
-# import the heavy STT/TTS libs lazily). Runs in the pre-baked worker-ffmpeg:test
-# image — test deps (fastapi, uvicorn, python-multipart, webrtcvad-wheels, av,
-# numpy, websockets) are baked in via workers/requirements-test.txt.
+# У worker-ai своего :test образа нет (build-ai-cpu/-cuda его не пекут) — тесты
+# гоняются в worker-ffmpeg:test, где уже запечены нужные deps (fastapi, uvicorn,
+# python-multipart, webrtcvad-wheels, av, numpy, websockets из requirements-test.txt).
 .PHONY: test-python-ai
-test-python-ai: build-ffmpeg-test ## AI-worker + dev-server unit tests (runs in worker-ffmpeg:test image, no Harbor pull)
-	$(call RUN_PYTEST_TEST,$(COMPOSE_PROJECT_NAME)/worker-ffmpeg:test,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py)
+test-python-ai: build-ffmpeg-test ## Unit тесты AI-воркера + dev-server (в образе worker-ffmpeg:test, без Harbor-пулла)
+	$(call RUN_PYTEST_TEST,$(IMG)/worker-ffmpeg:test,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py)
 
-# test-drift запускается напрямую на хосте (docker exec в php-контейнер), НЕ только
-# src+stdlib (registry-04): нужен docker + запущенный php-контейнер + непустая БД
-# (register-round-trip: dump-matrix.php --json vs Python CAPABILITIES). Часть
-# `make test-php-live` (test-db-setup гарантирует live-стек); standalone-вызов ниже
-# по-прежнему работает, если стек уже поднят руками.
-# test_worker_type_drift.py — второй, независимый drift-guard в том же таргете:
-# чистый text-parse (без docker/DB), сверяет PHP-enum WorkerType с 3 статическими
-# зеркалами (ws_client.py, keydb.py, messenger.yaml).
+# test-drift гоняется на хосте (docker exec в php-контейнер стенда), не только
+# src+stdlib: нужен docker + поднятый php + непустая БД (register-round-trip:
+# dump-matrix.php --json vs Python CAPABILITIES).
+# test_worker_type_drift.py — второй, независимый guard в том же таргете: чистый
+# text-parse, сверяет PHP-enum WorkerType с 3 статическими зеркалами
+# (ws_client.py, keydb.py, messenger.yaml).
 .PHONY: test-drift
-test-drift: ## Drift guards: routing (dump-matrix.php vs CAPABILITIES, needs docker+php+DB) + worker-type (enum vs 3 static mirrors)
+test-drift: ## Drift guards: routing (dump-matrix.php vs CAPABILITIES) + worker-type (enum vs 3 зеркала)
+	$(REQUIRE_TEST)
 	PYTHONPATH=. pytest workers/tests/test_routing_drift.py workers/tests/test_worker_type_drift.py -v
 
-# REDIS_DB=3 — та же изоляция, что test-e2e (.env.test: db3 отделяет
-# тест-стримы/ключи от прод-db2). Без этого gateway-тесты, использующие
-# load_config() напрямую (test_gateway_keydb / _reclaim_dlq / _progress_status),
-# писали XADD'ы (в т.ч. в canonical conv.dead) прямиком в dev-db2 (hardening-04).
 .PHONY: test-gateway
-test-gateway: build-data-test ## WS-Gateway KeyDB-слой на РЕАЛЬНОМ keydb (async, pytest-asyncio)
-	$(COMPOSE_TEST) up -d --wait keydb
+test-gateway: build-data-test ## KeyDB-слой WS-Gateway на РЕАЛЬНОМ keydb тест-стенда (async, pytest-asyncio)
+	$(REQUIRE_TEST)
+	$(DC) up -d --wait keydb
 	docker run --rm -u root \
 	    --network $(COMPOSE_PROJECT_NAME)-network \
-	    -e REDIS_HOST=$(KEYDB_CONT) \
-	    -e REDIS_DB=3 \
+	    -e REDIS_HOST=$(KEYDB_CONT) -e REDIS_DB=$(REDIS_QUEUE_DB) \
 	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
-	    $(COMPOSE_PROJECT_NAME)/worker-data:test \
+	    $(IMG)/worker-data:test \
 	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_liveness_push.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_dlq_consumer.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
 
 .PHONY: test-e2e
-test-e2e: build-workers build-ffmpeg-test ## Real S3 in/out e2e for ffmpeg + data workers (run `make up` first)
-	$(E2E_CLEAN_ENV) $(COMPOSE_TEST) up -d --force-recreate --no-deps --wait php nginx ws-gateway worker-ffmpeg-audio worker-ffmpeg-video worker-data
-	$(COMPOSE_TEST) exec -T php bin/console doctrine:migrations:migrate --no-interaction
+test-e2e: build-workers build-ffmpeg-test ## Реальный S3 in/out e2e для ffmpeg + data воркеров на тест-стенде
+	$(REQUIRE_TEST)
+	$(MAKE) up migrate
 	docker run --rm -u root \
 	    --network $(COMPOSE_PROJECT_NAME)-network \
-	    -e REDIS_HOST=$(KEYDB_CONT) \
-	    -e REDIS_DB=3 \
-	    -e REDIS_PASSWORD -e S3_ENDPOINT -e S3_KEY -e S3_SECRET \
-	    -e S3_BUCKET_PREFIX -e S3_REGION -e S3_USE_PATH_STYLE \
-	    -e S3_PREFIX=test_ \
-	    -e DB_HOST=$(DB_HOST) -e DB_NAME=convertor-test -e DB_USER=convertor-test -e DB_PASS=$(DB_TEST_PASS) \
+	    -e REDIS_HOST=$(KEYDB_CONT) -e REDIS_DB=$(REDIS_QUEUE_DB) -e REDIS_PASSWORD \
+	    -e S3_ENDPOINT -e S3_KEY -e S3_SECRET -e S3_BUCKET_PREFIX -e S3_REGION \
+	    -e S3_USE_PATH_STYLE -e S3_PREFIX \
+	    -e DB_HOST=mariadb -e DB_NAME=$(MARIADB_DATABASE) \
+	    -e DB_USER=$(MARIADB_USER) -e DB_PASS=$(MARIADB_PASSWORD) \
 	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
-	    $(COMPOSE_PROJECT_NAME)/worker-ffmpeg:test \
-	    python3 -m pytest workers/tests/test_workers_e2e.py -m e2e -p no:cacheprovider -ra -v; \
-	    rc=$$?; \
-	    echo "[test-e2e] restoring workers to base config…"; \
-	    $(DC) up -d --force-recreate --no-deps php nginx ws-gateway worker-ffmpeg-audio worker-ffmpeg-video worker-data >/dev/null; \
-	    exit $$rc
+	    $(IMG)/worker-ffmpeg:test \
+	    python3 -m pytest workers/tests/test_workers_e2e.py -m e2e -p no:cacheprovider -ra -v
 
-# Public-API integration e2e (PHPUnit, group=integration): drives POST /convert →
-# poll status → download over REAL HTTP against the in-compose stack, one case per
-# category (image/data/ffmpeg/document). Brings up the full worker set under
-# .env.test (APP_ENV=test, test DB, KeyDB db3, S3 test_ prefix) via the same
-# E2E_CLEAN_ENV + COMPOSE_TEST recipe as test-e2e, migrates the test DB, runs
-# phpunit inside the php container, then restores the stack to base (dev) config.
-# Worker images must already exist — run `make up` (or `make build-workers`) first.
+# Public-API integration e2e (PHPUnit, group=integration): POST /convert → poll
+# status → download по РЕАЛЬНОМУ HTTP против стенда, по одному кейсу на категорию
+# (image/data/ffmpeg/document). build-workers — обязательный prereq: стенд поднимает
+# воркеры из :latest, и без пересборки тест гонял бы СТАРЫЙ код воркеров.
 .PHONY: test-api-integration
-test-api-integration: ## Public-API e2e integration tests (PHPUnit group=integration): image/data/ffmpeg/document — run `make up` first
-	$(E2E_CLEAN_ENV) $(COMPOSE_TEST) up -d --force-recreate --no-deps --wait php nginx ws-gateway worker-image worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-data
-	$(COMPOSE_TEST) exec -T php bin/console doctrine:migrations:migrate --no-interaction
-	$(COMPOSE_TEST) exec -T php php vendor/bin/phpunit --group integration; \
-	    rc=$$?; \
-	    echo "[test-api-integration] restoring workers to base config…"; \
-	    $(DC) up -d --force-recreate --no-deps php nginx ws-gateway worker-image worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-data >/dev/null; \
-	    exit $$rc
+test-api-integration: build-workers ## Public-API e2e (PHPUnit group=integration): image/data/ffmpeg/document
+	$(REQUIRE_TEST)
+	$(MAKE) up migrate
+	$(DC) exec -T php php vendor/bin/phpunit --group integration

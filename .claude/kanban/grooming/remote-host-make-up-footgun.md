@@ -63,3 +63,17 @@ c. Уборка устаревших `worker_capabilities` строк (8 pre-pre
 **Контекст:** найдено 2026-07-29 на хосте uBook в ходе диагностики простоя воркеров.
 
 **Status:** grooming
+
+**Update 2026-07-30 (рефакторинг Makefile/env): решено.** Серверная часть
+(php/cron/mariadb/keydb/nginx/ws-gateway) убрана под compose-профиль `server`,
+metrics-exporter — под `monitoring`. Remote worker-хост активирует только `ai`
+(шаблон `.env.local_worker_example`, туда же переехали `COMPOSE_FILE` с
+fluent-сабмодулем и `EXT_FLUENT_PORT`), поэтому `make up` там поднимает ровно
+6 воркеров + fluent-bit + logrotate, а `make down` гасит только их. Проверено
+симуляцией: `docker compose config --services` для worker-профиля даёт
+`fluent-bit logrotate worker-ai worker-data worker-ffmpeg-audio
+worker-ffmpeg-video worker-image worker-libreoffice`.
+
+⚠ Остаточное действие: на uBook нужно пересоздать `.env.local` из нового
+шаблона — со СТАРЫМ `.env.local` (без `COMPOSE_PROFILES`) `make up` по-прежнему
+потянет полный стек и упадёт на внешней сети `common`.

@@ -24,7 +24,7 @@ doctrine:
 when@test:
     doctrine:
         dbal:
-            # No suffix: create-test-db.sh creates `convertor-test`; keep exact dbname.
+            # No suffix: тест-стенд поднимает БД `convertor-test` штатным MARIADB_DATABASE; keep exact dbname.
             dbname_suffix: ''
 
 when@prod:

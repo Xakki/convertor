@@ -8,13 +8,9 @@ x-app-env: &_app_env
     # bind-mounted /app-symfony (vendor/, var/, config/jwt/). Host-specific.
     PUID: ${PUID:-0}
     PGID: ${PGID:-0}
-    DB_HOST: ${DB_HOST}
-    DB_USERNAME: ${DB_USERNAME}
-    DB_DATABASE: ${DB_DATABASE}
-    DB_PASSWORD: ${DB_PASSWORD}
-    # JWT keys are file paths defined in app-symfony/.env (config/jwt/*.pem).
-    # REDIS_DSN/SESSIONS_DSN, REFRESH_*, TELEGRAM_BOT_TOKEN: Symfony-only — read from
-    # app-symfony/.env* by Dotenv; not injected here to avoid process-env override issue.
+    # DATABASE_URL, REDIS_DSN/SESSIONS_DSN, REFRESH_*, TELEGRAM_BOT_TOKEN, JWT-пути,
+    # FILE_RETENTION_*: Symfony-only — Dotenv читает их из app-symfony/.env*; сюда НЕ
+    # инжектим, иначе process-env перебил бы per-env оверрайды (.env.test и пр.).
     # WORKER_API_TOKEN/GATEWAY_INTERNAL_TOKEN: unlike the vars above, the
     # process-env override here is INTENTIONAL — single source of truth is
     # root .env.local (same as worker/ws-gateway services below), injected
@@ -58,8 +54,12 @@ x-app-base: &_app_base
             condition: service_healthy
 
 services:
+    # Профиль `server` (php/cron/mariadb/keydb/nginx/ws-gateway) — серверная часть.
+    # Remote worker-хост его НЕ активирует: там `make up` поднимает только воркеров
+    # (они без профиля) + fluent — см. .env.local_worker_example.
     php:
         <<: *_app_base
+        profiles: ["server"]
         container_name: "${COMPOSE_PROJECT_NAME}-php"
         hostname: ${COMPOSE_PROJECT_NAME}-php
         # Override anchor's [default]: php also joins backend to reach
@@ -92,6 +92,7 @@ services:
 
     cron:
         <<: *_app_base
+        profiles: ["server"]
         container_name: "${COMPOSE_PROJECT_NAME}-cron"
         hostname: ${COMPOSE_PROJECT_NAME}-cron
         volumes:
@@ -113,6 +114,7 @@ services:
 
     mariadb:
         image: ${DOCKER_IMAGE_MARIADB}
+        profiles: ["server"]
         restart: unless-stopped
         init: true
         stop_grace_period: 30s
@@ -132,7 +134,6 @@ services:
             MARIADB_USER: ${MARIADB_USER}
             MARIADB_PASSWORD: ${MARIADB_PASSWORD}
             MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
-            MARIADB_PASSWORD_WALL: ${MARIADB_PASSWORD_WALL}
             EXPORTER_USER: ${EXPORTER_USER}
             EXPORTER_PASS: ${EXPORTER_PASS}
             MARIADB_AUTO_UPGRADE: 1
@@ -153,6 +154,7 @@ services:
 
     keydb:
         image: ${DOCKER_IMAGE_KEYDB}
+        profiles: ["server"]
         container_name: "${COMPOSE_PROJECT_NAME}-keydb"
         restart: unless-stopped
         init: true
@@ -179,6 +181,7 @@ services:
 
     nginx:
         image: ${DOCKER_IMAGE_NGINX}
+        profiles: ["server"]
         restart: unless-stopped
         init: true
         stop_grace_period: 5s
@@ -216,7 +219,7 @@ services:
         build:
             context: .
             dockerfile: docker/workers/libreoffice.Dockerfile
-        image: ${COMPOSE_PROJECT_NAME}/worker-libreoffice:latest
+        image: ${IMAGE_NS}/worker-libreoffice:latest
         container_name: "${COMPOSE_PROJECT_NAME}-worker-libreoffice"
         restart: unless-stopped
         init: true
@@ -251,7 +254,7 @@ services:
         build:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
-        image: ${COMPOSE_PROJECT_NAME}/worker-ffmpeg:latest
+        image: ${IMAGE_NS}/worker-ffmpeg:latest
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg-audio"
         restart: unless-stopped
         init: true
@@ -283,7 +286,7 @@ services:
         build:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
-        image: ${COMPOSE_PROJECT_NAME}/worker-ffmpeg:latest
+        image: ${IMAGE_NS}/worker-ffmpeg:latest
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg-video"
         restart: unless-stopped
         init: true
@@ -315,7 +318,7 @@ services:
         build:
             context: .
             dockerfile: docker/workers/image.Dockerfile
-        image: ${COMPOSE_PROJECT_NAME}/worker-image:latest
+        image: ${IMAGE_NS}/worker-image:latest
         container_name: "${COMPOSE_PROJECT_NAME}-worker-image"
         restart: unless-stopped
         init: true
@@ -361,8 +364,10 @@ services:
                 AI_BASE_IMAGE: ${AI_BASE_IMAGE:-harbor.xakki.ru/convertor/worker-ai-base:latest}
                 APP_UID: ${APP_UID:-1000}
                 APP_GID: ${APP_GID:-1000}
-        image: ${COMPOSE_PROJECT_NAME}/worker-ai:${AI_VARIANT:-cpu}
+        image: ${IMAGE_NS}/worker-ai:${AI_VARIANT:-cpu}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
+        # Профиль `ai` (COMPOSE_PROFILES в .env) — тяжёлый образ, тест-стенд его не поднимает.
+        profiles: ["ai"]
         # Стабильный hostname → стабильный auto-derived WORKER_ID (см. ws_client.py
         # _default_worker_id, §6.1): без пиннинга каждое пересоздание контейнера
         # получало бы новое имя KeyDB-consumer'а (мирроим hostname-паттерн php/cron
@@ -484,7 +489,7 @@ services:
         build:
             context: .
             dockerfile: docker/workers/data.Dockerfile
-        image: ${COMPOSE_PROJECT_NAME}/worker-data:latest
+        image: ${IMAGE_NS}/worker-data:latest
         container_name: "${COMPOSE_PROJECT_NAME}-worker-data"
         restart: unless-stopped
         init: true
@@ -516,7 +521,8 @@ services:
         build:
             context: .
             dockerfile: docker/workers/gateway.Dockerfile
-        image: ${COMPOSE_PROJECT_NAME}/ws-gateway:latest
+        image: ${IMAGE_NS}/ws-gateway:latest
+        profiles: ["server"]
         container_name: "${COMPOSE_PROJECT_NAME}-ws-gateway"
         restart: unless-stopped
         init: true
@@ -527,7 +533,7 @@ services:
             TZ: ${TZ}
             REDIS_HOST: ${REDIS_HOST:-keydb}
             REDIS_PORT: ${REDIS_PORT:-6379}
-            REDIS_DB: ${REDIS_DB:-2}
+            REDIS_DB: ${REDIS_QUEUE_DB:-2}
             REDIS_PASSWORD: ${REDIS_PASSWORD}
             WS_BLOCK_MS: ${WS_BLOCK_MS}
             WS_HOST: ${WS_HOST}
@@ -570,8 +576,13 @@ services:
         build:
             context: .
             dockerfile: docker/workers/metrics_exporter.Dockerfile
-        image: ${COMPOSE_PROJECT_NAME}/metrics-exporter:latest
+        image: ${IMAGE_NS}/metrics-exporter:latest
+        # Имя ЖЁСТКОЕ: Prometheus скрейпит статический таргет convertor-metrics-exporter:9472
+        # (dockprom/prometheus.yml) — не переименовывать и не префиксовать проектом.
         container_name: "convertor-metrics-exporter"
+        # Профиль `monitoring` (COMPOSE_PROFILES в .env): из-за жёсткого имени два
+        # стенда одновременно его поднять не могут — тест-стенд не поднимает.
+        profiles: ["monitoring"]
         restart: unless-stopped
         init: true
         stop_grace_period: 10s

@@ -59,3 +59,11 @@
    не мигрирована, вместо текущей ошибки уровня SQL («Unknown column …»)?
 
 **Status:** grooming.
+
+**Update 2026-07-30 (рефакторинг Makefile/env):** вариант **A** реализован —
+`test_routing_drift.py::_container_name()` теперь берёт `COMPOSE_PROJECT_NAME` из
+**окружения** (Makefile его экспортирует), а не из файла `.env`. Под `make test`
+(TEST=1) таргет `test-drift` бьёт в php-контейнер тест-стенда, где `APP_ENV=test`
+→ матрица читается из `convertor-test`. Плюс guard `REQUIRE_TEST` не даёт запустить
+`test-drift` без тест-окружения. AC 1/2/5 закрыты; открытым остаётся AC 3
+(достаточен ли seed-only набор строк для полноты drift-проверки).

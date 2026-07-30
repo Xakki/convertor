@@ -45,28 +45,33 @@ Symfony API only. Generic remote-host theory lives in
 sidecar. **No ws-gateway, no metrics-exporter, no php/mariadb/keydb/nginx** —
 those stay only on the main server.
 
-**⚠ `make up` / `make down` are MAIN-SERVER-only — never run them here.**
-`COMPOSE_FILE` in the tracked `.env` is the full stack, so `up` on uBook tries
-to start php/mariadb/nginx/keydb/ws-gateway/metrics-exporter and dies on
-`network common declared as external, but could not be found` (that network
-lives only on saFin) — while `down` has already killed all 6 workers. Use the
-happy-path below. Recorded 2026-07-29 → card
+**`make up` / `make down` are SAFE here since 2026-07-30 — but only once
+`.env.local` is regenerated from `.env.local_worker_example`.** The server side
+(php/cron/mariadb/keydb/nginx/ws-gateway) now sits behind compose profile
+`server` and metrics-exporter behind `monitoring`; the worker-host template
+activates neither, so `up` starts exactly the 6 workers + the fluent-bit
+sidecar (+ logrotate) and `down` stops only those. **Verify before trusting it
+on this host:** `ssh uBook 'cd <repo> && docker compose config --services'`
+must list no php/mariadb/nginx/ws-gateway/metrics-exporter. With the OLD
+`.env.local` (no `COMPOSE_PROFILES`) `up` still tries the full stack and dies
+on `network common declared as external, but could not be found` — that network
+lives only on saFin. Card
 `.claude/kanban/grooming/remote-host-make-up-footgun.md`.
 
-**⚠ `-fluent-bit` is an ORPHAN container, not a compose service** (since
-`cab0124` moved logging to a host-level shared fluent). Log shipping WORKS —
-uBook's `.env.local` sets `EXT_FLUENT_PORT=0.0.0.0:24224`, the orphan listens
-there, and entries land in Graylog under source `192.168.10.12` (verified
-2026-07-29). But `make fluent-up` / `fluent-restart` / `fluent-logs` fail with
-`no such service: fluent-bit`: if that container ever stops there is no
-supported way to bring it back. Card
+**`-fluent-bit` is not part of `COMPOSE_FILE`** (since `cab0124` moved logging to
+a host-level shared fluent). Log shipping WORKS — uBook's `.env.local` sets
+`EXT_FLUENT_PORT=0.0.0.0:24224`, the sidecar listens there, and entries land in
+Graylog under source `192.168.10.12` (verified 2026-07-29). Since 2026-07-30
+`make fluent-up` / `fluent-restart` / `fluent-logs` work again: they run the
+submodule compose explicitly (`$(DC_FLUENT)` in the root Makefile), so a stopped
+sidecar can be brought back. Card
 `.claude/kanban/grooming/fluent-bit-orphan-remote-host.md`.
 
 **⚠ `docker compose config` over bare `ssh` LIES here.** `docker compose`
 auto-loads only `.env`; `.env.local` reaches compose solely because the root
 Makefile does `include .env.local` + `export`. So a bare
 `ssh uBook 'docker compose config'` renders the tracked `.env` defaults (e.g.
-`EXT_FLUENT_PORT=127.0.0.1:10094`) and not what the running containers use.
+`EXT_FLUENT_PORT=127.0.0.1:24224`) and not what the running containers use.
 Read the live values instead — `docker inspect <c> --format
 '{{.HostConfig.LogConfig.Config}}'` — or drive everything through `make`.
 
@@ -85,7 +90,7 @@ the convertor repo dir on uBook:
 ```bash
 ssh uBook 'cd /home/xakki/www/xakki/convertor && git status --porcelain'  # 1. check first
 ssh uBook 'cd /home/xakki/www/xakki/convertor && git pull'                # 2. ff expected
-ssh uBook 'cd /home/xakki/www/xakki/convertor && make build-workers'      # 3. all 6, incl. AI — minutes
+ssh uBook 'cd /home/xakki/www/xakki/convertor && make build-workers build-ai-cpu'  # 3. all 6 (AI is a separate target since 2026-07-30) — minutes
 ssh uBook 'cd /home/xakki/www/xakki/convertor && make workers-recreate'   # 4. --no-deps, ~seconds
 ```
 
@@ -94,18 +99,16 @@ ssh uBook 'cd /home/xakki/www/xakki/convertor && make workers-recreate'   # 4. -
   up healthy, `alive`, `host=uBook`, with fresh metrics, and still runs the OLD
   code. The DB signals cannot tell the two apart; the decisive check is
   `git diff --name-only HEAD@{1} HEAD -- workers/ docker/workers/`. When in
-  doubt just run `build-workers` — cache-warm and idempotent (~1 min).
+  doubt just run `build-workers build-ai-cpu` — cache-warm and idempotent (~1 min).
 - **Step 1 is load-bearing.** If `git status` shows uncommitted *tracked*
   changes, STOP and escalate — never stash/checkout/reset on uBook (rollbacks
   need explicit user approval). An untracked `shared-files/` dir is known
   cruft, not a blocker (the project has no shared volume; safe to ignore, and
   worth flagging for deletion).
-- **git submodule** `docker/fluent-log` — initialised on uBook (v0.1.4), but as
-  of 2026-07-29 nothing in `COMPOSE_FILE` references
-  `docker/fluent-log/docker-fluent.yml` and `docker-compose.yml` has no
-  `include:` (verified by grep), so it no longer gates `docker compose config`.
-  `docs/workers-remote-deploy.md` still claims otherwise — drift, see the
-  fluent-bit card.
+- **git submodule** `docker/fluent-log` — initialised on uBook (v0.1.4).
+  `COMPOSE_FILE` does NOT reference `docker/fluent-log/docker-fluent.yml`, so it
+  no longer gates `docker compose config`; the `fluent-*` targets reach it via
+  the Makefile's `$(DC_FLUENT)` override instead (since 2026-07-30).
 - `make build-workers` on a first build after a Dockerfile change ran ~7-8 min
   (torch/ML stack downloads fresh; the BuildKit pip cache mount is empty on
   first run, warm thereafter). apt/base layers hit `CACHED`.

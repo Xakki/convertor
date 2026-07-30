@@ -18,7 +18,7 @@ SaaS-сервис конвертации файлов всех форматов:
 
 `php`, `cron`, `mariadb`, `keydb`, `nginx`, `worker-libreoffice`, `worker-ffmpeg-audio`, `worker-ffmpeg-video`, `worker-image`, `worker-data`, `worker-ai`, `ws-gateway`, `metrics-exporter`.
 
-`worker-ai` (CPU-образ по умолчанию, `image: ${COMPOSE_PROJECT_NAME}/worker-ai:${AI_VARIANT:-cpu}`) поднимается вместе со всеми (`make up`), подключаясь по внутреннему `ws://ws-gateway:8091`; удалённые GPU-хосты (напр. домашний WSL+GPU) поднимают тот же воркер с `AI_VARIANT=cuda`/`AI_RUNTIME=nvidia` и подключаются к публичному `wss://` — оба независимые consumer'ы `conv.ai`, задачи балансируются между ними.
+`worker-ai` (CPU-образ по умолчанию, `image: ${IMAGE_NS}/worker-ai:${AI_VARIANT:-cpu}`) поднимается вместе со всеми (`make up`), подключаясь по внутреннему `ws://ws-gateway:8091`; удалённые GPU-хосты (напр. домашний WSL+GPU) поднимают тот же воркер с `AI_VARIANT=cuda`/`AI_RUNTIME=nvidia` и подключаются к публичному `wss://` — оба независимые consumer'ы `conv.ai`, задачи балансируются между ними.
 
 ### Транспорт: WS-Gateway как единственный читатель очередей
 
@@ -69,27 +69,27 @@ make logs      # логи всех сервисов (make logs-<service> — п�
 make console CMD="app:user:make-admin <email|id>"
 ```
 
-## Ключевые make-таргеты
+## Команды
 
-| Таргет | Назначение |
-|--------|-----------|
-| `make init` | Первичная инициализация (build + up + migrate) |
-| `make up` / `make down` / `make restart` | Старт / стоп / рестарт стека |
-| `make build` / `make rebuild` | Сборка образов (`rebuild` — без кэша) |
-| `make pull` | Подтянуть базовые образы из Harbor |
-| `make ps` / `make logs` / `make logs-<svc>` | Статус / логи |
-| `make harbor-login` | Логин в Docker-registry (Harbor) |
-| `make docker-check` | Валидация compose (`config -q`) |
-| `make migrate` | Doctrine-миграции |
-| `make console CMD="…"` | Произвольная Symfony-консоль |
-| `make tg-set-webhook` | Регистрация Telegram webhook |
-| `make restart-php` / `make shell-php` | Рестарт / shell php-контейнера |
-| `make composer CMD="…"` | Composer внутри контейнера |
-| `make test` | PHPUnit + pytest БЕЗ провижининга `convertor-test`; та же PHPUnit-сюита, что и в `test-php-live` — DB-зависимые тесты падают с ошибкой доступа, если БД не поднята |
-| `make test-php-live` | **Канонический CI-таргет**: провижинит `convertor-test` (БД + миграции), затем гоняет ту же PHPUnit-сюиту чисто, без DB-ошибок |
-| `make phpstan` / `make cs` / `make cs-check` | Статанализ и code style |
+Полный список — `make help` (Makefile = единственный источник правды по таргетам).
 
-`make help` — полный список.
+### Окружение
+
+Поведение всех таргетов и compose определяется только env-файлами, в порядке наложения:
+
+`.env` (база, трекается) → `.env.local` (секреты хоста, gitignored) → `.env.test` (только при `TEST=1`).
+
+Переменные, нужные **только** бэкенду, живут в `app-symfony/.env*` и в корневых не дублируются.
+
+### Тесты
+
+`make test` поднимает **отдельный тест-стенд** (свой compose-проект `xakki-convertor-test`:
+свои контейнеры, тома, порты 110xx, БД `convertor-test`) и гоняет на нём PHPUnit + pytest
+воркеров + drift-guard. Dev-стенд при этом не затрагивается — стенды живут параллельно.
+`make test-down` сносит тест-стенд вместе с томами.
+
+Отдельные тест-таргеты требуют явного тест-окружения: `make TEST=1 test-php`,
+`make TEST=1 test-e2e`, `make TEST=1 test-api-integration`, `make TEST=1 test-gateway`.
 
 ## Аутентификация и доступ
 

@@ -163,7 +163,7 @@ final class AuthRefreshControllerTest extends WebTestCase
             $em = $container->get(EntityManagerInterface::class);
             $em->getConnection()->executeQuery('SELECT 1');
         } catch (\Throwable $e) {
-            self::markTestSkipped('Test database not provisioned (needs convertor-test — run `make test-db-setup`): ' . $e->getMessage());
+            self::markTestSkipped('Test database not provisioned (needs convertor-test — run `make test-up`): ' . $e->getMessage());
         }
     }
 

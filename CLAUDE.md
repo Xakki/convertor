@@ -60,7 +60,10 @@ MVP = оплата **только через Telegram** (Bot API: invoice → `s
 - KeyDB — единственный instance, несколько баз (0: cache, 1: sessions, 2: queues)
 
 ## Secrets / env
-- **Секреты — только в `.env.local`** (gitignored). Makefile делает `include .env` + `-include .env.local` + `export`, поэтому значения из `.env.local` уходят в окружение и compose подхватывает их через `${VAR}`. В трекаемых `.env` / `.env.local_example` секреты держим ПУСТЫМИ (плейсхолдеры). Никогда не коммить реальные ключи.
+- **Поведение системы задают ТОЛЬКО env-файлы**, порядок наложения: `.env` (база, трекается) → `.env.local` (секреты хоста, gitignored) → `.env.test` (только при `TEST=1`). Makefile инклудит их в этом порядке и `export`-ит, compose подхватывает через `${VAR}`. Никаких `--env-file`/`unexport`/`env -u`.
+- **Базовое правило раскладки:** переменная, нужная ТОЛЬКО бэкенду (Symfony читает её сам через Dotenv), живёт в `app-symfony/.env*` и в корневых НЕ дублируется. Если её инжектит compose (нужна ещё воркерам/gateway) — единый источник корневой `.env`/`.env.local`, а в `app-symfony/.env` только пустой плейсхолдер (process-env перебивает Dotenv).
+- **Секреты — только в `.env.local`.** В трекаемых `.env` / `.env.local_example` секреты держим ПУСТЫМИ (плейсхолдеры). Никогда не коммить реальные ключи.
+- **Тесты — на отдельном стенде.** `make test` поднимает изолированный compose-проект `xakki-convertor-test` (свои контейнеры/тома/порты/БД `convertor-test`); dev-стенд не затрагивается. Гранулярные тест-таргеты — только `make TEST=1 <target>`.
 
 ## S3 / MinIO
 - **Все операции с S3 — через MCP `minio`** (`mcp__minio__*`): бакеты, юзеры, политики, объекты, presign. Не дёргать `mc`/`mc admin` вручную. Шаренный endpoint — `apis3.xakki.ru` / `apis3.variantgood.com`; бакет результатов — `convertor-results` (`${S3_BUCKET_PREFIX}-results`). Ограничение MCP: создание кастомной IAM-политики недоступно — только встроенные (`readwrite`/`readonly`/…) через `policy_attach`.

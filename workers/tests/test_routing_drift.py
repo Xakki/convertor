@@ -109,6 +109,12 @@ def _canon(fmt: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _container_name() -> str:
+    # Makefile exports COMPOSE_PROJECT_NAME for the stand it runs against (the
+    # test stand under `make test`), so the env wins over the tracked .env file —
+    # otherwise this drift check would read the DEV database's matrix.
+    project = os.environ.get("COMPOSE_PROJECT_NAME", "").strip()
+    if project:
+        return f"{project}-php"
     env_file = REPO_ROOT / ".env"
     project = "xakki-convertor"
     try:

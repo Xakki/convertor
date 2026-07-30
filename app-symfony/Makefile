@@ -7,7 +7,7 @@ CONSOLE  = $(PHP_EXEC) php bin/console
 ##@ PHP / Symfony
 
 .PHONY: restart-php
-restart-php: ## Restart only php + cron (e.g. to reload app-symfony/.env.local)
+restart-php: ## Restart только php + cron (напр. перечитать app-symfony/.env.local)
 	$(DC) restart php cron
 
 .PHONY: shell-php
@@ -63,7 +63,8 @@ build-php: ## PHP image is pulled from harbor (DOCKER_IMAGE_PHP), not built here
 ##@ PHP / Quality
 
 .PHONY: test-php
-test-php: ## Run PHPUnit tests
+test-php: ## Run PHPUnit (в php-контейнере тест-стенда; phpunit форсит APP_ENV=test)
+	$(REQUIRE_TEST)
 	$(PHP_EXEC) php vendor/bin/phpunit
 
 .PHONY: phpstan

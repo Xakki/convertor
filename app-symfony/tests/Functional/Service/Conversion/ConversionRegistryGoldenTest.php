@@ -38,7 +38,7 @@ use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
  *
  * To intentionally update the golden after a deliberate matrix change: review
  * the diff (`APP_ENV=test php bin/dump-matrix.php` on a freshly migrated
- * convertor-test — see `make test-db-setup`), then regenerate with
+ * convertor-test — see `make test-up`), then regenerate with
  * `APP_ENV=test php bin/dump-matrix.php --write`. Running dump-matrix.php
  * against the DEV database instead would mix in real worker registrations
  * (`instance_id != '__seed__'`) that this test does NOT see — the golden
@@ -62,7 +62,7 @@ final class ConversionRegistryGoldenTest extends KernelTestCase
         self::assertNotEmpty(
             $seedOnly,
             'No worker_capabilities rows with instanceId="__seed__" found — has the registry-03 '
-            . 'seed migration (Version20260722150301) run on convertor-test? Run `make test-db-setup`.',
+            . 'seed migration (Version20260722150301) run on convertor-test? Run `make test-up`.',
         );
 
         $repoStub = $this->createStub(WorkerCapabilityRepository::class);

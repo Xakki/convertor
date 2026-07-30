@@ -1,7 +1,7 @@
 #!/bin/bash
-# Runs INSIDE the mariadb container (working_dir=/backup, host-mounted from
-# docker/mariadb/backup). Produces the gz only — no S3 creds/tools here.
-# The HOST upload step (s3dump.sh push) ships it to the pf-dump bucket.
+# Runs INSIDE the mariadb container (working_dir=/backup, host-mounted from ./backup
+# at the repo root). Вызывать через `make db-dump`. Кладёт локальный gz; отгрузки в
+# S3 нет — обвязка удалена как нерабочая, см. карточку db-backup-s3-pipeline.
 set -o nounset
 set -o errexit
 set -o pipefail

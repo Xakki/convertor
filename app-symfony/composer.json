@@ -86,9 +86,6 @@
         "post-update-cmd": [
             "@auto-scripts"
         ],
-        "test-db-migrate": [
-            "@php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration"
-        ],
         "deploy": [
             "@composer install --no-interaction --prefer-dist --optimize-autoloader",
             "php bin/console cache:clear --no-interaction",

@@ -77,18 +77,24 @@ reconnect-loop без диагностики в логах.
 ## Настройка `.env.local`
 
 ```bash
-cp .env.local_example .env.local
+cp .env.local_worker_example .env.local
 ```
 
-Заполнить блок «Remote worker host» в конце файла (см. комментарии там же
-для деталей каждой переменной):
+⚠ Именно `.env.local_worker_example` (не `.env.local_example` — тот для главного
+сервера). Он задаёт `COMPOSE_PROFILES` так, что `make up` на этом хосте поднимает
+ТОЛЬКО воркеров + fluent-bit: серверная часть (php/cron/mariadb/keydb/nginx/
+ws-gateway) сидит под профилем `server`, который здесь не активируется, а
+metrics-exporter — под `monitoring` (он к тому же требует внешнюю сеть `common`
+с главного сервера). Заполнить нужно (см. комментарии в самом файле):
 
 | Переменная | Значение | Почему |
 |---|---|---|
 | `COMPOSE_PROJECT_NAME` | своё уникальное, НЕ `xakki-convertor` | **Критично.** `WORKER_ID` каждого воркера = hostname контейнера = `${COMPOSE_PROJECT_NAME}-worker-*` (`docker-compose.yml`), и ЭТО ЖЕ имя используется дословно как имя KeyDB-consumer'а в `XREADGROUP` (`workers/gateway/ws_server.py`). Одинаковый `COMPOSE_PROJECT_NAME` на двух хостах → два физически разных контейнера претендуют на одно имя consumer'а — gateway не различит их, reclaim/ack начнут путаться. |
 | `WORKER_API_TOKEN` | реальный токен | Единственная обязательная переменная без дефолта — пустая строка блокирует старт воркера (`WsClientConfig.validate()`), это НАМЕРЕННО (без него был бы reconnect-storm против недоступного/неавторизованного gateway). |
-| `GATEWAY_WS_URL` | `wss://convertor.xakki.pro/ws/worker/` | Публичный WS-эндпоинт. |
-| `API_BASE_URL` | `https://convertor.xakki.pro` | Корень API, БЕЗ `/api`-суффикса (см. троубл-шутинг ниже — если забыть, воркер тихо падает на локальный дефолт). |
+| `COMPOSE_PROFILES` | `ai` (или пусто на CPU-хосте без worker-ai) | НЕ добавлять `server`/`monitoring` — иначе `make up` потянет серверную часть, которой здесь нет. |
+| `COMPOSE_FILE` | из шаблона (+ `docker/fluent-log/docker-fluent.yml`) | Свой fluent-bit-сайдкар поднимается вместе со стеком: общего host-wide сборщика на remote-хосте нет. |
+| `EXT_FLUENT_PORT` | напр. `0.0.0.0:24224` | Порт своего сайдкара — он его и слушает, и в него же шлют логи контейнеры. |
+| `GATEWAY_WS_URL` / `API_BASE_URL` | дефолты из трекаемого `.env` подходят (`wss://convertor.xakki.pro/ws/worker/`, `https://convertor.xakki.pro`) | Переопределять только для нестандартного стенда; `API_BASE_URL` — корень API, БЕЗ `/api`-суффикса. |
 | `AI_VARIANT`/`AI_RUNTIME` | опционально: `cuda`/`nvidia` на GPU-хосте | По умолчанию `cpu`/`runc` (см. `docker-compose.yml` сервис `worker-ai`) — задавать нужно только на GPU-хосте. |
 
 `GRAYLOG_HOST`/`GRAYLOG_PORT`/`GRAYLOG_URI`/`HOST_NAME`/`HOST_IP`/`EXT_FLUENT_PORT`
@@ -128,7 +134,8 @@ generic-имя VM) — тогда просто задайте нужную пе�
 ## Сборка образов
 
 ```bash
-make build-workers
+make build-workers   # 5 обычных воркеров + metrics-exporter + ws-gateway
+make build-ai-cpu    # worker-ai (двухступенчато: ai-base → :cpu); на GPU — build-ai-cuda
 ```
 
 Собирает все 6 worker-образов: `worker-libreoffice`, `worker-ffmpeg` (общий
@@ -143,22 +150,24 @@ make build-workers
 ## Запуск
 
 ```bash
-make fluent-up
-make workers-recreate
+make up
 ```
 
-`workers-recreate` поднимает (либо пересоздаёт из свежих образов) все 6
-сервисов-воркеров, включая `worker-ai` (`--no-deps` — не трогает
-php/mariadb/nginx/keydb/ws-gateway, которые на remote-хосте вообще не
-поднимаются). `fluent-up` поднимает сайдкар `fluent-bit` (сабмодуль
-`docker/fluent-log`) отдельно. `logrotate` из того же сабмодуля НЕ поднимаем:
-он ротирует файловые логи (mysql slowlog + JSON-volume), а воркеры на
-remote-хосте пишут только в stdout через `fluentd`-driver, ротировать
-нечего.
+С `.env.local` из `.env.local_worker_example` это поднимает ровно 6 воркеров +
+`fluent-bit` + `logrotate` — серверная часть отфильтрована профилями. Проверить
+состав до запуска: `docker compose config --services`. `make down` симметрично
+гасит только их.
+
+`logrotate` из сабмодуля поднимается заодно (он в том же compose-файле) и
+безвреден: ротировать ему на remote-хосте нечего — воркеры пишут только в
+stdout через `fluentd`-driver.
+
+Точечно, без полного `up`: `make workers-recreate` (пересоздать 6 воркеров из
+свежих образов, `--no-deps`) и `make fluent-up` (только сайдкар).
 
 Обновление после пересборки образов:
 ```bash
-make build-workers
+make build-workers && make build-ai-cpu
 make workers-recreate
 ```
 

@@ -59,11 +59,18 @@ detailed in skill **`worker-ai-image`** — don't restate it here, cross-refer.
 
 **Pushing to Harbor is not how a remote worker host gets new code.** The
 documented remote-host flow (`docs/workers-remote-deploy.md`) is a full `git
-clone` of this repo on the remote host, then `make build-workers`, which
-builds **all six** worker images locally from source — including
-`build-ai-cpu`, which itself depends on `build-ai-base` and rebuilds
-`worker-ai-base` from source on that same host. Nothing is pulled from
-Harbor in this flow, not even `worker-ai-base`.
+clone` of this repo on the remote host, then `make build-workers` (the five
+plain workers + metrics-exporter + ws-gateway) **plus `make build-ai-cpu`**
+for worker-ai — since 2026-07-30 `build-workers` no longer chains the AI
+build (its two-stage `ai-base → cpu/cuda` flow is invoked explicitly).
+`build-ai-cpu` rebuilds `worker-ai-base` from source on that same host, so
+nothing is pulled from Harbor in this flow, not even `worker-ai-base`.
+
+**Local image names come from `${IMAGE_NS}`** (root `.env`, default
+`xakki-convertor`), NOT from `COMPOSE_PROJECT_NAME` — so dev and the
+`xakki-convertor-test` stand share one set of images, and a remote host
+builds the same `xakki-convertor/worker-*` names regardless of its own
+project name.
 
 Remote update sequence (repo-clone path — the normal one):
 ```bash
