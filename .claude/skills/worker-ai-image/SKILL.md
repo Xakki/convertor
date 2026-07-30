@@ -3,11 +3,13 @@ name: worker-ai-image
 description: >-
   Как собирать и деплоить Docker-образ AI-воркера convertor (worker-ai, обычный сервис
   в docker-compose.yml): двухслойная схема worker-ai-base (Harbor, весь код) → рабочий
-  образ :cuda/:cpu (собирается локально из базы). Триггеры: build-ai-base/build-ai-cpu/
-  build-ai-cuda, push-ai-base, workers-recreate, запуск AI-воркера на GPU/CPU-хосте,
-  обновить образ воркера. КРИТИЧНЫЕ грабли: ModuleNotFoundError workers.common
-  (крэш-луп), ModuleNotFoundError webrtcvad, устаревший worker-ai-base в Harbor, образ
-  работает с bind-mount но падает без него. Источники: docker/workers/ai-base.Dockerfile,
+  образ worker-ai:latest-cuda/:latest-cpu (собирается локально из базы; :latest-cpu с
+  2026-07-30 также публикуется в Harbor через release-workers, :latest-cuda остаётся
+  только локальным). Триггеры: build-ai-base/build-ai-cpu/build-ai-cuda, push-ai-base,
+  release-workers, workers-recreate, запуск AI-воркера на GPU/CPU-хосте, обновить образ
+  воркера. КРИТИЧНЫЕ грабли: ModuleNotFoundError workers.common (крэш-луп),
+  ModuleNotFoundError webrtcvad, устаревший worker-ai-base в Harbor, образ работает с
+  bind-mount но падает без него. Источники: docker/workers/ai-base.Dockerfile,
   ai.cpu.Dockerfile, ai.cuda.Dockerfile, workers/Makefile, docs/worker-ai-deploy.md.
 ---
 
@@ -24,9 +26,13 @@ compose, run-команды). Здесь — суть + грабли/гейты,
 - **`worker-ai-base`** (`docker/workers/ai-base.Dockerfile`, `FROM scratch`) — публикуется в
   **Harbor** (`harbor.xakki.ru/convertor/worker-ai-base:latest`). Содержит ТОЛЬКО код
   (`workers/common/` + `workers/ai/`) + `requirements-ai-*.txt`. Лёгкий (~0.5 МБ).
-- **Рабочий образ** `xakki-convertor/worker-ai:cuda|:cpu` (`ai.cuda.Dockerfile` /
+- **Рабочий образ** `worker-ai:latest-cuda` / `worker-ai:latest-cpu` (`ai.cuda.Dockerfile` /
   `ai.cpu.Dockerfile`) — собирается **локально** на хосте, тянет код через
-  `COPY --from=aibase /app /app` + ставит OS/Python/ML-стек. В Harbor НЕ публикуется.
+  `COPY --from=aibase /app /app` + ставит OS/Python/ML-стек. **CPU-вариант с
+  `harbor-published-worker-images` публикуется в Harbor** (`release-workers` →
+  `worker-ai:<ver>-cpu` + `:latest-cpu`) — remote CPU-хосты теперь пуллят его готовым.
+  **CUDA-вариант в Harbor НЕ публикуется** (GPU-архитектура хоста-специфична) — остаётся
+  локальной сборкой на GPU-хосте по этому же флоу.
 - Код в рабочий образ приходит ТОЛЬКО из базы; из контекста сборки — ничего. Значит
   сборке нужен лишь Dockerfile (не репозиторий), запуску — только образ (без bind-mount кода).
 
@@ -71,7 +77,7 @@ make -C workers push-ai-base  # ✗ НЕПРАВИЛЬНО — Dockerfile-пут
    `-v …/convertor:/app` подсовывают код с хоста и МАСКИРУЮТ его отсутствие в образе; прод
    стартует чисто из вшитого `/app` — там и вылезает крэш. После сборки, БЕЗ mount:
    ```bash
-   docker run --rm --entrypoint python3 xakki-convertor/worker-ai:cpu \
+   docker run --rm --entrypoint python3 harbor.xakki.ru/convertor/worker-ai:latest-cpu \
      -c "import workers.ai.config, workers.ai.worker, webrtcvad, av, faster_whisper; print('OK')"
    ```
    Печатает `OK` → образ валиден. `ModuleNotFoundError` → база устарела/битая (грабли 1–2).

@@ -30,17 +30,18 @@ topology those targets sit inside).
 | Image | Source | Published to Harbor? |
 |---|---|---|
 | php (`DOCKER_IMAGE_PHP`), mariadb, nginx, keydb | external — pulled by tag from Harbor mirrors/registry (`harbor.xakki.ru/library/...`, `.../external/...`) | n/a — these are pulled, never built here |
-| `worker-libreoffice`, `worker-ffmpeg` (audio+video share one image), `worker-image`, `worker-data`, `metrics-exporter` | built locally, `docker-compose.yml` `build:` context `.` | **No** |
-| `ws-gateway` | built locally (`build-gateway`) | **Yes** — `push-gateway` → `harbor.xakki.ru/convertor/ws-gateway:latest` |
+| `worker-libreoffice`, `worker-ffmpeg` (audio+video share one image), `worker-image`, `worker-data`, `metrics-exporter`, `ws-gateway` | built locally (`build-workers`), `docker-compose.yml` `build:` context `.` | **Yes** — `release-workers` pushes each by explicit name, tag `<APP_VER>-<git-sha>` + moving `:latest` |
 | `worker-ai-base` | built locally (`build-ai-base`, `FROM scratch`, code only) | **Yes** — `push-ai-base` → `harbor.xakki.ru/convertor/worker-ai-base:latest` |
-| `worker-ai:cpu` / `worker-ai:cuda` | built locally FROM `worker-ai-base` + ML stack (`build-ai-cpu`/`build-ai-cuda`) | **No** |
+| `worker-ai:latest-cpu` | built locally FROM `worker-ai-base` + CPU ML stack (`build-ai-cpu`) | **Yes** — `release-workers` pushes it as `worker-ai:<ver>-cpu` + `:latest-cpu` |
+| `worker-ai:latest-cuda` | built locally FROM `worker-ai-base` + CUDA ML stack (`build-ai-cuda`) | **No** — GPU-only, stays on the GPU host, never pushed |
 
-So today only two images ever leave the building via Harbor push:
-**ws-gateway** and **worker-ai-base**. Everything else either comes from
-Harbor (the four externals) or never goes near it (the five plain worker
-images + the two worker-ai working variants).
+So today Harbor carries a full runnable set — the five plain workers,
+`ws-gateway`, `metrics-exporter`, `worker-ai-base`, and `worker-ai` CPU — and
+a remote host normally just **pulls**, it doesn't build. Only
+`worker-ai:cuda` never leaves its GPU host, and the four external bases
+(php/mariadb/nginx/keydb) are pulled from Harbor mirrors, never built here.
 
-`push-gateway`/`push-ai-base` normally rely on the already-cached docker
+`release-workers`/`push-ai-base` normally rely on the already-cached docker
 credential for `harbor.xakki.ru` — **`make harbor-login` is NOT a routine
 step of this flow.** Run it only when a push actually fails with an
 auth error (401/403/`unauthorized: unauthorized to access repository`/
@@ -52,45 +53,49 @@ Worker/gateway Dockerfiles' own `FROM` lines pull generic upstream bases
 Makefile normally builds that fresh locally rather than pulling it (see
 next section).
 
-The two-layer AI scheme (`worker-ai-base` → `worker-ai:cpu`/`:cuda`) is
-detailed in skill **`worker-ai-image`** — don't restate it here, cross-refer.
+The two-layer AI scheme (`worker-ai-base` → `worker-ai:latest-cpu`/
+`:latest-cuda`) is detailed in skill **`worker-ai-image`** — don't restate it
+here, cross-refer.
 
 ## Who builds what, where (the non-obvious part)
 
-**Pushing to Harbor is not how a remote worker host gets new code.** The
-documented remote-host flow (`docs/workers-remote-deploy.md`) is a full `git
-clone` of this repo on the remote host, then `make build-workers` (the five
-plain workers + metrics-exporter + ws-gateway) **plus `make build-ai-cpu`**
-for worker-ai — since 2026-07-30 `build-workers` no longer chains the AI
-build (its two-stage `ai-base → cpu/cuda` flow is invoked explicitly).
-`build-ai-cpu` rebuilds `worker-ai-base` from source on that same host, so
-nothing is pulled from Harbor in this flow, not even `worker-ai-base`.
+**A remote worker host pulls, it does not build.** The documented
+remote-host flow (`docs/workers-remote-deploy.md`) is:
+```bash
+git pull && make pull && make workers-recreate
+```
+`make pull` (with `WORKER_PULL_POLICY=always` + `IMAGE_TAG=latest` in that
+host's `.env.local`) fetches the ready-built images from Harbor — no build
+step, no BuildKit cache, minutes become seconds on a code-only release.
+Local build (`make build-workers` + `make build-ai-cpu`/`build-ai-cuda`) is
+now the **fallback** for a fresh host with no Harbor access, or for
+development — see `docs/workers-remote-deploy.md` for that path.
+
+**Releases are built and pushed ONLY on saFin** (the main server) via
+`make release-workers` — see card `harbor-published-worker-images` §5:
+`pip` resolution isn't bit-reproducible and the BuildKit cache-mount is
+host-local, so releasing from another machine re-pushes the whole ~3 GB
+dependency layer instead of a code-only diff.
 
 **Local image names come from `${IMAGE_NS}`** (root `.env`, default
-`xakki-convertor`), NOT from `COMPOSE_PROJECT_NAME` — so dev and the
-`xakki-convertor-test` stand share one set of images, and a remote host
-builds the same `xakki-convertor/worker-*` names regardless of its own
-project name.
+`harbor.xakki.ru/convertor`) — dev, the `xakki-convertor-test` stand, and
+`release-workers`' own local build all share this one namespace, which is
+also the Harbor path pushed to.
 
-Remote update sequence (repo-clone path — the normal one):
-```bash
-git pull
-make build-workers       # rebuilds all 6, incl. ai-base from source
-make workers-recreate    # --no-deps, only the 6 worker containers
-```
-`push-ai-base`/`push-gateway` are irrelevant to this host.
-
-The **only** path where `worker-ai-base:latest` actually gets pulled from
-Harbor is the no-repo path (no clone, just the Dockerfiles) — see
-`docs/worker-ai-deploy.md` "path 2b": `docker login harbor.xakki.ru` →
-`docker pull harbor.xakki.ru/convertor/worker-ai-base:latest` → build the
-working image `FROM` that pulled tag. This is the exception, not the norm.
+`release-workers` (cache-warm build + `<APP_VER>-<git-sha>` tag + moving
+`:latest` + explicit named push) supersedes the old `push-gateway` target,
+which no longer exists. `rebuild-workers` (`--no-cache --pull`) is the rare,
+explicitly-invoked full rebuild for a dependency bump or base-image CVE —
+never the release default, since `--no-cache` defeats the pip cache layer
+and turns every release into a ~3 GB push.
 
 ## Deploy order on the main server (code change touching workers/gateway)
 
 1. **Build** — `make build-workers` (all 6, incl. ai-base→ai-cpu) or a
    narrower `make build-<name>` target for a single worker; `make
-   build-gateway` for the gateway.
+   build-gateway` for the gateway. To also publish to Harbor for remote
+   hosts, use `make release-workers` instead (builds + pushes in one step;
+   requires a clean working tree, see `release-guard`).
 2. **Recreate** — `make workers-recreate` (the 6 worker containers,
    `--no-deps`) and/or `make gateway-up` / `docker compose up -d
    --force-recreate --no-deps ws-gateway` for the gateway specifically.
@@ -113,7 +118,7 @@ working image `FROM` that pulled tag. This is the exception, not the norm.
   Harbor only succeed today because of a cached docker credential for
   `harbor.xakki.ru` already present in the local `~/.docker/config.json`. On
   a clean machine or CI runner with no prior `docker login`,
-  `push-gateway`/`push-ai-base` fail — that's exactly the case where
+  `release-workers`/`push-ai-base` fail — that's exactly the case where
   `make harbor-login` is the (currently broken) recovery step. See kanban
   card `make-login-not-configured` (grooming).
 - **Never trust a push's exit code alone.** Verify the tag actually landed:

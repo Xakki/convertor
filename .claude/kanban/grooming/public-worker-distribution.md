@@ -22,7 +22,7 @@
 
 **Состав работ:**
 1. Публикация образов в Harbor:
-   - Добавить push-таргеты для `data`, `image`, `ffmpeg`, `libreoffice`, `ai:cpu` (сейчас в `workers/Makefile` пушатся только `push-gateway` → `$(HARBOR_NS)/ws-gateway:latest` и `push-ai-base` → `$(AI_BASE_IMAGE)`; build-таргеты `build-data`, `build-image`, `build-ffmpeg`, `build-libreoffice`, `build-ai-cpu` есть, push-эквивалентов у них нет — подтверждено).
+   - Добавить push-таргеты для `data`, `image`, `ffmpeg`, `libreoffice`, `ai:cpu` (сейчас в `workers/Makefile` пушатся только `release-workers` → `$(HARBOR_NS)/ws-gateway:latest` (и остальные RELEASE_IMAGES) и `push-ai-base` → `$(AI_BASE_IMAGE)`; build-таргеты `build-data`, `build-image`, `build-ffmpeg`, `build-libreoffice`, `build-ai-cpu` есть, push-эквивалентов у них нет — подтверждено).
    - `ai:cuda` — арх-специфичный, остаётся ЛОКАЛЬНОЙ сборкой из публичного `worker-ai-base` (см. `build-ai-cuda`); в `deploy/` — только инструкция/логика сборки (в т.ч. в install-скрипте), не готовый образ.
    - Единая схема тегов (`:latest` + версия/дата).
    - Проверить/включить anonymous pull у Harbor-проекта (настройка проекта = root-операция → отдать пользователю командой, не делать самим).

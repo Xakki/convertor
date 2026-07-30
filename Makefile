@@ -86,10 +86,8 @@ rebuild: ## Build all images without cache
 	$(DC) build --no-cache
 
 .PHONY: pull
-pull: ## Подтянуть внешние базовые образы (php/mariadb/nginx/keydb)
-	@# --ignore-buildable: без него compose пытается тянуть локально собираемые
-	@# worker-*/ws-gateway/metrics-exporter из Docker Hub и падает pull access denied.
-	$(DC) pull --ignore-buildable
+pull: ## Подтянуть образы: внешние (php/mariadb/nginx/keydb) + воркеры из Harbor
+	$(DC) pull
 
 .PHONY: ps
 ps: ## Show running containers

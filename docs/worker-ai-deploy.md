@@ -4,8 +4,18 @@
 
 ## Быстрый старт
 
-Предполагается, что образ `xakki-convertor/worker-ai:cuda` (или `:cpu`) уже есть на
-хосте — как его получить/собрать, если нет, см. «Сборка образа» ниже.
+**CPU-вариант публикуется в Harbor** — happy path его просто пуллит, собирать не
+нужно:
+
+```bash
+docker pull harbor.xakki.ru/convertor/worker-ai:latest-cpu
+```
+
+**CUDA-вариант в Harbor НЕ публикуется** — образ `worker-ai:latest-cuda` существует
+только как ЛОКАЛЬНАЯ сборка на GPU-хосте (см. «Сборка образа» ниже), даже несмотря
+на то, что его имя выглядит как Harbor-путь (`harbor.xakki.ru/convertor/...` — это
+просто значение `IMAGE_NS` по умолчанию, `docker pull` этого тега из реального
+registry ничего не найдёт).
 
 ```bash
 docker rm -f worker-ai 2>/dev/null || true    # если уже запущен старый
@@ -13,7 +23,7 @@ docker rm -f worker-ai 2>/dev/null || true    # если уже запущен �
 docker run -d --name worker-ai --hostname worker-ai --restart unless-stopped --gpus all \
   -e WORKER_API_TOKEN=<ТОКЕН> \
   -v ~/.cache/huggingface:/home/app/.cache/huggingface \
-  xakki-convertor/worker-ai:cuda
+  harbor.xakki.ru/convertor/worker-ai:latest-cuda
 ```
 
 `WORKER_API_TOKEN` — единственная ОБЯЗАТЕЛЬНАЯ переменная (секрет, дефолта нет и быть не
@@ -23,8 +33,8 @@ docker run -d --name worker-ai --hostname worker-ai --restart unless-stopped --g
 Кэш HuggingFace (`-v …/.cache/huggingface`) — опционален, но избавляет от повторного
 скачивания весов моделей.
 
-CPU-хост: тот же вызов с образом `:cpu` и БЕЗ `--gpus all` —
-`WHISPER_DEVICE`/`WHISPER_COMPUTE_TYPE` автоопределятся в `cpu`/`int8` сами.
+CPU-хост: тот же вызов с образом `harbor.xakki.ru/convertor/worker-ai:latest-cpu` и БЕЗ
+`--gpus all` — `WHISPER_DEVICE`/`WHISPER_COMPUTE_TYPE` автоопределятся в `cpu`/`int8` сами.
 
 **Проверка:**
 
@@ -37,7 +47,9 @@ Healthcheck внутри образа = `import faster_whisper, webrtcvad, worke
 
 ## Сборка образа
 
-> Нужна только если образа ещё нет на хосте или изменился код/зависимости.
+> Для CUDA — единственный путь получить образ (в Harbor не публикуется). Для CPU —
+> нужна только как фолбэк для разработки/фикса на этом же хосте: happy path — просто
+> `docker pull` (см. «Быстрый старт» выше).
 
 ### Двухслойная схема
 
@@ -46,9 +58,12 @@ harbor.xakki.ru/convertor/worker-ai-base:latest   ← публикуется в 
   │  FROM scratch — ТОЛЬКО код + requirements, без OS/Python (легковесный, ~0.5 МБ)
   │  содержит: workers/common/ + workers/ai/ + requirements-ai-*.txt
   ▼  COPY --from=aibase /app /app
-xakki-convertor/worker-ai:cuda  (или :cpu)         ← собирается ЛОКАЛЬНО на хосте
-     nvidia/cuda cuDNN runtime + Python + CUDA ML-стек (torch, faster-whisper, …)
-     НЕ публикуется в Harbor (большой, привязан к GPU-архитектуре)
+  ├─ worker-ai:latest-cpu   ← собирается через build-ai-cpu, И публикуется в Harbor
+  │    Python + CPU ML-стек (faster-whisper int8, llama.cpp без CUDA)   (release-workers)
+  │
+  └─ worker-ai:latest-cuda  ← собирается через build-ai-cuda, остаётся ТОЛЬКО ЛОКАЛЬНО
+       nvidia/cuda cuDNN runtime + Python + CUDA ML-стек (torch, faster-whisper, …)
+       НЕ публикуется в Harbor (большой, привязан к GPU-архитектуре)
 ```
 
 Весь прикладной код — в `worker-ai-base`; рабочий образ забирает его через
@@ -105,7 +120,7 @@ Harbor-тега не зависит.
 `docker/workers/ai.cuda.Dockerfile`), затем — с ПУСТЫМ контекстом сборки:
 
 ```bash
-docker build -t xakki-convertor/worker-ai:cuda -f ai.cuda.Dockerfile .
+docker build -t harbor.xakki.ru/convertor/worker-ai:latest-cuda -f ai.cuda.Dockerfile .
 ```
 (`.` как контекст безвреден — Dockerfile из контекста ничего не копирует. ARG'и
 `AI_BASE_IMAGE`/`CUDA_ARCH`/`TORCH_CUDA_ARCH`/`WITH_LLAMACPP` по умолчанию уже равны
@@ -118,7 +133,7 @@ docker build -t xakki-convertor/worker-ai:cuda -f ai.cuda.Dockerfile .
 Проверка БЕЗ bind-mount — зеркалит прод (ловит отсутствие кода/зависимостей в образе):
 
 ```bash
-docker run --rm --entrypoint python3 xakki-convertor/worker-ai:cuda \
+docker run --rm --entrypoint python3 harbor.xakki.ru/convertor/worker-ai:latest-cuda \
   -c "import workers.ai.config, workers.ai.worker, webrtcvad, av, faster_whisper; print('STANDALONE BOOT OK')"
 ```
 Печатает `STANDALONE BOOT OK` → образ валиден. Падает с `ModuleNotFoundError` → база
@@ -178,6 +193,15 @@ docker compose up -d --no-deps worker-ai
 `workers/ai/config.py`, дефолтов достаточно.
 
 ## Обновление при изменении кода/зависимостей
+
+**Remote CPU-хост (обычный случай, без сборки):**
+```bash
+git pull && make pull && make workers-recreate
+```
+`worker-ai:latest-cpu` тянется готовым из Harbor вместе с остальными 5 воркерами —
+шаги ниже (2a/2b) не нужны на этом хосте. Они остаются актуальны для GPU-хоста
+(`worker-ai:cuda` в Harbor не публикуется, только локальная сборка) и для машины,
+где готовится релиз (`saFin`, см. `harbor-published-worker-images` §5).
 
 На хосте с репозиторием (путь 2a, обычный случай):
 1. `make build-ai-cpu` / `make build-ai-cuda CUDA_ARCH=<cc>` — сам пересобирает свежий
