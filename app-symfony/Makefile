@@ -38,12 +38,8 @@ tg-set-commands: ## Register Telegram bot command menu (/start, /help, /convert)
 seed-examples: ## Seed curated landing examples via the REAL pipeline into examples/ S3 (needs workers+ws-gateway up)
 	$(CONSOLE) app:examples:seed
 
-.PHONY: clean-test-data-dry
-clean-test-data-dry: ## Dry-run: show what clean-test-data would wipe in main DB `convertor`, deletes nothing
-	$(CONSOLE) app:clean-test-data --dry-run
-
 .PHONY: clean-test-data
-clean-test-data: ## Wipe dev-stand test data (conversions/payments/social_identities/file_storage + non-admin users; admin+config preserved). Bare call = dry-run only; add FORCE=1 for the real wipe
+clean-test-data: ## Чистка ручного мусора в ОСНОВНОЙ БД convertor (conversions/payments/social_identities/file_storage + не-админ users; админ и конфиг остаются). Голый вызов = dry-run; FORCE=1 — реальное удаление
 ifeq ($(FORCE),1)
 	$(CONFIRM_PROD)
 	$(CONSOLE) app:clean-test-data --force
@@ -55,10 +51,6 @@ endif
 .PHONY: composer
 composer: ## Run composer command (make composer CMD="require vendor/package")
 	$(PHP_EXEC) composer $(CMD)
-
-.PHONY: build-php
-build-php: ## PHP image is pulled from harbor (DOCKER_IMAGE_PHP), not built here
-	@echo "php image is pulled from harbor: $(DOCKER_IMAGE_PHP) — run 'make pull'. No local docker/php/Dockerfile."
 
 ##@ PHP / Quality
 

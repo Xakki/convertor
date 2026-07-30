@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(git add *)",
+      "Bash(echo \"rc=$?\")",
+      "Bash(python3 -)",
+      "Bash(git commit *)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "graylog",
+    "minio",
+    "prometheus",
+    "grafana",
+    "librecrawl"
+  ],
+  "disabledMcpjsonServers": [
+    "supabase",
+    "portainer"
+  ]
+}

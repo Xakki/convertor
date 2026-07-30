@@ -8,7 +8,7 @@ IMG = $(IMAGE_NS)
 # gitignored `.i` в корне репо → напр. "0.1.6". Запекается в образ (ARG→ENV APP_VER +
 # /app/.i); воркер РЕПОРТИТ её в `ready` (транспорт-only, gateway не потребляет).
 .PHONY: bump-i
-bump-i: ## Инкремент build-счётчика .i (создаёт при отсутствии)
+bump-i:  # служебный prereq build-таргетов, не пользовательская команда
 	@n=$$(cat $(CURDIR)/.i 2>/dev/null || echo 0); n=$$((n+1)); printf '%s' "$$n" > $(CURDIR)/.i; echo "build counter .i → $$n"
 
 # Build one on-server worker image. $(1)=image stem (тег /<stem>:latest),
@@ -183,10 +183,13 @@ fluent-restart: ## Restart fluent-bit-сайдкара (подхватить и�
 fluent-logs: ## Tail логи fluent-bit-сайдкара
 	$(DC_FLUENT) logs -f fluent-bit
 
+# Очереди — это Streams `conv.*` (XLEN), а не списки: старый вариант искал `queue:*`
+# с LLEN и всегда возвращал пусто. `-a` подставляем только при непустом пароле —
+# keydb.conf идёт без requirepass, и `-a ""` роняет команду с AUTH failed.
 .PHONY: queue-status
-queue-status: ## Показать длины очередей в KeyDB (индекс БД = REDIS_QUEUE_DB)
-	@docker exec $(KEYDB_CONT) keydb-cli -a "$(REDIS_PASSWORD)" -n $(REDIS_QUEUE_DB) \
-	    eval "local ks=redis.call('keys','queue:*') local out={} for _,k in ipairs(ks) do out[#out+1]=k..': '..redis.call('llen',k) end return out" 0
+queue-status: ## Показать длины стримов conv.* в KeyDB (индекс БД = REDIS_QUEUE_DB)
+	@docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) \
+	    eval "local ks=redis.call('keys','conv.*') local out={} for _,k in ipairs(ks) do out[#out+1]=k..': '..redis.call('xlen',k) end return out" 0
 
 ##@ Worker tests
 
