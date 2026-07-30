@@ -220,7 +220,7 @@ services:
             context: .
             dockerfile: docker/workers/libreoffice.Dockerfile
         image: ${IMAGE_NS}/worker-libreoffice:${IMAGE_TAG:-latest}
-        pull_policy: ${WORKER_PULL_POLICY:-build}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-libreoffice"
         restart: unless-stopped
         init: true
@@ -256,7 +256,7 @@ services:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
         image: ${IMAGE_NS}/worker-ffmpeg:${IMAGE_TAG:-latest}
-        pull_policy: ${WORKER_PULL_POLICY:-build}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg-audio"
         restart: unless-stopped
         init: true
@@ -289,7 +289,7 @@ services:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
         image: ${IMAGE_NS}/worker-ffmpeg:${IMAGE_TAG:-latest}
-        pull_policy: ${WORKER_PULL_POLICY:-build}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg-video"
         restart: unless-stopped
         init: true
@@ -322,7 +322,7 @@ services:
             context: .
             dockerfile: docker/workers/image.Dockerfile
         image: ${IMAGE_NS}/worker-image:${IMAGE_TAG:-latest}
-        pull_policy: ${WORKER_PULL_POLICY:-build}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-image"
         restart: unless-stopped
         init: true
@@ -373,7 +373,7 @@ services:
         # (§1), поэтому если бы GPU-хост наследовал общий WORKER_PULL_POLICY=always,
         # compose пытался бы пуллить несуществующий worker-ai:latest-cuda → та же
         # ошибка "pull access denied", которую чинит эта задача, просто в другом месте.
-        pull_policy: ${AI_PULL_POLICY:-build}
+        pull_policy: ${AI_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
         # Профиль `ai` (COMPOSE_PROFILES в .env) — тяжёлый образ, тест-стенд его не поднимает.
         profiles: ["ai"]
@@ -499,7 +499,7 @@ services:
             context: .
             dockerfile: docker/workers/data.Dockerfile
         image: ${IMAGE_NS}/worker-data:${IMAGE_TAG:-latest}
-        pull_policy: ${WORKER_PULL_POLICY:-build}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-data"
         restart: unless-stopped
         init: true
@@ -532,7 +532,7 @@ services:
             context: .
             dockerfile: docker/workers/gateway.Dockerfile
         image: ${IMAGE_NS}/ws-gateway:${IMAGE_TAG:-latest}
-        pull_policy: ${WORKER_PULL_POLICY:-build}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         profiles: ["server"]
         container_name: "${COMPOSE_PROJECT_NAME}-ws-gateway"
         restart: unless-stopped
@@ -588,7 +588,7 @@ services:
             context: .
             dockerfile: docker/workers/metrics_exporter.Dockerfile
         image: ${IMAGE_NS}/metrics-exporter:${IMAGE_TAG:-latest}
-        pull_policy: ${WORKER_PULL_POLICY:-build}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         # Имя ЖЁСТКОЕ: Prometheus скрейпит статический таргет convertor-metrics-exporter:9472
         # (dockprom/prometheus.yml) — не переименовывать и не префиксовать проектом.
         container_name: "convertor-metrics-exporter"

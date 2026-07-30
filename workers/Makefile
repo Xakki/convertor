@@ -64,11 +64,11 @@ build-data: bump-i ## Build worker-data image
 	$(call build_img,worker-data,data)
 
 .PHONY: build-metrics-exporter
-build-metrics-exporter: ## Build metrics-exporter image
+build-metrics-exporter: bump-i ## Build metrics-exporter image
 	$(call build_img,metrics-exporter,metrics_exporter)
 
 .PHONY: build-gateway
-build-gateway: ## Build ws-gateway image (Harbor-suitable)
+build-gateway: bump-i ## Build ws-gateway image (Harbor-suitable)
 	$(call build_img,ws-gateway,gateway)
 
 .PHONY: gateway-up
@@ -129,10 +129,15 @@ build-workers-test: build-data-test build-ffmpeg-test build-image-test build-lib
 #   ai.cuda  (FROM ai-base + CUDA ML stack)   → LOCAL build на GPU-хосте, не публикуется.
 #   ai.cpu   (FROM ai-base + CPU ML stack)    → LOCAL build для CI / CPU-only.
 HARBOR_NS       ?= harbor.xakki.ru/convertor
+# AI_BASE_IMAGE/AI_BASE_LOCAL — промежуточные локальные теги сборки, версию не пиннят
+# намеренно (см. комментарии у build-ai-base). AI_CUDA_IMAGE/AI_CPU_IMAGE — то, что
+# реально запускает docker-compose (image: worker-ai:${IMAGE_TAG:-latest}-${AI_VARIANT}),
+# поэтому обязаны следовать IMAGE_TAG — иначе GPU-хост с запиненной версией получит
+# тег-mismatch (build-ai-cuda соберёт :latest-cuda, а compose ищет :<IMAGE_TAG>-cuda).
 AI_BASE_IMAGE   ?= $(HARBOR_NS)/worker-ai-base:latest
 AI_BASE_LOCAL   ?= worker-ai-base:local
-AI_CUDA_IMAGE   ?= $(IMG)/worker-ai:latest-cuda
-AI_CPU_IMAGE    ?= $(IMG)/worker-ai:latest-cpu
+AI_CUDA_IMAGE   ?= $(IMG)/worker-ai:$(IMAGE_TAG)-cuda
+AI_CPU_IMAGE    ?= $(IMG)/worker-ai:$(IMAGE_TAG)-cpu
 
 # Compute capability целым числом (86 для RTX 3080/3090):
 #   nvidia-smi --query-gpu=compute_cap --format=csv,noheader → "8.6" → 86.
@@ -147,6 +152,13 @@ WITH_LLAMACPP   ?= 0
 APP_UID         ?= 1000
 APP_GID         ?= 1000
 
+# ai.cpu/ai.cuda стадии FROM'ятся от AI_BASE_LOCAL (только локальный тег) — build-ai-base
+# уже прогнал его с $(DOCKER_BUILD_FLAGS) (в т.ч. --pull у rebuild-workers, освежив реальный
+# registry-базовый слой Dockerfile'а ai-base). Передавать --pull ВТОРОЙ раз сюда нельзя:
+# docker трактует worker-ai-base:local как docker.io/library/worker-ai-base:local и падает
+# "pull access denied" — тег локальный и минуту назад собран этим же прогоном.
+AI_STAGE_BUILD_FLAGS := $(filter-out --pull,$(DOCKER_BUILD_FLAGS))
+
 .PHONY: build-ai-base
 build-ai-base: ## Build LIGHT ai-base (код + pure-python deps, без ML); тегирует Harbor-тег + локальный
 	docker build $(DOCKER_BUILD_FLAGS) -t $(AI_BASE_IMAGE) -t $(AI_BASE_LOCAL) \
@@ -158,7 +170,7 @@ push-ai-base: build-ai-base ## Раздать ai-base на другие хост
 
 .PHONY: build-ai-cuda
 build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
-	docker build $(DOCKER_BUILD_FLAGS) -t $(AI_CUDA_IMAGE) \
+	docker build $(AI_STAGE_BUILD_FLAGS) -t $(AI_CUDA_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
 	    --build-arg TORCH_CUDA_ARCH=$(TORCH_CUDA_ARCH) \
@@ -169,7 +181,7 @@ build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUD
 
 .PHONY: build-ai-cpu
 build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (CPU ML stack, GPU не нужен)
-	docker build $(DOCKER_BUILD_FLAGS) -t $(AI_CPU_IMAGE) \
+	docker build $(AI_STAGE_BUILD_FLAGS) -t $(AI_CPU_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg APP_UID=$(APP_UID) \
 	    --build-arg APP_GID=$(APP_GID) \
