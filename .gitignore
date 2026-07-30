@@ -21,3 +21,7 @@ __pycache__/
 *.pyc
 .i
 /.claude/kanban/grooming/TODO.md
+
+# временные файлы Claude Code
+.claude/settings.local.json
+.claude/settings.local.json.tmp.*
