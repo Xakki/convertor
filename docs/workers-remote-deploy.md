@@ -96,12 +96,20 @@ metrics-exporter — под `monitoring` (он к тому же требует �
 | `COMPOSE_PROJECT_NAME` | своё уникальное, НЕ `xakki-convertor` | **Критично.** `WORKER_ID` каждого воркера = hostname контейнера = `${COMPOSE_PROJECT_NAME}-worker-*` (`docker-compose.yml`), и ЭТО ЖЕ имя используется дословно как имя KeyDB-consumer'а в `XREADGROUP` (`workers/gateway/ws_server.py`). Одинаковый `COMPOSE_PROJECT_NAME` на двух хостах → два физически разных контейнера претендуют на одно имя consumer'а — gateway не различит их, reclaim/ack начнут путаться. |
 | `WORKER_API_TOKEN` | реальный токен | Единственная обязательная переменная без дефолта — пустая строка блокирует старт воркера (`WsClientConfig.validate()`), это НАМЕРЕННО (без него был бы reconnect-storm против недоступного/неавторизованного gateway). |
 | `COMPOSE_PROFILES` | `ai` (или пусто на CPU-хосте без worker-ai) | НЕ добавлять `server`/`monitoring` — иначе `make up` потянет серверную часть, которой здесь нет. |
-| `WORKER_PULL_POLICY` | `always` | Happy path: `make pull`/`make up` тянет готовые образы из Harbor вместо сборки. Дефолт (не задан) — `build`, как на dev-хосте. |
+| `WORKER_PULL_POLICY` | `missing` | Happy path: `make pull`/`make up` тянет готовые образы из Harbor вместо сборки; если тега ещё нет (свежий хост до первого релиза) — падает обратно на `build:`-секцию. Это и дефолт `docker-compose.yml`, `.env.local_worker_example` просто фиксирует его явно. |
+| `AI_PULL_POLICY` | `always` на CPU-хосте / `missing` на GPU-хосте | Отдельная политика для `worker-ai`: `worker-ai:latest-cpu` публикуется в Harbor (`always` безопасен), `worker-ai:latest-cuda` — НЕТ (GPU-хост обязан ставить `missing`, иначе `always` хардфейлит «pull access denied»). |
 | `IMAGE_TAG` | `latest` (или запиненная версия релиза, напр. `0.1-a1b2c3d`) | Какой тег пуллить/использовать в compose; пиновка версии — только на remote, главный сервер всегда на `latest`. |
 | `COMPOSE_FILE` | из шаблона (+ `docker/fluent-log/docker-fluent.yml`) | Свой fluent-bit-сайдкар поднимается вместе со стеком: общего host-wide сборщика на remote-хосте нет. |
 | `EXT_FLUENT_PORT` | напр. `0.0.0.0:24224` | Порт своего сайдкара — он его и слушает, и в него же шлют логи контейнеры. |
 | `GATEWAY_WS_URL` / `API_BASE_URL` | дефолты из трекаемого `.env` подходят (`wss://convertor.xakki.pro/ws/worker/`, `https://convertor.xakki.pro`) | Переопределять только для нестандартного стенда; `API_BASE_URL` — корень API, БЕЗ `/api`-суффикса. |
 | `AI_VARIANT`/`AI_RUNTIME` | опционально: `cuda`/`nvidia` на GPU-хосте | По умолчанию `cpu`/`runc` (см. `docker-compose.yml` сервис `worker-ai`) — задавать нужно только на GPU-хосте. |
+
+Почему `missing`, а не `always`: под `pull_policy: always` Compose хардфейлит
+`make up`, если пулл не удался, вместо фолбэка на `build:`-секцию — это ломает
+и свежий хост (образ ещё не долетел до Harbor), и любой хост до первого
+релиза. Обновления и так приходят через явный `make pull` (уже в happy path:
+`git pull && make pull && make workers-recreate`) — `always` тут ничего не
+даёт, а фолбэк ломает. Проверено эмпирически.
 
 `GRAYLOG_HOST`/`GRAYLOG_PORT`/`GRAYLOG_URI`/`HOST_NAME`/`HOST_IP`/`EXT_FLUENT_PORT`
 **настраивать не нужно вообще** — с 2026-07 `worker-ai` живёт прямо в
@@ -145,14 +153,14 @@ generic-имя VM) — тогда просто задайте нужную пе�
 git pull && make pull && make workers-recreate
 ```
 
-`make pull` (с `WORKER_PULL_POLICY=always` в `.env.local`, см. таблицу выше)
-тянет готовые `worker-libreoffice`, `worker-ffmpeg`, `worker-image`,
-`worker-data`, `worker-ai:latest-cpu` из `harbor.xakki.ru/convertor` —
-килобайты кода на обычный релиз, не пересборка. GPU на remote-хосте не
-предполагается: `worker-ai:cuda` в Harbor не публикуется (см.
-`docs/worker-ai-deploy.md`), если он есть — воркер остаётся на локальной
-сборке (`build-ai-cuda`) с `AI_VARIANT=cuda` + `AI_RUNTIME=nvidia` в
-`.env.local`.
+`make pull` (с `WORKER_PULL_POLICY=missing` + `AI_PULL_POLICY=always` в
+`.env.local`, см. таблицу выше) тянет готовые `worker-libreoffice`,
+`worker-ffmpeg`, `worker-image`, `worker-data`, `worker-ai:latest-cpu` из
+`harbor.xakki.ru/convertor` — килобайты кода на обычный релиз, не пересборка.
+GPU на remote-хосте не предполагается: `worker-ai:cuda` в Harbor не
+публикуется (см. `docs/worker-ai-deploy.md`), если он есть — воркер остаётся
+на локальной сборке (`build-ai-cuda`) с `AI_VARIANT=cuda` + `AI_RUNTIME=nvidia`
++ `AI_PULL_POLICY=missing` в `.env.local`.
 
 ### Фолбэк: локальная сборка (свежий хост без доступа к Harbor / разработка)
 

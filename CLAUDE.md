@@ -53,7 +53,7 @@ MVP = оплата **только через Telegram** (Bot API: invoice → `s
 - docker-compose.yml — основной, docker/limits.yml — лимиты для прода
 - **Образы публикуем в наш Harbor-registry** (авторизация в консоли уже настроена). Сборка/пуш —
   через `make release-workers`. Remote-хосты пуллят готовые runnable-образы (5 воркеров +
-  `ws-gateway` + `metrics-exporter` + `worker-ai:cpu`) — сборка на них не нужна;
+  `ws-gateway` + `metrics-exporter` + `worker-ai:latest-cpu`) — сборка на них не нужна;
   `worker-ai:cuda` (GPU) в Harbor не публикуется, GPU-хост по-прежнему собирает его локально.
 - **KeyDB наружу НЕ публикуется** — доступ к очередям off-server только через HTTP pull-API (см. Queue Architecture).
 - Каждый воркер — отдельный контейнер

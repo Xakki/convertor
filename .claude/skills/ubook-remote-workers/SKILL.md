@@ -117,10 +117,13 @@ ssh uBook 'cd /home/xakki/www/xakki/convertor && make workers-recreate'   # 4. -
   `make build-workers build-ai-cpu`. First build after a Dockerfile change ran
   ~7-8 min (torch/ML stack downloads fresh; the BuildKit pip cache mount is
   empty on first run, warm thereafter). apt/base layers hit `CACHED`.
-- **`WORKER_PULL_POLICY=always` + `IMAGE_TAG=latest`** must be set in uBook's
-  `.env.local` (see `.env.local_worker_example`) for `make pull`/`make up` to
-  actually fetch from Harbor instead of trying to build — without it compose
-  falls back to the dev default (`build`).
+- **`WORKER_PULL_POLICY=missing` + `AI_PULL_POLICY=always` + `IMAGE_TAG=latest`**
+  must be set in uBook's `.env.local` (see `.env.local_worker_example` — uBook
+  is a CPU host, so `always` is safe for `worker-ai` too: `worker-ai:latest-cpu`
+  IS published to Harbor). `missing` is the compose default for both if unset,
+  but `AI_PULL_POLICY=always` is what makes `make pull` actually refresh
+  `worker-ai` on every release instead of keeping whatever image is already
+  cached locally.
 
 ## Verify from the MAIN SERVER, not from uBook
 

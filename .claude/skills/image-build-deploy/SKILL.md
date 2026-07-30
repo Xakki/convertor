@@ -64,9 +64,14 @@ remote-host flow (`docs/workers-remote-deploy.md`) is:
 ```bash
 git pull && make pull && make workers-recreate
 ```
-`make pull` (with `WORKER_PULL_POLICY=always` + `IMAGE_TAG=latest` in that
-host's `.env.local`) fetches the ready-built images from Harbor — no build
-step, no BuildKit cache, minutes become seconds on a code-only release.
+`make pull` (with `WORKER_PULL_POLICY=missing` + `IMAGE_TAG=latest` in that
+host's `.env.local` — `missing` pulls the tag if present, falling back to the
+`build:` section rather than hard-erroring if it's not, see
+`docs/workers-remote-deploy.md` for why) fetches the ready-built images from
+Harbor — no build step, no BuildKit cache, minutes become seconds on a
+code-only release. `worker-ai` follows its own `AI_PULL_POLICY` instead:
+`always` on a CPU host (`worker-ai:latest-cpu` is published) vs `missing` on a
+GPU host (`:latest-cuda` never is — see `worker-ai-image`).
 Local build (`make build-workers` + `make build-ai-cpu`/`build-ai-cuda`) is
 now the **fallback** for a fresh host with no Harbor access, or for
 development — see `docs/workers-remote-deploy.md` for that path.

@@ -152,6 +152,15 @@ docker compose up -d --no-deps worker-ai
 `deploy.resources.devices` у сервиса `worker-ai` в `docker-compose.yml`, затем
 выставить `WHISPER_DEVICE=cuda`.
 
+`pull_policy` сервиса `worker-ai` управляется отдельной переменной
+`AI_PULL_POLICY` (`docker-compose.yml`: `${AI_PULL_POLICY:-missing}`), не
+общей `WORKER_PULL_POLICY` остальных пяти воркеров: CPU-хост ставит
+`AI_PULL_POLICY=always` (`worker-ai:latest-cpu` публикуется в Harbor, см.
+«Быстрый старт»), GPU-хост — ОБЯЗАТЕЛЬНО `AI_PULL_POLICY=missing`
+(`worker-ai:latest-cuda` в Harbor не публикуется, `always` тут хардфейлит
+«pull access denied»). Шаблон `.env.local_worker_example` уже задаёт это
+верно для обоих случаев.
+
 ## Переменные окружения
 
 Читаются в `workers/ai/config.py` (весь `os.getenv` — там) и
