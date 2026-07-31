@@ -219,7 +219,8 @@ services:
         build:
             context: .
             dockerfile: docker/workers/libreoffice.Dockerfile
-        image: ${IMAGE_NS}/worker-libreoffice:latest
+        image: ${IMAGE_NS}/worker-libreoffice:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-libreoffice"
         restart: unless-stopped
         init: true
@@ -254,7 +255,8 @@ services:
         build:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
-        image: ${IMAGE_NS}/worker-ffmpeg:latest
+        image: ${IMAGE_NS}/worker-ffmpeg:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg-audio"
         restart: unless-stopped
         init: true
@@ -286,7 +288,8 @@ services:
         build:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
-        image: ${IMAGE_NS}/worker-ffmpeg:latest
+        image: ${IMAGE_NS}/worker-ffmpeg:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ffmpeg-video"
         restart: unless-stopped
         init: true
@@ -318,7 +321,8 @@ services:
         build:
             context: .
             dockerfile: docker/workers/image.Dockerfile
-        image: ${IMAGE_NS}/worker-image:latest
+        image: ${IMAGE_NS}/worker-image:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-image"
         restart: unless-stopped
         init: true
@@ -364,7 +368,20 @@ services:
                 AI_BASE_IMAGE: ${AI_BASE_IMAGE:-harbor.xakki.ru/convertor/worker-ai-base:latest}
                 APP_UID: ${APP_UID:-1000}
                 APP_GID: ${APP_GID:-1000}
-        image: ${IMAGE_NS}/worker-ai:${AI_VARIANT:-cpu}
+        image: ${IMAGE_NS}/worker-ai:${IMAGE_TAG:-latest}-${AI_VARIANT:-cpu}
+        # Отдельный knob от WORKER_PULL_POLICY: worker-ai:cuda в Harbor НЕ публикуется
+        # (§1), поэтому если бы GPU-хост наследовал общий WORKER_PULL_POLICY=always,
+        # compose пытался бы пуллить несуществующий worker-ai:latest-cuda → та же
+        # ошибка "pull access denied", которую чинит эта задача, просто в другом месте.
+        # ВАЖНО: значение по умолчанию `missing` тут — фолбэк ТОЛЬКО для `up` (при
+        # отсутствии локального образа missing запускает build:-секцию). Explicit
+        # `docker compose pull`/`make pull` build-фолбэка не знает: с `missing` он
+        # всё равно пытается запросить worker-ai:latest-cuda и падает (exit 2,
+        # "not found"). GPU-хост обязан явно ставить `AI_PULL_POLICY=build` в
+        # .env.local (.env.local_worker_example) — тогда `docker compose pull`
+        # помечает сервис Skipped, а `up`/`workers-recreate` по-прежнему собирают
+        # локально. Проверено эмпирически на обоих значениях.
+        pull_policy: ${AI_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
         # Профиль `ai` (COMPOSE_PROFILES в .env) — тяжёлый образ, тест-стенд его не поднимает.
         profiles: ["ai"]
@@ -489,7 +506,8 @@ services:
         build:
             context: .
             dockerfile: docker/workers/data.Dockerfile
-        image: ${IMAGE_NS}/worker-data:latest
+        image: ${IMAGE_NS}/worker-data:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-data"
         restart: unless-stopped
         init: true
@@ -521,7 +539,8 @@ services:
         build:
             context: .
             dockerfile: docker/workers/gateway.Dockerfile
-        image: ${IMAGE_NS}/ws-gateway:latest
+        image: ${IMAGE_NS}/ws-gateway:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         profiles: ["server"]
         container_name: "${COMPOSE_PROJECT_NAME}-ws-gateway"
         restart: unless-stopped
@@ -576,7 +595,8 @@ services:
         build:
             context: .
             dockerfile: docker/workers/metrics_exporter.Dockerfile
-        image: ${IMAGE_NS}/metrics-exporter:latest
+        image: ${IMAGE_NS}/metrics-exporter:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
         # Имя ЖЁСТКОЕ: Prometheus скрейпит статический таргет convertor-metrics-exporter:9472
         # (dockprom/prometheus.yml) — не переименовывать и не префиксовать проектом.
         container_name: "convertor-metrics-exporter"

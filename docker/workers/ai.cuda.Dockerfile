@@ -135,6 +135,14 @@ ENV WORKER_TYPE=ai
 # workers/ai/config.py (_autodetect_device): cuda+float16, если torch видит GPU, иначе
 # cpu+int8. Запечённый ENV замаскировал бы автодетект; переопределяются через -e/compose.
 
+# Запекаем version в образ (§4/§8): ARG объявлены В финальной stage, ПОСЛЕ всех COPY
+# (иначе бьётся кэш ~3GB ML-слоёв выше). APP_VER → ENV (ws_client читает os.getenv);
+# WORKER_BUILD → /app/.i (ws_client читает файл).
+ARG APP_VER=0
+ARG WORKER_BUILD=0
+ENV APP_VER=${APP_VER}
+RUN printf '%s' "${WORKER_BUILD}" > /app/.i
+
 # Import-based healthcheck — образ самодостаточен вне compose (параметры согласованы
 # с worker-ai в docker-compose.yml). Обязательно python3 (не python).
 HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \

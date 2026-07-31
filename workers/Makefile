@@ -4,6 +4,19 @@
 # используют одни и те же образы).
 IMG = $(IMAGE_NS)
 
+# Релизный тег = APP_VER + git short SHA (иммутабельный) — см. решение §2 в карте
+# harbor-published-worker-images. Грязное рабочее дерево → release-guard стопит релиз
+# (SHA не отражал бы фактическое содержимое образа).
+RELEASE_SHA := $(shell git rev-parse --short HEAD)
+RELEASE_TAG := $(APP_VER)-$(RELEASE_SHA)
+
+.PHONY: release-guard
+release-guard:  # служебный prereq release-workers, не пользовательская команда
+	@if [ -n "$$(git status --porcelain)" ]; then \
+	    echo "release-guard: dirty working tree — commit or stash before releasing"; \
+	    exit 1; \
+	fi
+
 # Worker build-версия: полная version = APP_VER (.env) + монотонный build-счётчик из
 # gitignored `.i` в корне репо → напр. "0.1.6". Запекается в образ (ARG→ENV APP_VER +
 # /app/.i); воркер РЕПОРТИТ её в `ready` (транспорт-only, gateway не потребляет).
@@ -11,11 +24,15 @@ IMG = $(IMAGE_NS)
 bump-i:  # служебный prereq build-таргетов, не пользовательская команда
 	@n=$$(cat $(CURDIR)/.i 2>/dev/null || echo 0); n=$$((n+1)); printf '%s' "$$n" > $(CURDIR)/.i; echo "build counter .i → $$n"
 
+# Флаги форсированной пересборки — пусто в обычной сборке, "--no-cache --pull" у
+# rebuild-workers (задаётся target-specific переменной, наследуется пререквизитами).
+DOCKER_BUILD_FLAGS ?=
+
 # Build one on-server worker image. $(1)=image stem (тег /<stem>:latest),
 # $(2)=dockerfile stem (docker/workers/<stem>.Dockerfile). У большинства воркеров
 # stem общий; у metrics-exporter — нет, отсюда два параметра.
 define build_img
-docker build -t $(IMG)/$(1):latest \
+docker build $(DOCKER_BUILD_FLAGS) -t $(IMG)/$(1):latest \
     --build-arg APP_VER=$(APP_VER) \
     --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
     -f docker/workers/$(2).Dockerfile .
@@ -47,17 +64,12 @@ build-data: bump-i ## Build worker-data image
 	$(call build_img,worker-data,data)
 
 .PHONY: build-metrics-exporter
-build-metrics-exporter: ## Build metrics-exporter image
+build-metrics-exporter: bump-i ## Build metrics-exporter image
 	$(call build_img,metrics-exporter,metrics_exporter)
 
 .PHONY: build-gateway
-build-gateway: ## Build ws-gateway image (Harbor-suitable)
+build-gateway: bump-i ## Build ws-gateway image (Harbor-suitable)
 	$(call build_img,ws-gateway,gateway)
-
-.PHONY: push-gateway
-push-gateway: build-gateway ## Build + push ws-gateway в Harbor (нужен `make harbor-login`)
-	docker tag $(IMG)/ws-gateway:latest $(HARBOR_NS)/ws-gateway:latest
-	docker push $(HARBOR_NS)/ws-gateway:latest
 
 .PHONY: gateway-up
 gateway-up: ## Start только ws-gateway (глобальный `make up` тоже его поднимает)
@@ -117,10 +129,15 @@ build-workers-test: build-data-test build-ffmpeg-test build-image-test build-lib
 #   ai.cuda  (FROM ai-base + CUDA ML stack)   → LOCAL build на GPU-хосте, не публикуется.
 #   ai.cpu   (FROM ai-base + CPU ML stack)    → LOCAL build для CI / CPU-only.
 HARBOR_NS       ?= harbor.xakki.ru/convertor
+# AI_BASE_IMAGE/AI_BASE_LOCAL — промежуточные локальные теги сборки, версию не пиннят
+# намеренно (см. комментарии у build-ai-base). AI_CUDA_IMAGE/AI_CPU_IMAGE — то, что
+# реально запускает docker-compose (image: worker-ai:${IMAGE_TAG:-latest}-${AI_VARIANT}),
+# поэтому обязаны следовать IMAGE_TAG — иначе GPU-хост с запиненной версией получит
+# тег-mismatch (build-ai-cuda соберёт :latest-cuda, а compose ищет :<IMAGE_TAG>-cuda).
 AI_BASE_IMAGE   ?= $(HARBOR_NS)/worker-ai-base:latest
 AI_BASE_LOCAL   ?= worker-ai-base:local
-AI_CUDA_IMAGE   ?= $(IMG)/worker-ai:cuda
-AI_CPU_IMAGE    ?= $(IMG)/worker-ai:cpu
+AI_CUDA_IMAGE   ?= $(IMG)/worker-ai:$(IMAGE_TAG)-cuda
+AI_CPU_IMAGE    ?= $(IMG)/worker-ai:$(IMAGE_TAG)-cpu
 
 # Compute capability целым числом (86 для RTX 3080/3090):
 #   nvidia-smi --query-gpu=compute_cap --format=csv,noheader → "8.6" → 86.
@@ -135,9 +152,16 @@ WITH_LLAMACPP   ?= 0
 APP_UID         ?= 1000
 APP_GID         ?= 1000
 
+# ai.cpu/ai.cuda стадии FROM'ятся от AI_BASE_LOCAL (только локальный тег) — build-ai-base
+# уже прогнал его с $(DOCKER_BUILD_FLAGS) (в т.ч. --pull у rebuild-workers, освежив реальный
+# registry-базовый слой Dockerfile'а ai-base). Передавать --pull ВТОРОЙ раз сюда нельзя:
+# docker трактует worker-ai-base:local как docker.io/library/worker-ai-base:local и падает
+# "pull access denied" — тег локальный и минуту назад собран этим же прогоном.
+AI_STAGE_BUILD_FLAGS := $(filter-out --pull,$(DOCKER_BUILD_FLAGS))
+
 .PHONY: build-ai-base
 build-ai-base: ## Build LIGHT ai-base (код + pure-python deps, без ML); тегирует Harbor-тег + локальный
-	docker build -t $(AI_BASE_IMAGE) -t $(AI_BASE_LOCAL) \
+	docker build $(DOCKER_BUILD_FLAGS) -t $(AI_BASE_IMAGE) -t $(AI_BASE_LOCAL) \
 	    -f docker/workers/ai-base.Dockerfile .
 
 .PHONY: push-ai-base
@@ -145,23 +169,57 @@ push-ai-base: build-ai-base ## Раздать ai-base на другие хост
 	docker push $(AI_BASE_IMAGE)
 
 .PHONY: build-ai-cuda
-build-ai-cuda: build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
-	docker build -t $(AI_CUDA_IMAGE) \
+build-ai-cuda: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
+	docker build $(AI_STAGE_BUILD_FLAGS) -t $(AI_CUDA_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
 	    --build-arg TORCH_CUDA_ARCH=$(TORCH_CUDA_ARCH) \
 	    --build-arg WITH_LLAMACPP=$(WITH_LLAMACPP) \
 	    --build-arg APP_UID=$(APP_UID) \
 	    --build-arg APP_GID=$(APP_GID) \
+	    --build-arg APP_VER=$(APP_VER) \
+	    --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
 	    -f docker/workers/ai.cuda.Dockerfile .
 
 .PHONY: build-ai-cpu
-build-ai-cpu: build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (CPU ML stack, GPU не нужен)
-	docker build -t $(AI_CPU_IMAGE) \
+build-ai-cpu: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cpu (CPU ML stack, GPU не нужен)
+	docker build $(AI_STAGE_BUILD_FLAGS) -t $(AI_CPU_IMAGE) \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg APP_UID=$(APP_UID) \
 	    --build-arg APP_GID=$(APP_GID) \
+	    --build-arg APP_VER=$(APP_VER) \
+	    --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
 	    -f docker/workers/ai.cpu.Dockerfile .
+
+##@ Release (Harbor)
+
+# Явный поимённый список runnable-образов на push — НИКАКИХ tag-glob'ов (решение §7:
+# после смены IMAGE_NS на Harbor-namespace build_test_img тегает :test прямо в Harbor,
+# такой образ никогда не должен уехать push'ем). worker-ai:cuda НЕ публикуется —
+# остаётся локальной сборкой GPU-хоста (§1, карта cuda-worker-ai-rebuild-gpu-host).
+RELEASE_IMAGES := worker-libreoffice worker-ffmpeg worker-image worker-data metrics-exporter ws-gateway
+
+.PHONY: release-tag
+release-tag:  # служебный prereq release-workers — печатает RELEASE_TAG до старта сборки
+	@echo "release-workers: RELEASE_TAG=$(RELEASE_TAG) → $(HARBOR_NS)"
+
+.PHONY: release-workers
+release-workers: release-tag release-guard build-workers build-ai-cpu ## Cache-warm build + push в Harbor: релизный тег APP_VER-sha + latest (явный список, БЕЗ :test, БЕЗ worker-ai:cuda)
+	@set -e; for name in $(RELEASE_IMAGES); do \
+	    echo "push $(HARBOR_NS)/$$name:$(RELEASE_TAG)"; \
+	    docker tag $(IMG)/$$name:latest $(HARBOR_NS)/$$name:$(RELEASE_TAG); \
+	    docker tag $(IMG)/$$name:latest $(HARBOR_NS)/$$name:latest; \
+	    docker push $(HARBOR_NS)/$$name:$(RELEASE_TAG); \
+	    docker push $(HARBOR_NS)/$$name:latest; \
+	done
+	docker tag $(AI_CPU_IMAGE) $(HARBOR_NS)/worker-ai:$(RELEASE_TAG)-cpu
+	docker tag $(AI_CPU_IMAGE) $(HARBOR_NS)/worker-ai:latest-cpu
+	docker push $(HARBOR_NS)/worker-ai:$(RELEASE_TAG)-cpu
+	docker push $(HARBOR_NS)/worker-ai:latest-cpu
+
+.PHONY: rebuild-workers
+rebuild-workers: DOCKER_BUILD_FLAGS := --no-cache --pull
+rebuild-workers: build-workers build-ai-cpu ## Full --no-cache --pull пересборка (бамп deps / CVE-рефреш базового образа); НЕ пушит — следующий release-workers перезальёт ~3 ГБ
 
 ##@ Queue / Workers
 

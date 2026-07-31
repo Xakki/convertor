@@ -33,13 +33,13 @@ Symfony API only. Generic remote-host theory lives in
 |---|---|
 | ssh alias | `uBook` (key auth, BatchMode works; it's a tunnel — HostName 127.0.0.1, Port 22100). Always run `ssh uBook '<cmd>'` wrapped in `timeout`. |
 | Repo path | `/home/xakki/www/xakki/convertor` |
-| Compose project | `convertor-remote-xbook` (`COMPOSE_PROJECT_NAME`). Note "xbook" in the project name; the `host` the workers report to the DB is `uBook`. |
+| Compose project | `convertor-remote-ubook` (`COMPOSE_PROJECT_NAME`). The `host` the workers report to the DB is `uBook`. |
 | Docker | 29.x, BuildKit active by default |
 
 ## What runs here — and what is NOT ours
 
 **Convertor's** containers (the only ones this skill touches):
-`convertor-remote-xbook-worker-ai` (cpu), `-worker-ffmpeg-audio`,
+`convertor-remote-ubook-worker-ai` (cpu), `-worker-ffmpeg-audio`,
 `-worker-ffmpeg-video`, `-worker-image`, `-worker-data`,
 `-worker-libreoffice`, plus a local `-fluent-bit` log sidecar. Six workers +
 sidecar. **No ws-gateway, no metrics-exporter, no php/mariadb/keydb/nginx** —
@@ -84,22 +84,25 @@ repo dir via its Makefile targets, never host-wide.
 
 ## Update happy-path (the normal task)
 
-All docker work through Makefile targets — never raw `docker compose`. From
-the convertor repo dir on uBook:
+All docker work through Makefile targets — never raw `docker compose`. Since
+`harbor-published-worker-images`, uBook **pulls** the release built on saFin
+instead of building locally. From the convertor repo dir on uBook:
 
 ```bash
 ssh uBook 'cd /home/xakki/www/xakki/convertor && git status --porcelain'  # 1. check first
 ssh uBook 'cd /home/xakki/www/xakki/convertor && git pull'                # 2. ff expected
-ssh uBook 'cd /home/xakki/www/xakki/convertor && make build-workers build-ai-cpu'  # 3. all 6 (AI is a separate target since 2026-07-30) — minutes
+ssh uBook 'cd /home/xakki/www/xakki/convertor && make pull'               # 3. pulls the 6 images from Harbor — seconds on a code-only release
 ssh uBook 'cd /home/xakki/www/xakki/convertor && make workers-recreate'   # 4. --no-deps, ~seconds
 ```
 
-- **Never skip step 3.** `workers-recreate` alone recreates containers from the
-  EXISTING local images — after a pull that touched worker code the host comes
-  up healthy, `alive`, `host=uBook`, with fresh metrics, and still runs the OLD
-  code. The DB signals cannot tell the two apart; the decisive check is
-  `git diff --name-only HEAD@{1} HEAD -- workers/ docker/workers/`. When in
-  doubt just run `build-workers build-ai-cpu` — cache-warm and idempotent (~1 min).
+- **Never skip step 3.** `workers-recreate` alone recreates containers from
+  whatever image is already local — after a `git pull` that only bumped
+  compose/Makefile (not an image release) `make pull` is a no-op, but
+  skipping it risks running stale code with no DB signal telling you apart
+  (`worker_capabilities` looks healthy either way). The decisive check for
+  "did a new image land" is `docker images` timestamps or the reported build
+  version in `ready`, not `git diff` — the image, not the repo checkout, is
+  now the unit of deploy on this host.
 - **Step 1 is load-bearing.** If `git status` shows uncommitted *tracked*
   changes, STOP and escalate — never stash/checkout/reset on uBook (rollbacks
   need explicit user approval). An untracked `shared-files/` dir is known
@@ -109,9 +112,18 @@ ssh uBook 'cd /home/xakki/www/xakki/convertor && make workers-recreate'   # 4. -
   `COMPOSE_FILE` does NOT reference `docker/fluent-log/docker-fluent.yml`, so it
   no longer gates `docker compose config`; the `fluent-*` targets reach it via
   the Makefile's `$(DC_FLUENT)` override instead (since 2026-07-30).
-- `make build-workers` on a first build after a Dockerfile change ran ~7-8 min
-  (torch/ML stack downloads fresh; the BuildKit pip cache mount is empty on
-  first run, warm thereafter). apt/base layers hit `CACHED`.
+- **Local build is now the fallback**, not the happy path — needed only if
+  Harbor is unreachable from uBook or for one-off local debugging:
+  `make build-workers build-ai-cpu`. First build after a Dockerfile change ran
+  ~7-8 min (torch/ML stack downloads fresh; the BuildKit pip cache mount is
+  empty on first run, warm thereafter). apt/base layers hit `CACHED`.
+- **`WORKER_PULL_POLICY=missing` + `AI_PULL_POLICY=always` + `IMAGE_TAG=latest`**
+  must be set in uBook's `.env.local` (see `.env.local_worker_example` — uBook
+  is a CPU host, so `always` is safe for `worker-ai` too: `worker-ai:latest-cpu`
+  IS published to Harbor). `missing` is the compose default for both if unset,
+  but `AI_PULL_POLICY=always` is what makes `make pull` actually refresh
+  `worker-ai` on every release instead of keeping whatever image is already
+  cached locally.
 
 ## Verify from the MAIN SERVER, not from uBook
 

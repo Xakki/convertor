@@ -28,6 +28,8 @@ host.
 намеренно не публикуется здесь). На чистой машине или в CI-раннере без предварительного
 ручного `docker login` публикация образов (`push-gateway`, `push-ai-base`) сломается —
 `make harbor-login` не подготовит авторизацию, и `docker push` откажет с `unauthorized`.
+`push-gateway` заменён таргетом `release-workers` (`harbor-published-worker-images`) —
+та же незадокументированная зависимость от кешированного credential'а унаследована им.
 
 **Recommendation:**
 - Завести `DOCKER_REGISTRY=harbor.xakki.ru` в трекаемый `.env` (не секрет — просто адрес
