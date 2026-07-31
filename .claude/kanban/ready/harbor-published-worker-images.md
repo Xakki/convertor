@@ -159,8 +159,8 @@
 - `remote-host-make-up-footgun` (grooming) — профили compose на remote-хостах.
 - `docs/workers-remote-deploy.md`, скиллы `image-build-deploy`, `ubook-remote-workers`.
 
-**Status:** реализовано и проверено, DoD выполнен; ожидает Harbor retention+GC
-(пользователь) и финального подтверждения (2026-07-31).
+**Status:** выполнено и принято пользователем, смержено в `main` (2026-07-31).
+Единственный открытый пункт — Harbor retention+GC (§6), см. `## Остаётся`.
 
 ## Execution Log
 
@@ -222,6 +222,17 @@
 - Предупреждение `HOST_NAME is not set` при голом `docker compose ps` —
   преexisting и безобидное, в обход Makefile (`export HOST_NAME ?= $(shell hostname)`);
   в `worker_capabilities` хосты корректные.
+- **Третий релиз `0.1-41a9592`** (после снятия touch-коммента). На образ 2 слоя
+  `Pushed`, 21–27 `Exists`. uBook обновлён pull-путём без единой сборки: 6/6
+  контейнеров healthy, `APP_VER=0.1`, `.i=121`, digest'ы совпадают с логом релиза.
+  Проверено содержимым файла внутри контейнера (`docker exec`), а не только
+  digest'ами. Логи воркеров чистые (только безобидный `tini not PID1`);
+  ws-gateway: все 6 воркеров `worker ready`, ноль `no capability row`.
+  `worker_capabilities`: 6 строк `alive`, `version="0.1.121"`.
+- `make test` на финальном коммите — PASS: PHPUnit `OK (494 tests, 1990 assertions)`,
+  python-тесты зелёные (98/18/34+1xfail/31/15/111+2skip/5), 0 падений.
+- Бэкап `backup_.env.local.pre-verify.1785442172` на uBook удалён с разрешения
+  пользователя.
 
 ## Остаётся
 
@@ -230,7 +241,5 @@
   старше 7 дней, плюс расписание GC (удаление тега само по себе не освобождает место).
   На saNl было 30 ГБ свободно из 99; у `worker-ai-base` висело 13 untagged-артефактов.
   Без GC картина повторится, только кусками по ~3 ГБ.
-- **`backup_.env.local.pre-verify.1785442172` на uBook** — бэкап, оставленный при
-  проверке; ждёт разрешения пользователя на удаление.
 - Смежная карточка в grooming: `ubook-orphaned-ai-volumes` (осиротевшие тома
   `worker-ai-models`/`worker-ai-data` под старым именем проекта).
