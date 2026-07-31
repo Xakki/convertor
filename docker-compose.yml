@@ -373,6 +373,14 @@ services:
         # (§1), поэтому если бы GPU-хост наследовал общий WORKER_PULL_POLICY=always,
         # compose пытался бы пуллить несуществующий worker-ai:latest-cuda → та же
         # ошибка "pull access denied", которую чинит эта задача, просто в другом месте.
+        # ВАЖНО: значение по умолчанию `missing` тут — фолбэк ТОЛЬКО для `up` (при
+        # отсутствии локального образа missing запускает build:-секцию). Explicit
+        # `docker compose pull`/`make pull` build-фолбэка не знает: с `missing` он
+        # всё равно пытается запросить worker-ai:latest-cuda и падает (exit 2,
+        # "not found"). GPU-хост обязан явно ставить `AI_PULL_POLICY=build` в
+        # .env.local (.env.local_worker_example) — тогда `docker compose pull`
+        # помечает сервис Skipped, а `up`/`workers-recreate` по-прежнему собирают
+        # локально. Проверено эмпирически на обоих значениях.
         pull_policy: ${AI_PULL_POLICY:-missing}
         container_name: "${COMPOSE_PROJECT_NAME}-worker-ai"
         # Профиль `ai` (COMPOSE_PROFILES в .env) — тяжёлый образ, тест-стенд его не поднимает.

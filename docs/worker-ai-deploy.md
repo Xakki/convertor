@@ -156,10 +156,13 @@ docker compose up -d --no-deps worker-ai
 `AI_PULL_POLICY` (`docker-compose.yml`: `${AI_PULL_POLICY:-missing}`), не
 общей `WORKER_PULL_POLICY` остальных пяти воркеров: CPU-хост ставит
 `AI_PULL_POLICY=always` (`worker-ai:latest-cpu` публикуется в Harbor, см.
-«Быстрый старт»), GPU-хост — ОБЯЗАТЕЛЬНО `AI_PULL_POLICY=missing`
-(`worker-ai:latest-cuda` в Harbor не публикуется, `always` тут хардфейлит
-«pull access denied»). Шаблон `.env.local_worker_example` уже задаёт это
-верно для обоих случаев.
+«Быстрый старт»), GPU-хост — ОБЯЗАТЕЛЬНО `AI_PULL_POLICY=build`
+(`worker-ai:latest-cuda` в Harbor не публикуется, `always` хардфейлит
+«pull access denied»; `missing` спасает только `make up` — фолбэк на build:
+при отсутствии локального образа — но НЕ явный `docker compose pull`/
+`make pull`: тот build-фолбэка не знает и падает с exit 2 «not found» на
+несуществующем теге; `build` заставляет `pull` пропустить сервис, Skipped).
+Шаблон `.env.local_worker_example` уже задаёт это верно для обоих случаев.
 
 ## Переменные окружения
 

@@ -70,8 +70,12 @@ host's `.env.local` — `missing` pulls the tag if present, falling back to the
 `docs/workers-remote-deploy.md` for why) fetches the ready-built images from
 Harbor — no build step, no BuildKit cache, minutes become seconds on a
 code-only release. `worker-ai` follows its own `AI_PULL_POLICY` instead:
-`always` on a CPU host (`worker-ai:latest-cpu` is published) vs `missing` on a
-GPU host (`:latest-cuda` never is — see `worker-ai-image`).
+`always` on a CPU host (`worker-ai:latest-cpu` is published) vs `build` on a
+GPU host (`:latest-cuda` never is — see `worker-ai-image`). `missing` looks
+tempting for the GPU case but only fixes `up` (build-fallback on missing local
+image); explicit `docker compose pull`/`make pull` has no such fallback and
+still tries to fetch the nonexistent tag, failing with exit 2 — `build` makes
+`pull` skip the service outright. Verified empirically 2026-07-31.
 Local build (`make build-workers` + `make build-ai-cpu`/`build-ai-cuda`) is
 now the **fallback** for a fresh host with no Harbor access, or for
 development — see `docs/workers-remote-deploy.md` for that path.

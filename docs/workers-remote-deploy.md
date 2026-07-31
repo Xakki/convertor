@@ -97,7 +97,7 @@ metrics-exporter — под `monitoring` (он к тому же требует �
 | `WORKER_API_TOKEN` | реальный токен | Единственная обязательная переменная без дефолта — пустая строка блокирует старт воркера (`WsClientConfig.validate()`), это НАМЕРЕННО (без него был бы reconnect-storm против недоступного/неавторизованного gateway). |
 | `COMPOSE_PROFILES` | `ai` (или пусто на CPU-хосте без worker-ai) | НЕ добавлять `server`/`monitoring` — иначе `make up` потянет серверную часть, которой здесь нет. |
 | `WORKER_PULL_POLICY` | `missing` | Happy path: `make pull`/`make up` тянет готовые образы из Harbor вместо сборки; если тега ещё нет (свежий хост до первого релиза) — падает обратно на `build:`-секцию. Это и дефолт `docker-compose.yml`, `.env.local_worker_example` просто фиксирует его явно. |
-| `AI_PULL_POLICY` | `always` на CPU-хосте / `missing` на GPU-хосте | Отдельная политика для `worker-ai`: `worker-ai:latest-cpu` публикуется в Harbor (`always` безопасен), `worker-ai:latest-cuda` — НЕТ (GPU-хост обязан ставить `missing`, иначе `always` хардфейлит «pull access denied»). |
+| `AI_PULL_POLICY` | `always` на CPU-хосте / `build` на GPU-хосте | Отдельная политика для `worker-ai`: `worker-ai:latest-cpu` публикуется в Harbor (`always` безопасен), `worker-ai:latest-cuda` — НЕТ (GPU-хост обязан ставить `build`: `missing` спасает только `make up`, явный `make pull` при `missing` всё равно пытается запросить несуществующий тег и падает exit 2; `always` хардфейлит «pull access denied» сразу). |
 | `IMAGE_TAG` | `latest` (или запиненная версия релиза, напр. `0.1-a1b2c3d`) | Какой тег пуллить/использовать в compose; пиновка версии — только на remote, главный сервер всегда на `latest`. |
 | `COMPOSE_FILE` | из шаблона (+ `docker/fluent-log/docker-fluent.yml`) | Свой fluent-bit-сайдкар поднимается вместе со стеком: общего host-wide сборщика на remote-хосте нет. |
 | `EXT_FLUENT_PORT` | напр. `0.0.0.0:24224` | Порт своего сайдкара — он его и слушает, и в него же шлют логи контейнеры. |
@@ -160,7 +160,8 @@ git pull && make pull && make workers-recreate
 GPU на remote-хосте не предполагается: `worker-ai:cuda` в Harbor не
 публикуется (см. `docs/worker-ai-deploy.md`), если он есть — воркер остаётся
 на локальной сборке (`build-ai-cuda`) с `AI_VARIANT=cuda` + `AI_RUNTIME=nvidia`
-+ `AI_PULL_POLICY=missing` в `.env.local`.
++ `AI_PULL_POLICY=build` в `.env.local` (`build`, а не `missing` — иначе
+именно этот `make pull` падает на несуществующем `worker-ai:latest-cuda`).
 
 ### Фолбэк: локальная сборка (свежий хост без доступа к Harbor / разработка)
 
