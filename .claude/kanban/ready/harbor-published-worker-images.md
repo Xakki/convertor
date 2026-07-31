@@ -159,7 +159,8 @@
 - `remote-host-make-up-footgun` (grooming) — профили compose на remote-хостах.
 - `docs/workers-remote-deploy.md`, скиллы `image-build-deploy`, `ubook-remote-workers`.
 
-**Status:** todo (groomed 2026-07-30).
+**Status:** реализовано и проверено, DoD выполнен; ожидает Harbor retention+GC
+(пользователь) и финального подтверждения (2026-07-31).
 
 ## Execution Log
 
@@ -188,3 +189,37 @@
   `worker-ai-base` (`Layer already exists` / `Mounted from`).
 - **Открытый пункт:** Harbor retention + GC (§6) пользователем ещё не подтверждён —
   на saNl было 30 ГБ свободно из 99. Без GC удаление тегов не освобождает место.
+- `6beff05` — `APP_VER`/`WORKER_BUILD` теперь запекаются и в `ai.cpu.Dockerfile`/
+  `ai.cuda.Dockerfile` (в самом конце, после последнего `COPY` — pip/ML-слой не
+  задет); `build-ai-cpu`/`build-ai-cuda` получили `bump-i` + build-args. Обнаружено
+  при проверке на uBook: карточка (§5) считала, что версию не запекают только
+  gateway и metrics-exporter, но AI-образ был третьим пробелом.
+- `da2ccea` — touch-коммент в `workers/data/worker.py` для замера code-only релиза.
+- **Второй релиз: `0.1-da2ccea`.** Сторона пуша: на образ уезжает 2 слоя `Pushed`,
+  все прочие `Layer already exists`.
+- **Замер DoD «килобайты, не гигабайты» — PASS.** uBook скачал ~16 кБ для
+  `worker-data:latest` и ~14.6 кБ для `worker-ai:latest-cpu`. Все большие ML/pip-слои
+  `worker-ai` (183/235/242/23 МБ и др., суммарно ~3 ГБ) — `Layer already exists`, не
+  перезаливались. Допущение §5/§6 (бюджет диска: 3 версии 3.16-ГБ образа помещаются
+  только при общем слое зависимостей) подтверждено практикой.
+- Digest-сверка: `docker images --digests` на uBook совпадает с digest'ами из лога
+  релиза — на хосте именно этот релиз.
+- **uBook после `make workers-recreate`:** 6 воркеров healthy, `APP_VER=0.1`,
+  `/app/.i=119` на всех шести, включая `worker-ai` (раньше версии не было вовсе).
+- **`worker_capabilities` на saFin:** 8 строк `host=uBook`, `status=alive`,
+  `version:"0.1.119"` у всех воркеров включая `ai` (была `version:"0"`).
+- **`make test`** — PASS: PHPUnit `OK (494 tests, 1990 assertions)`, python-тесты по
+  всем воркерам зелёные (2 skip — преднастроечные, `espeak-ng`/локальная LLM-модель).
+  `make docker-check` — dev ok, test ok.
+
+## Остаётся
+
+- **Harbor retention + GC (§6) — НЕ выполнено, требует админа Harbor (пользователь).**
+  Политика: хранить последние 3 тегированные версии на репозиторий, untagged удалять
+  старше 7 дней, плюс расписание GC (удаление тега само по себе не освобождает место).
+  На saNl было 30 ГБ свободно из 99; у `worker-ai-base` висело 13 untagged-артефактов.
+  Без GC картина повторится, только кусками по ~3 ГБ.
+- **`backup_.env.local.pre-verify.1785442172` на uBook** — бэкап, оставленный при
+  проверке; ждёт разрешения пользователя на удаление.
+- Смежная карточка в grooming: `ubook-orphaned-ai-volumes` (осиротевшие тома
+  `worker-ai-models`/`worker-ai-data` под старым именем проекта).
