@@ -178,7 +178,9 @@
   `AI_PULL_POLICY=always` для CPU-remote, `--pull` отфильтрован для локального
   AI-шага `rebuild-workers` (тянул `worker-ai-base:local` из Docker Hub),
   `AI_CUDA_IMAGE`/`AI_CPU_IMAGE` теперь уважают `IMAGE_TAG`, добавлен `bump-i` в
-  `build-gateway`/`build-metrics-exporter`.
+  `build-gateway`/`build-metrics-exporter`. `rebuild-workers` проверен только через
+  `make -n` (dry-run), реального прогона не было — сознательно, это `--no-cache`
+  пересборка ~3 ГБ образов.
 - `7ba7330` — синхронизация доков под финальные значения pull_policy.
 - **Первый релиз: тег `0.1-7ba7330`, SUCCESS.** Запушено 7 образов × 2 тега:
   `worker-libreoffice`, `worker-ffmpeg`, `worker-image`, `worker-data`,
@@ -211,6 +213,15 @@
 - **`make test`** — PASS: PHPUnit `OK (494 tests, 1990 assertions)`, python-тесты по
   всем воркерам зелёные (2 skip — преднастроечные, `espeak-ng`/локальная LLM-модель).
   `make docker-check` — dev ok, test ok.
+- `0595efe` — на GPU-хосте `make pull` падал: `pull_policy: missing` даёт фолбэк на
+  сборку только при `up`, а отдельный `docker compose pull` всё равно пытался тянуть
+  неопубликованный `worker-ai:latest-cuda` (`failed to resolve reference`, exit 2).
+  Для GPU-хоста рекомендация изменена на `AI_PULL_POLICY=build` — при этой политике
+  compose помечает образ `Skipped` и не тянет его. CPU-remote (`always`) перепроверен,
+  не задет.
+- Предупреждение `HOST_NAME is not set` при голом `docker compose ps` —
+  преexisting и безобидное, в обход Makefile (`export HOST_NAME ?= $(shell hostname)`);
+  в `worker_capabilities` хосты корректные.
 
 ## Остаётся
 

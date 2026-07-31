@@ -3,9 +3,6 @@
 Транспорт: WS-клиент (StreamConsumerBase.run(), s1-10).
 Задача доставляется через process_job; job['_localInput'] уже заполнен WsClient'ом.
 convert() возвращает (out_path, mime, target_ext) → ResultSignal → gateway.
-
-Проверка code-only релиза (harbor-published-worker-images): эта строка —
-безобидный touch без изменения поведения.
 """
 
 from __future__ import annotations
