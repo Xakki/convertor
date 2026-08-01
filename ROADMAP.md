@@ -19,7 +19,7 @@
 
 **Цель:** текущие конвертации реально работают через REST API, документированы и покрыты тестами.
 
-> ✅ **Стадия завершена** — все задачи в `done/`, кроме `[ ] smoke-run-verify` (финальный e2e-гейт,
+> ✅ **Стадия завершена** — все задачи в `done/`, кроме `[ ] CNV-39-smoke-run-verify` (финальный e2e-гейт,
 > остаётся в `todo/`).
 
 > **Реальность (актуализация 2026-06-21):** воркеры image/ffmpeg/data/libreoffice **на KeyDB Streams + S3**
@@ -42,7 +42,7 @@
 - [x] **P2 — [[api-openapi-swagger]]** — `/api/doc` + аннотации (бандл есть, документация пустая).
 - [x] **P2 — [[worker-conversion-tests]]** — unit воркеров (`conftest.py`/`pytest.ini`, моки subprocess/SDK).
 - [x] **P2 — [[api-integration-tests]]** — реальный прогон файлов через эндпоинты + замер скорости.
-- [ ] **P2 — [[smoke-run-verify]]** — финальный e2e-гейт (стек healthy + 1 конвертация на категорию + логи/тесты).
+- [ ] **P2 — [[CNV-39-smoke-run-verify]]** — финальный e2e-гейт (стек healthy + 1 конвертация на категорию + логи/тесты).
 
 **Условия:** без авторизации по токену, без лимитов.
 **Exit:** каждый реализованный эндпоинт отдаёт корректный результат на реальном файле (вкл. документы);
@@ -50,7 +50,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 > ℹ️ Валидация воркеров image/libreoffice/data/ffmpeg завершена (см. ✅ выше); AI-воркер тоже
 > провалидирован ([[validate-ai-worker]], Стадия 2). Stage-7-форматы (Таблицы/Презентации/epub-вход)
-> вынесены в [[stage7-libreoffice-extra-formats]].
+> вынесены в [[CNV-41-stage7-libreoffice-extra-formats]].
 
 ---
 
@@ -64,7 +64,7 @@ swagger полон; unit зелёные; интеграционные с зам�
   Streams через TLS SNI + S3; без app-стека и `/shared-files`).
 - [x] **P2 — [[stream-subscription-distribution]]** — механика Streams: документация, лаг-метрики (XPENDING) в
   Prometheus/Grafana, drift-тест «routing-key без consumer».
-- [ ] **P2 — [[openai-00-integration]]** — g4f-бэкенд (MarkItDown, STT/TTS, text→image) поверх aip.xakki.ru.
+- [ ] **P2 — [[CNV-27-openai-00-integration]]** — g4f-бэкенд (MarkItDown, STT/TTS, text→image) поверх aip.xakki.ru.
 
 **Registry (динамическая матрица форматов из БД):**
 - [x] **[[registry-01-worker-register]]** — Phase 1: воркеры само-регистрируют capabilities → DB-матрица.
@@ -118,8 +118,8 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 - [ ] **P1 — Лимиты на конвертацию** (QuotaService → enforcement). *(карточки нет — завести)*
 - [ ] **P1 — [[quota-service-hardening]]** — hardening QuotaService.
-- [ ] **P2 — [[sms-otp-backup-auth]]** — SMS OTP резервный auth (SMSC.ru).
-- [ ] ❄️ **P1 — [[docs-payments-integration]]** — оплата только Telegram Stars (заморожено, ждёт разморозки;
+- [ ] **P2 — [[CNV-40-sms-otp-backup-auth]]** — SMS OTP резервный auth (SMSC.ru).
+- [ ] ❄️ **P1 — [[CNV-12-docs-payments-integration]]** — оплата только Telegram Stars (заморожено, ждёт разморозки;
   Stripe/Cryptomus вне MVP, YooMoney исключён).
 
 **Exit:** лимиты применяются; оплата звёздами повышает лимит/кредиты.
@@ -130,13 +130,13 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 **Цель:** добиваем оставшуюся матрицу форматов.
 
-- [ ] ❄️ **[[post-mvp-conversion-formats]]** — зонтик: Архивы (zip/tar/gz/bz2/7z), CAD/DWG, доп. изображения
+- [ ] ❄️ **[[CNV-31-post-mvp-conversion-formats]]** — зонтик: Архивы (zip/tar/gz/bz2/7z), CAD/DWG, доп. изображения
   (SVG/HEIC/AVIF), разметка rst/latex/wiki, MarkItDown (заморожено).
-- [ ] **[[stage7-libreoffice-extra-formats]]** — доп-форматы soffice: epub-вход, Таблицы (Calc) / Презентации
+- [ ] **[[CNV-41-stage7-libreoffice-extra-formats]]** — доп-форматы soffice: epub-вход, Таблицы (Calc) / Презентации
   (Impress) / PDF→jpg постранично, разметка rst/latex/wiki (решение 2026-06-20).
-- [ ] **[[archive-input-fanout]]** — распаковка архива на входе → fan-out файлов в отдельные очереди по target-формату
+- [ ] **[[CNV-4-archive-input-fanout]]** — распаковка архива на входе → fan-out файлов в отдельные очереди по target-формату
   (batch-распаковка, не конвертация формата архива).
-- [ ] **[[conversion-chaining]]** — цепочки конвертаций A→B→C (grooming, Стадия 7).
+- [ ] **[[CNV-5-conversion-chaining]]** — цепочки конвертаций A→B→C (grooming, Стадия 7).
 - [ ] **Расширение data-воркера** (лёгкие форматы, тот же движок pandas/stdlib) — кандидаты:
   - **TSV** и иные разделители (`;`, `|`) ↔ csv/json — тривиально через pandas.
   - **NDJSON / JSON Lines** ↔ csv/json.
@@ -158,24 +158,24 @@ swagger полон; unit зелёные; интеграционные с зам�
 - [x] **[[fix-configs-working-state]]**, **[[fix-queue-php-worker-mismatch]]** — базовый boot + контракт очереди (Streams).
 - [x] **[[storage-input-to-s3]]** — файлы в S3 (in/out), `/shared-files` убран.
 - [x] **[[docs-workers-conversion-validation]]** — зонтик воркер-валидации (umbrella в grooming; per-worker карточки все в done).
-- [ ] **[[rate-limit-per-ip-user]]** — rate limiting per-IP/per-user (KeyDB).
+- [ ] **[[CNV-34-rate-limit-per-ip-user]]** — rate limiting per-IP/per-user (KeyDB).
 - [ ] **[[file-cleanup-24h-cron]]** — авто-удаление файлов через 24ч (Scheduler).
-- [ ] **[[metrics-alerting]]** — метрики/алертинг (worker health). *(пересекается со Стадией 6)*
+- [ ] **[[CNV-24-metrics-alerting]]** — метрики/алертинг (worker health). *(пересекается со Стадией 6)*
 - [x] **[[extract-worker-common-helpers]]** — DRY: общие хелперы воркеров в `workers/common` (subprocess-runner, MIME-таблицы).
 - [x] **[[align-document-stream-matrix-dlq]]** — выровнять матрицу `conv.document` (PHP-реестр vs воркер) + fast-DLQ перманентных ошибок.
 
 **Хардненинг / tech-debt (todo):**
 - [ ] **[[guest-row-flood-hardening]]** — защита от флуда guest-строк.
 - [ ] **[[e2e-login-helper-magic-link]]** — e2e-хелпер логина через magic-link.
-- [ ] **[[e2e-magic-link-callback-mockbot]]** — e2e callback c mock-ботом (grooming).
+- [ ] **[[CNV-14-e2e-magic-link-callback-mockbot]]** — e2e callback c mock-ботом (grooming).
 - [ ] **[[formats-api-ocr-capable-flag]]** — флаг ocr-capable в `/formats` API.
-- [ ] **[[admin-ban-instant-lockout]]** — мгновенный lockout при бане.
+- [ ] **[[CNV-1-admin-ban-instant-lockout]]** — мгновенный lockout при бане.
 - [ ] **[[refresh-token-injectable-clock]]** — injectable clock для refresh-token тестов.
 - [ ] **[[conversions-admin-indexes]]** — индексы для админ-выборок conversions.
 - [ ] **[[cache-app-keydb-vs-filesystem]]** — app-cache: KeyDB vs filesystem.
 - [ ] **[[test-db-provisioning-hardening]]** — hardening провижининга тест-БД.
 - [ ] **[[verify-webm-harness-rewrite]]** — переписать webm verify-harness.
-- [ ] **[[ai-worker-benchmarks]]** — бенчмарки AI-воркера.
+- [ ] **[[CNV-3-ai-worker-benchmarks]]** — бенчмарки AI-воркера.
 
 ---
 
@@ -206,7 +206,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 ## Лимиты и тарифы
 
-> ⚠️ **Числа ниже — предложение; финализируется в задаче `plan-quota-daily-monthly`.**
+> ⚠️ **Числа ниже — предложение; финализируется в задаче `CNV-30-plan-quota-daily-monthly`.**
 > Модель: **пер-групповые (тир) лимиты с двумя окнами — суточным И месячным**;
 > цена плана — за месяц. Тир вычисляется в рантайме по сигналам `Conversion`
 > (`tier = isAi ? AI : mapCategory(category)`).
@@ -232,7 +232,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 - Месячное окно = скользящие 30 дней; дневной и месячный лимит — оба жёсткие
   потолки (превышение любого → 429). free видео/AI = 0 (недоступны без плана).
-- **Pay-per-use** ($0.05/конв, AI $0.15) — отдельная фича `pay-per-use-credits`
+- **Pay-per-use** ($0.05/конв, AI $0.15) — отдельная фича `CNV-28-pay-per-use-credits`
   (оплата сверх лимитов плана), вне итерации тир-квот.
 
 ## API endpoints (основные)

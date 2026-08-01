@@ -44,7 +44,7 @@
 - e2e и integration — только warn (не блокируют).
 - В CI — live docker test-проект как у `make test` (изолированный compose-проект со своей БД).
 - Pre-push хук — вне scope этой карточки.
-- Расширение PHPStan на `migrations/`/`bin/` — отдельно (`[[phpstan-skips-migrations]]`).
+- Расширение PHPStan на `migrations/`/`bin/` — отдельно (`[[CNV-29-phpstan-skips-migrations]]`).
 
 **Work notes:**
 Groomed 2026-08-01: GHA + blocking gates + live test stand; e2e/integration warn-only.

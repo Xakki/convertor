@@ -65,7 +65,7 @@ Graylog under source `192.168.10.12` (verified 2026-07-29). Since 2026-07-30
 `make fluent-up` / `fluent-restart` / `fluent-logs` work again: they run the
 submodule compose explicitly (`$(DC_FLUENT)` in the root Makefile), so a stopped
 sidecar can be brought back. Card
-`.claude/kanban/grooming/fluent-bit-orphan-remote-host.md`.
+`.claude/kanban/grooming/CNV-17-fluent-bit-orphan-remote-host.md`.
 
 **⚠ `docker compose config` over bare `ssh` LIES here.** `docker compose`
 auto-loads only `.env`; `.env.local` reaches compose solely because the root

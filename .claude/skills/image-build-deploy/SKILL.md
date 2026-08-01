@@ -175,5 +175,5 @@ and turns every release into a ~3 GB push.
 - `worker-ai-image` — the two-layer AI image build/deploy detail.
 - `docs/workers-remote-deploy.md`, `docs/worker-ai-deploy.md` — full
   step-by-step remote-host and AI-worker instructions.
-- `.claude/kanban/grooming/make-login-not-configured.md` — the
+- `.claude/kanban/grooming/CNV-23-make-login-not-configured.md` — the
   `make harbor-login` gap tracked as a card.

@@ -19,7 +19,7 @@
 
 **Текущее состояние (из аудита 2026-06-20):**
 - `FileCategory::Archive='archive'` есть в enum, но транспорта `conv_archive` нет → одиночный dispatch архива сейчас бросает исключение (см. [[backend-hardening-bugs]]).
-- Конвертация архива **как формата** (zip→tar.gz перепаковка) — отдельный пункт в [[post-mvp-conversion-formats]] (Стадия 7). Эта карточка — про другое (вход-архив как батч).
+- Конвертация архива **как формата** (zip→tar.gz перепаковка) — отдельный пункт в [[CNV-31-post-mvp-conversion-formats]] (Стадия 7). Эта карточка — про другое (вход-архив как батч).
 
 **Решение (черновик, уточнить при груминге):**
 - Распаковка: Python (`zipfile`/`tarfile`/`py7zr`) — отдельный шаг.
@@ -37,4 +37,4 @@
 
 **Status:** grooming (Stage 7).
 
-Siblings: [[post-mvp-conversion-formats]] · [[backend-hardening-bugs]] · [[stream-subscription-distribution]]
+Siblings: [[CNV-31-post-mvp-conversion-formats]] · [[backend-hardening-bugs]] · [[stream-subscription-distribution]]

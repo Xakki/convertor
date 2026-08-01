@@ -196,7 +196,7 @@ build-ai-cpu: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cpu
 # Явный поимённый список runnable-образов на push — НИКАКИХ tag-glob'ов (решение §7:
 # после смены IMAGE_NS на Harbor-namespace build_test_img тегает :test прямо в Harbor,
 # такой образ никогда не должен уехать push'ем). worker-ai:cuda НЕ публикуется —
-# остаётся локальной сборкой GPU-хоста (§1, карта cuda-worker-ai-rebuild-gpu-host).
+# остаётся локальной сборкой GPU-хоста (§1, карта CNV-7-cuda-worker-ai-rebuild-gpu-host).
 RELEASE_IMAGES := worker-libreoffice worker-ffmpeg worker-image worker-data metrics-exporter ws-gateway
 
 .PHONY: release-tag

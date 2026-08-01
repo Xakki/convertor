@@ -43,7 +43,7 @@ workers page наравне с реальными воркерами.
 
 **Recommendation:**
 Политику registry-06 не пересматривать. Cleanup junk `test:worker` — в
-`[[registry-09-gc-junk-worker-capabilities-test-worker]]`. Опционально — короткий
+`[[CNV-36-registry-09-gc-junk-worker-capabilities-test-worker]]`. Опционально — короткий
 docs/comment note, что soft-filter матрицы сознательно отвергнут.
 
 **Эпик:** `[[registry-00-self-registration]]`, `[[registry-06-liveness-push]]`.
@@ -59,6 +59,6 @@ docs/comment note, что soft-filter матрицы сознательно от
 - (2026-08-01) Q1=A: без soft-filter для `/formats`; оставить registry-06
   (все строки в матрице; liveness ≠ routing).
 - (2026-08-01) Q2=A: чистить junk `test:worker`; seeds `__seed__` оставить.
-  Реализация cleanup — follow-up `[[registry-09-gc-junk-worker-capabilities-test-worker]]`.
+  Реализация cleanup — follow-up `[[CNV-36-registry-09-gc-junk-worker-capabilities-test-worker]]`.
 
 **Status:** todo / ready

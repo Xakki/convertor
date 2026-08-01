@@ -13,7 +13,7 @@ Telegram). Отдельно нужен e2e-набор для самого auth-r
 one-time и no-burn, которую фикстура-шорткат не трогает. Эту карту НЕ блокирует и ей
 не блокируется.
 
-⚠️ **Ретаргет 2026-07-28:** зависит от [[telegram-login-confirm-in-bot-no-magic-link]].
+⚠️ **Ретаргет 2026-07-28:** зависит от [[CNV-42-telegram-login-confirm-in-bot-no-magic-link]].
 Модель логина меняется с magic-link (`callback` + `linkSecret`) на **poll**:
 исходная вкладка опрашивает `GET /api/v1/auth/telegram/poll?code=…` и обменивает код
 на сессию по двум факторам `code` + nonce-cookie (linkSecret выпилен). Эта e2e-карта
@@ -60,6 +60,6 @@ nonce-cookie, one-time, no-burn на mismatch, защиту заголовка
 существующего e2e (изоляция по тест-БД/префиксу).
 
 **Контекст:** выделено из [[e2e-login-helper-magic-link]] (2026-07-11); ретаргетнуто
-под poll-модель ([[telegram-login-confirm-in-bot-no-magic-link]], 2026-07-28).
+под poll-модель ([[CNV-42-telegram-login-confirm-in-bot-no-magic-link]], 2026-07-28).
 
 **Status:** todo.

@@ -29,7 +29,7 @@ paths:
 2. Добавить `migrations/` на level 5 либо через baseline
 3. cs для migrations — опционально позже
 
-**Контекст:** обнаружено при реализации карточки `[[registry-03-seed-migration]]` (2026-07-22) и `[[registry-04-matrix-tooling-tests]]` (2026-07-22). Связано с `[[migrate-diff-schema-drift]]` — обе касаются toolchain для миграций и служебных инструментов.
+**Контекст:** обнаружено при реализации карточки `[[registry-03-seed-migration]]` (2026-07-22) и `[[registry-04-matrix-tooling-tests]]` (2026-07-22). Связано с `[[CNV-25-migrate-diff-schema-drift]]` — обе касаются toolchain для миграций и служебных инструментов.
 
 **Acceptance Criteria:**
 - [ ] `bin/` добавлен в PHPStan paths на level 8; `make phpstan` зелёный

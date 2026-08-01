@@ -46,7 +46,7 @@ Result event (worker→`conversions_result`): `{conversionId,state,outputBucket,
 - **Phase 3:** G. S3 result sink + dev MinIO.
 - **Phase 4 (parallel):** H. image, I. ffmpeg, J. data, K. ai (subType stt/tts/ocr), L. libreoffice→consumer.
 - **Phase 5:** M. fault-tolerance e2e.
-- **Phase 6:** N. e2e smoke (ties to smoke-run-verify, worker-conversion-tests).
+- **Phase 6:** N. e2e smoke (ties to CNV-39-smoke-run-verify, worker-conversion-tests).
 
 ## Decisions (resolved 2026-06-19)
 1. **Stream granularity:** routing-keys = `FileCategory` values + dedicated `ai`; markup folded into `document`. (accepted default)

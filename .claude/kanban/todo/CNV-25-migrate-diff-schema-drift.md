@@ -31,7 +31,7 @@
 **Recommendation:**
 1. Catch-up миграция + объявить индексы через `#[ORM\Index]` на entities (имена как в БД)
 2. После sync — `migrate-diff` пустой на чистой БД
-3. CI empty-diff гейт — позже вместе с GHA (`[[no-ci-pipeline]]`)
+3. CI empty-diff гейт — позже вместе с GHA (`[[CNV-26-no-ci-pipeline]]`)
 
 **Acceptance Criteria:**
 - [ ] Зафиксировано, какие таблицы/колонки/индексы дрифтят
@@ -43,7 +43,7 @@
 
 **Decisions:**
 - Исправление: catch-up миграция + `#[ORM\Index]` на entities (имена = как в БД), чтобы убрать шум rename IDX_*.
-- CI-check на пустой `migrate-diff` — позже, вместе с GitHub Actions (`[[no-ci-pipeline]]`), не в scope закрытия этой карточки.
+- CI-check на пустой `migrate-diff` — позже, вместе с GitHub Actions (`[[CNV-26-no-ci-pipeline]]`), не в scope закрытия этой карточки.
 - Поглощена карточка `[[doctrine-schema-validate-drift]]` (тот же mapping↔DB дрифт индексов/DC2Type).
 
 **Work notes:**

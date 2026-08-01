@@ -85,7 +85,7 @@ Rate-limit: добавить limiter `anon_telegram_poll` соседней за�
 - Обновлены: skill `redesign-auth-access-contract` (модель poll вместо
   magic-link — закрывает дрейф из бывшей `auth-docs-drift-pairing-poll`),
   OpenAPI (новый `poll`, убран `callback`), e2e-карта
-  [[e2e-magic-link-callback-mockbot]] ретаргетнута на poll-флоу.
+  [[CNV-14-e2e-magic-link-callback-mockbot]] ретаргетнута на poll-флоу.
 - Tests/QA green: `make phpstan`, `make cs-check`, `make test`, `make test-e2e`.
 
 **Decisions:** *(груминг 2026-07-28, с @user)*

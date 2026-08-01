@@ -58,6 +58,6 @@
 Groomed 2026-08-01: keep convertor-dump; no-Delete policy; cron+push/pull+versioning MVP; retention later.
 
 **Related cards:**
-- `[[docs-payments-integration]]` — тоже заморожённая интеграция
+- `[[CNV-12-docs-payments-integration]]` — тоже заморожённая интеграция
 
 **Status:** todo.

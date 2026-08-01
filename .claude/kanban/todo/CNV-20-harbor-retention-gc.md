@@ -59,7 +59,7 @@ pull-деплоя в `harbor.xakki.ru/convertor` публикуются 7 runnab
 
 **Ссылки:**
 - `.claude/kanban/done/harbor-published-worker-images.md` — §6 родительской задачи.
-- `.claude/kanban/grooming/ubook-orphaned-ai-volumes.md` — смежная уборка.
+- `.claude/kanban/grooming/CNV-44-ubook-orphaned-ai-volumes.md` — смежная уборка.
 - скилл `image-build-deploy` — топология образов.
 
 **Status:** todo (выделено из harbor-published-worker-images 2026-07-31).

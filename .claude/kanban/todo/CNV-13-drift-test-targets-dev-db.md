@@ -36,7 +36,7 @@
 
 **Related cards:**
 - `[[registry-04-matrix-tooling-tests]]` — там drift-тест был переписан и лежит сейчас
-- `[[no-ci-pipeline]]` — CI раннер выявит эту проблему первым
+- `[[CNV-26-no-ci-pipeline]]` — CI раннер выявит эту проблему первым
 
 **Decisions:**
 - Узкий scope: закрепить `APP_ENV=test` на native php path (docker-путь под `make TEST=1` уже бьёт в тест-стенд).
