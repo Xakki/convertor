@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(git:add *)",
+      "Shell(git:commit *)",
+      "Shell(python3:-)"
+    ],
+    "deny": []
+  }
+}
