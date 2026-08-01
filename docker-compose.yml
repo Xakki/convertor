@@ -152,6 +152,51 @@ services:
         mem_limit: "3G"
         cpus: "2"
 
+    # CNV-10: MVP-планировщик дамп+push в S3 (см. docker/mariadb/dump-cron.Dockerfile
+    # и dump_cron_loop.sh). Требует бакет ${S3_DUMP_BUCKET} — до его создания
+    # (админ-шаг MCP minio, вне этого сервиса) push будет падать, дамп в /backup
+    # при этом всё равно обновляется каждый цикл.
+    db-dump-cron:
+        build:
+            context: .
+            dockerfile: docker/mariadb/dump-cron.Dockerfile
+            args:
+                DOCKER_IMAGE_MARIADB: ${DOCKER_IMAGE_MARIADB}
+        image: ${IMAGE_NS}/db-dump-cron:${IMAGE_TAG:-latest}
+        # Профиль `backup` (не `server`!) — отдельный от основного стека, ОСОЗНАННО
+        # не активирован на тест-стенде (.env.test: COMPOSE_PROFILES=server,test),
+        # чтобы тесты не пушили дампы тестовой БД в прод-бакет ${S3_DUMP_BUCKET}.
+        profiles: ["backup"]
+        container_name: "${COMPOSE_PROJECT_NAME}-db-dump-cron"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 10s
+        working_dir: /backup
+        entrypoint: ["bash", "/scripts/dump_cron_loop.sh"]
+        volumes:
+            - ./backup:/backup
+            - ./docker/mariadb/scripts:/scripts:ro
+        environment:
+            TZ: ${TZ}
+            PUID: ${PUID:-0}
+            PGID: ${PGID:-0}
+            MARIADB_HOST: mariadb
+            MARIADB_DATABASE: ${MARIADB_DATABASE}
+            MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+            DUMP_CRON_INTERVAL_S: ${DUMP_CRON_INTERVAL_S:-86400}
+            DUMP_PREFIX: ${COMPOSE_PROJECT_NAME}
+            S3_ENDPOINT: ${S3_ENDPOINT}
+            S3_KEY: ${S3_KEY}
+            S3_SECRET: ${S3_SECRET}
+            S3_REGION: ${S3_REGION}
+            S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE}
+            S3_DUMP_BUCKET: ${S3_DUMP_BUCKET}
+        depends_on:
+            mariadb:
+                condition: service_healthy
+        networks:
+            - default
+
     keydb:
         image: ${DOCKER_IMAGE_KEYDB}
         profiles: ["server"]

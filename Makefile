@@ -129,6 +129,30 @@ db-restore: ## Восстановить БД стенда из ./backup/dump.sql
 	$(CONFIRM_PROD)
 	$(DC) exec -T mariadb bash /scripts/restore.sh
 
+# CNV-10: одноразовый контейнер minio/mc (НЕ docker compose — точечная transport-задача,
+# см. workers/Makefile RUN_PYTEST_TEST для того же паттерна). Бакет/политика/версионирование —
+# админ-шаги вне охвата (см. .claude/kanban/progress/CNV-10-db-backup-s3-pipeline.md).
+MC_IMAGE ?= minio/mc:latest
+DUMP_PREFIX ?= $(COMPOSE_PROJECT_NAME)
+
+.PHONY: db-dump-push
+db-dump-push: db-dump ## Свежий дамп + отгрузка в S3 ${S3_DUMP_BUCKET} новым ключом (никогда не перезаписывает)
+	docker run --rm -u $(PUID):$(PGID) -e HOME=/tmp \
+	    -v "$(CURDIR)/backup:/backup:ro" \
+	    -v "$(CURDIR)/docker/mariadb/scripts:/scripts:ro" \
+	    -e S3_ENDPOINT -e S3_KEY -e S3_SECRET -e S3_REGION -e S3_USE_PATH_STYLE \
+	    -e S3_DUMP_BUCKET -e DUMP_PREFIX \
+	    --entrypoint sh $(MC_IMAGE) /scripts/push_dump.sh
+
+.PHONY: db-dump-pull
+db-dump-pull: ## Скачать дамп из S3 в ./backup/dump.sql.gz (DUMP_KEY=<ключ> — конкретный, иначе последний по времени)
+	docker run --rm -u $(PUID):$(PGID) -e HOME=/tmp \
+	    -v "$(CURDIR)/backup:/backup" \
+	    -v "$(CURDIR)/docker/mariadb/scripts:/scripts:ro" \
+	    -e S3_ENDPOINT -e S3_KEY -e S3_SECRET -e S3_REGION -e S3_USE_PATH_STYLE \
+	    -e S3_DUMP_BUCKET -e DUMP_PREFIX -e DUMP_KEY \
+	    --entrypoint sh $(MC_IMAGE) /scripts/pull_dump.sh
+
 ##@ Testing (всё гоняется на ИЗОЛИРОВАННОМ тест-стенде из .env.test)
 
 .PHONY: test
