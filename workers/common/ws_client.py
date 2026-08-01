@@ -1105,6 +1105,12 @@ class WsClient:
             await self._send_fail(ws, job_id, f"output unreadable: {exc}", permanent=True)
             return
 
+        if size == 0:
+            await self._send_fail(
+                ws, job_id, "empty output (0 bytes)", permanent=True, processing_ms=signal.processing_ms
+            )
+            return
+
         if size <= inline_max:
             try:
                 raw = signal.read_bytes()

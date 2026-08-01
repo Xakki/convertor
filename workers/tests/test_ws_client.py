@@ -316,6 +316,31 @@ async def test_job_handled_input_injected_inline_result(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.asyncio
+async def test_zero_byte_output_sends_permanent_fail(tmp_path):
+    """size==0 → permanent fail, не success-result с пустым inline (ai-empty-result-relay)."""
+    gw = FakeGateway(jobs=[_job()])
+    sym = FakeSymfony()
+
+    async def handler(job, progress):
+        return ResultSignal.completed(
+            data=b"", mime="text/plain", ext="txt", processing_ms=99
+        )
+
+    async with _running(gw, tmp_path, handler, sym):
+        await _wait_for(lambda: len(gw.fails) >= 1)
+
+    assert gw.results == []
+    fail = gw.fails[0]
+    assert fail == {
+        "type": "fail",
+        "jobId": "10-0",
+        "error": "empty output (0 bytes)",
+        "permanent": True,
+        "processingMs": 99,
+    }
+
+
 # --------------------------------------------------------------------------
 # Large-ветка: POST /result → result{resultKey}
 # --------------------------------------------------------------------------

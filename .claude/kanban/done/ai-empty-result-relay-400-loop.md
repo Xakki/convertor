@@ -75,4 +75,12 @@ xBook) ~40 минут в ходе диагностики 2026-07-23; одна з
 - (2026-08-01) Q2=C: на result path: 4xx → DLQ сразу; 5xx/сеть → capped retry
   (как у fail-ветки).
 
-**Status:** todo / ready
+**Status:** ready
+
+## Execution Log
+- (2026-08-01) Q1=B, Q2=C зафиксированы в Decisions.
+- (2026-08-01) `ws_client._deliver`: size==0 → `_send_fail(..., permanent=True)`.
+- (2026-08-01) `relay.post_result`: возвращает `(ok, status)` для различения 4xx/5xx/сеть.
+- (2026-08-01) `ws_server._handle_result`: 4xx → DLQ; 5xx/сеть → capped retry → DLQ.
+- (2026-08-01) Тесты: `test_zero_byte_output_sends_permanent_fail`, relay 4xx/5xx/DLQ.
+- (2026-08-01) QA: `make TEST=1 test-gateway` — 191 passed, 1 skipped.

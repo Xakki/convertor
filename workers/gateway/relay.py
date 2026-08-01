@@ -65,12 +65,16 @@ class RelayClient:
         data_b64: str,
         mime: str | None,
         processing_ms: int | None,
-    ) -> bool:
+    ) -> tuple[bool, int | None]:
         """inline-результат → Symfony. `data` = base64 ДОСЛОВНО из WS-поля `inline`.
 
         Форма тела фиксирована (контракт с PHP-зоной): все четыре ключа всегда
         присутствуют, `mime`/`processingMs` = null при отсутствии — предсказуемый
         shape для парсинга на стороне Symfony.
+
+        Возвращает `(ok, status)`: `ok=True` ⇢ 2xx; иначе `ok=False`, `status` —
+        HTTP-код ответа или `None` при сетевой ошибке (вызывающий различает 4xx vs
+        5xx/сеть для DLQ vs capped retry на result-path).
         """
         payload = {
             "jobId": job_id,
@@ -78,7 +82,7 @@ class RelayClient:
             "mime": mime,
             "processingMs": processing_ms,
         }
-        return await self._post(RESULT_PATH, payload, job_id)
+        return await self._post_with_status(RESULT_PATH, payload, job_id)
 
     async def post_fail(
         self, job_id: str, error: str, processing_ms: int | None = None

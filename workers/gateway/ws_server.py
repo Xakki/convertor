@@ -610,17 +610,47 @@ class WsGateway:
             return
 
         # relay inline → Symfony; ack ТОЛЬКО при 2xx (persist подтверждён).
-        ok = await self._get_relay().post_result(
+        ok, status = await self._get_relay().post_result(
             job_id, inline, frame.get("mime"), frame.get("processingMs")
         )
+        processing_ms = frame.get("processingMs")
         if ok:
             await self._ack_and_release(session, credits, job_id, "result")
-        else:
-            # non-2xx/сеть: НЕ ack (запись остаётся pending для reclaim), но кредит
-            # освобождаем — иначе соединение заклинит на acquire_slot (nit#1).
-            await self._release_no_ack(
-                credits, job_id, "inline relay failed — pending, credit released"
+            return
+
+        # HTTP 4xx — permanent client error (пустой data, битый jobId и т.п.) → DLQ
+        # сразу, без бесконечного idle-reclaim (symmetric с permanent fail-веткой).
+        if status is not None and 400 <= status < 500:
+            reason = f"inline relay rejected HTTP {status}"
+            logger.warning(
+                "inline relay 4xx → DLQ",
+                extra={"jobId": job_id, "status": status},
             )
+            await self._to_dlq_and_release(
+                session, credits, job_id, reason, processing_ms
+            )
+            return
+
+        # HTTP 5xx / сеть — capped retry (times_delivered / MAX_RETRIES), как fail-ветка.
+        times_delivered = await self._keydb.get_times_delivered(session.stream, job_id)
+        if times_delivered > MAX_RETRIES:
+            reason = f"inline relay failed (times_delivered={times_delivered})"
+            logger.warning(
+                "inline relay max retries exceeded → DLQ",
+                extra={"jobId": job_id, "timesDelivered": times_delivered,
+                       "maxRetries": MAX_RETRIES, "status": status},
+            )
+            await self._to_dlq_and_release(
+                session, credits, job_id, reason, processing_ms
+            )
+            return
+
+        # Retryable: оставить unacked (idle-reclaim переклеймит), кредит освободить.
+        await self._release_no_ack(
+            credits, job_id,
+            "inline relay failed — pending, credit released",
+            timesDelivered=times_delivered, status=status,
+        )
 
     async def _handle_fail(
         self, session: WorkerSession, credits: Credits, frame: dict

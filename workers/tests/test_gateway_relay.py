@@ -188,12 +188,12 @@ async def test_inline_result_relayed_then_acked_and_credit_released():
 
 @pytest.mark.asyncio
 async def test_inline_result_non_2xx_no_ack_but_credit_released():
-    # nit#1 (no-wedge): non-2xx → НЕ ack (pending), НО кредит освобождён →
-    # диспетчер идёт к следующему `>` (job2 выдаётся на том же соединении).
+    # nit#1 (no-wedge): 5xx при times_delivered≤MAX_RETRIES → retryable, НЕ ack,
+    # НО кредит освобождён → диспетчер идёт к следующему `>` (job2 выдаётся).
     payload = _b64(10)
     job1 = {"conversionId": 1, "targetFormat": "txt"}
     job2 = {"conversionId": 2, "targetFormat": "txt"}
-    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)], times_delivered=1)
     rec = RelayRecorder(status=500)
     async with _server(fake, rec) as port:
         async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
@@ -207,6 +207,80 @@ async def test_inline_result_non_2xx_no_ack_but_credit_released():
 
     assert len(rec.requests) == 1  # relay попытались вызвать
     assert fake.acks == []          # но НЕ ack'нули — запись 1-0 остаётся pending
+    assert fake.dlq_writes == []    # retryable 5xx — не DLQ
+
+
+@pytest.mark.asyncio
+async def test_inline_result_4xx_goes_to_dlq():
+    """HTTP 400 от Symfony (пустой data и т.п.) → немедленный DLQ, без бесконечного retry."""
+    payload = ""  # base64("") → Symfony 400 «data required»
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)], times_delivered=1)
+    rec = RelayRecorder(status=400)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            first = await _recv_job(c)
+            assert first["jobId"] == "1-0"
+            await c.send(json.dumps({"type": "result", "jobId": "1-0", "inline": payload}))
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    assert len(rec.requests) == 1
+    assert fake.acks == []
+    assert len(fake.dlq_writes) == 1
+    assert "inline relay rejected HTTP 400" in fake.dlq_writes[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_inline_result_5xx_max_retries_goes_to_dlq():
+    """HTTP 5xx на result-path при times_delivered>MAX_RETRIES → DLQ (symmetric с fail)."""
+    payload = _b64(10)
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1)], times_delivered=4)
+    rec = RelayRecorder(status=503)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({"type": "result", "jobId": "1-0", "inline": payload}))
+            await asyncio.sleep(0.1)
+
+    assert len(rec.requests) == 1
+    assert fake.acks == []
+    assert len(fake.dlq_writes) == 1
+    assert "inline relay failed (times_delivered=4)" in fake.dlq_writes[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_post_result_returns_status_tuple():
+    """post_result возвращает (ok, status) для различения 4xx vs 5xx/сеть."""
+    rec = RelayRecorder(status=400)
+    relay = _relay(rec)
+    ok, status = await relay.post_result("1-0", _b64(5), "text/plain", 42)
+    assert ok is False
+    assert status == 400
+
+    rec2 = RelayRecorder(status=200)
+    relay2 = _relay(rec2)
+    ok2, status2 = await relay2.post_result("1-0", _b64(5), None, None)
+    assert ok2 is True
+    assert status2 == 200
+
+
+@pytest.mark.asyncio
+async def test_post_result_network_error_status_none():
+    """Сетевая ошибка relay → (False, None) — result-path трактует как retryable."""
+
+    def _raise(request):
+        raise httpx.ConnectError("boom", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_raise))
+    relay = RelayClient(BASE_URL, INTERNAL_TOKEN, client=client)
+    ok, status = await relay.post_result("1-0", _b64(5), None, None)
+    assert ok is False
+    assert status is None
 
 
 # --------------------------------------------------------------------------
