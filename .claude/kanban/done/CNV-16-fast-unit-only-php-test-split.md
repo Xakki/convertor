@@ -6,6 +6,8 @@
 - test
 - tech-debt
 
+**Epic:** [[CNV-47]] — подзадача 7.
+
 **Description:**
 При реализации hardening-08 (fix#1 — задокументировать `test-php-live` как
 канонический CI-таргет) вскрылось, что премиса карты неверна: **нет** быстрого
@@ -38,9 +40,9 @@ unit-only split» остаётся открытым.
 итерации — теперь это вопрос СКОРОСТИ, а не корректности.
 
 **Acceptance Criteria:**
-- [ ] Добавлен `make test-php-unit` — гоняет только `tests/Unit`, без подъёма тест-стенда
-- [ ] `make test` остаётся каноническим CI-таргетом (полный сьют на live-стенде)
-- [ ] Документировано в `##` help Makefile
+- [x] Добавлен `make test-php-unit` — гоняет только `tests/Unit`, без подъёма тест-стенда
+- [x] `make test` остаётся каноническим CI-таргетом (полный сьют на live-стенде)
+- [x] Документировано в `##` help Makefile
 
 **Decisions:**
 - Да: добавить `make test-php-unit` (только `tests/Unit`), без подъёма стенда.
@@ -50,4 +52,9 @@ unit-only split» остаётся открытым.
 **Work notes:**
 Groomed 2026-08-01: approve fast unit-only target; make test stays CI canonical.
 
-**Status:** todo.
+**Status:** ready.
+
+## Execution Log
+
+- 2026-08-01: added `test-php-unit` in `app-symfony/Makefile`; no `REQUIRE_TEST`; phpunit `tests/Unit`.
+- 2026-08-01: verified `make test-php-unit` on dev php container — OK (236 tests, 948 assertions, ~0.6s); no test-stand. AC met → test→ready.

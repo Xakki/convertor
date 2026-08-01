@@ -8,6 +8,8 @@
 - frontend
 - backend
 
+**Epic:** [[CNV-47]] — подзадача 9.
+
 **Описание:**
 `App\Service\Conversion\ConversionManager::checkAuth()`
 (`app-symfony/src/Service/Conversion/ConversionManager.php:91`) бросает
@@ -45,4 +47,8 @@ Telegram, хотя доступны и другие провайдеры).
 ai/video была обобщена под мультипровайдерный `/login`, backend-текст той же
 ошибки — не тронут (вне скоупа карточки, чисто header/nav).
 
-**Status:** todo / ready
+**Status:** ready
+
+## Execution Log
+- 2026-08-01: todo→progress. Message set to `Для ai/video конвертаций нужен вход.` (align `home.ai_gate_message`). Updated ConversionManager::checkAuth + GuestGate/GuestAuthentication tests + redesign-auth-access-contract skill. Commit aed54f8.
+- 2026-08-01: PHPUnit OK — ConversionManagerGuestGateTest (6/32), GuestAuthenticationTest (5/33). progress→test→ready.

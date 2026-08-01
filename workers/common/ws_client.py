@@ -9,7 +9,7 @@
       → ready{workerId, workerType, slots, version, cpu, mem, load}
       → приём job → скачивание входа (GET /jobs/{id}/input через Symfony, НЕ прямой S3)
       → handle_job(job, progress) → ResultSignal
-      → completion: inline ≤ порога по WS / large → POST /jobs/{id}/result + result{resultKey}
+      → result{inline} ≤ порога по WS / large → POST /jobs/{id}/result + result{resultKey}
         / fail{error, permanent?}
       → progress ~1/сек ТОЛЬКО пока задача в работе
       → ping + детект N пропущенных pong → reconnect тем же workerId + backoff.

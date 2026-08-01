@@ -6,6 +6,8 @@
 - frontend
 - tech-debt
 
+**Epic:** [[CNV-47]] — подзадача 12.
+
 **Описание:**
 При загрузке `/` анонимным гостем в консоли 4 запроса
 `POST /api/v1/auth/refresh` → 401 (тихо обрабатываются, функционально
@@ -31,4 +33,12 @@ refresh на страницу; повторные callers ждут тот же P
 **Decisions:**
 - (2026-08-01) Shared page-level refresh Promise (дедуп inflight).
 
-**Status:** todo / ready
+**Status:** ready
+
+## Execution Log
+
+- (2026-08-01) Shared `window.sharedAuthRefresh()` in `_header.html.twig` (inflight Promise; body parsed once; cleared after settle).
+- Wired: `headerNav().init()`, `converterApp().tryRefresh()`, `dashboardApp().tryRefresh()`.
+- admin/base untouched.
+- Verification: code review (no JS unit tests); raw fetch only inside sharedAuthRefresh for public layout.
+- Commit: frontend shared Promise (Agent: frontend).

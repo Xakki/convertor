@@ -18,7 +18,7 @@ Symfony API по HTTPS. `ws-gateway` и `metrics-exporter` остаются ТО
 | Компонент | Remote-хост | Главный сервер |
 |---|---|---|
 | worker-libreoffice, worker-ffmpeg-audio/video, worker-image, worker-data, worker-ai | ✅ | (свои экземпляры продолжают работать параллельно) |
-| fluent-bit (сайдкар из `docker/fluent-log`) | ✅ (свой, локальный) | ✅ (свой, локальный) |
+| fluent-bit | ✅ project sidecar из `docker/fluent-log` | ✅ host-level shared-fluent-bit (НЕ project sidecar) |
 | ws-gateway | ❌ | ✅ (единственный читатель KeyDB Streams) |
 | metrics-exporter | ❌ | ✅ |
 | php / nginx / mariadb / keydb | ❌ | ✅ |
@@ -37,13 +37,19 @@ on-server воркерам: gateway балансирует задачи межд
   `docs/worker-ai-deploy.md`) — happy path тянет их готовыми. Локальная
   сборка из исходников остаётся фолбэком для свежего хоста без доступа к
   Harbor или разработки (см. «Получение образов» ниже).
-- **Инициализировать git-сабмодуль `docker/fluent-log`** — без него падает не
-  только запуск, но и `docker compose config` (в `docker/fluent-logging.yml`
-  есть `include: docker/fluent-log/docker-fluent.yml`, отсутствующий файл
-  ломает валидацию compose-файла целиком):
+- **Инициализировать git-сабмодуль `docker/fluent-log`** — remote `.env.local`
+  (из `.env.local_worker_example`) добавляет `docker/fluent-log/docker-fluent.yml`
+  в `COMPOSE_FILE`; без инициализированного сабмодуля compose не найдёт файл
+  и упадёт. Сам `docker/fluent-logging.yml` только настраивает logging-driver
+  (fluentd → `${EXT_FLUENT_PORT}`), `include:` сайдкара в нём нет:
   ```bash
   git submodule update --init docker/fluent-log
   ```
+
+**Архитектура логирования (осознанное отклонение):** на saFin (главный сервер)
+логи идут в общий host-wide fluent-bit; на remote-хосте — project sidecar из
+сабмодуля `docker/fluent-log`, поднимаемый вместе со стеком через `COMPOSE_FILE`.
+Это намеренное отличие от кросс-проектного стандарта shared-fluent на saFin.
 - Сетевой доступ с remote-хоста к главному серверу (`wss://` gateway) и к
   Graylog (`https://log.variantgood.com/gelf`) — см. проверку связности ниже.
   Никакого входящего порта на remote-хосте открывать не нужно — все
@@ -100,7 +106,7 @@ metrics-exporter — под `monitoring` (он к тому же требует �
 | `AI_PULL_POLICY` | `always` на CPU-хосте / `build` на GPU-хосте | Отдельная политика для `worker-ai`: `worker-ai:latest-cpu` публикуется в Harbor (`always` безопасен), `worker-ai:latest-cuda` — НЕТ (GPU-хост обязан ставить `build`: `missing` спасает только `make up`, явный `make pull` при `missing` всё равно пытается запросить несуществующий тег и падает exit 2; `always` хардфейлит «pull access denied» сразу). |
 | `IMAGE_TAG` | `latest` (или запиненная версия релиза, напр. `0.1-a1b2c3d`) | Какой тег пуллить/использовать в compose; пиновка версии — только на remote, главный сервер всегда на `latest`. |
 | `COMPOSE_FILE` | из шаблона (+ `docker/fluent-log/docker-fluent.yml`) | Свой fluent-bit-сайдкар поднимается вместе со стеком: общего host-wide сборщика на remote-хосте нет. |
-| `EXT_FLUENT_PORT` | напр. `0.0.0.0:24224` | Порт своего сайдкара — он его и слушает, и в него же шлют логи контейнеры. |
+| `EXT_FLUENT_PORT` | `127.0.0.1:24224` (loopback) | Intake сайдкара — только localhost: docker logging-driver на хосте шлёт логи в sidecar. Не переопределять на `0.0.0.0` — сборщик не должен слушать снаружи. |
 | `GATEWAY_WS_URL` / `API_BASE_URL` | дефолты из трекаемого `.env` подходят (`wss://convertor.xakki.pro/ws/worker/`, `https://convertor.xakki.pro`) | Переопределять только для нестандартного стенда; `API_BASE_URL` — корень API, БЕЗ `/api`-суффикса. |
 | `AI_VARIANT`/`AI_RUNTIME` | опционально: `cuda`/`nvidia` на GPU-хосте | По умолчанию `cpu`/`runc` (см. `docker-compose.yml` сервис `worker-ai`) — задавать нужно только на GPU-хосте. |
 
@@ -111,17 +117,16 @@ metrics-exporter — под `monitoring` (он к тому же требует �
 `git pull && make pull && make workers-recreate`) — `always` тут ничего не
 даёт, а фолбэк ломает. Проверено эмпирически.
 
-`GRAYLOG_HOST`/`GRAYLOG_PORT`/`GRAYLOG_URI`/`HOST_NAME`/`HOST_IP`/`EXT_FLUENT_PORT`
-**настраивать не нужно вообще** — с 2026-07 `worker-ai` живёт прямо в
-`docker-compose.yml` как обычный сервис на общем `x-logging`
-(`docker/fluent-logging.yml`), наравне с остальными 5 воркерами: все 6 шлют
-логи через один и тот же `${EXT_FLUENT_PORT}`, а трекаемый `.env` уже задаёт
-для него верное значение на любом хосте (никакого отдельного захардкоженного
-адреса у `worker-ai` больше нет — это был баг, зафиксированный и починенный).
+`GRAYLOG_HOST`/`GRAYLOG_PORT`/`GRAYLOG_URI`/`HOST_NAME`/`HOST_IP` **на remote
+настраивать не нужно** — трекаемый `.env` уже задаёт верные значения.
+`EXT_FLUENT_PORT` тоже: дефолт в трекаемом `.env` — loopback `127.0.0.1:24224`;
+не переопределять на `0.0.0.0`. На remote **обязательно** задать `COMPOSE_FILE`
+из шаблона (с `docker/fluent-log/docker-fluent.yml`), иначе sidecar не войдёт в
+стек при `make up` — логи некуда слать. С 2026-07 все 6 воркеров шлют логи через
+общий `x-logging` (`docker/fluent-logging.yml`) в `${EXT_FLUENT_PORT}`.
 `HOST_NAME`/`HOST_IP` корневой `Makefile` сам вычисляет через
-`hostname`/`hostname -I`. Переопределять что-либо из этого в `.env.local`
-remote-хоста имеет смысл, только если авто-значение неинформативно (напр.
-generic-имя VM) — тогда просто задайте нужную переменную явно.
+`hostname`/`hostname -I`. Переопределять их в `.env.local` имеет смысл только
+если авто-значение неинформативно (напр. generic-имя VM).
 
 ### `WORKER_HOST` — явный host/node-идентификатор воркера (registry-08)
 
@@ -249,7 +254,7 @@ docker compose stop worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video w
 | WS закрывается сразу с `close 1008 unauthorized` (см. лог воркера) | `WORKER_API_TOKEN` пуст/не совпадает с тем, что знает gateway/Symfony. | Сверить `WORKER_API_TOKEN` в `.env.local` remote-хоста с актуальным значением на главном сервере. |
 | Воркер падает при старте: `GATEWAY_WS_URL пуст — некуда подключаться` | `GATEWAY_WS_URL` не задан/пуст И воркер запущен НЕ в prod worker-режиме (в котором есть встроенный прод-дефолт) — например, случайно собран/запущен devserver-путь. | Явно задать `GATEWAY_WS_URL=wss://convertor.xakki.pro/ws/worker/` в `.env.local`; убедиться, что `command` контейнера — `python3 -m workers.<type>`, не `--devserver`. |
 | Воркер стартует, но HTTP-запросы к API уходят на `http://localhost:8080` | `API_BASE_URL` не задан — это дефолт из `WsClientConfig.from_env` (`workers/common/ws_client.py`), применяемый ТОЛЬКО когда прод-дефолт для конкретного воркера тоже не сработал (нештатный запуск). | Явно задать `API_BASE_URL=https://convertor.xakki.pro` (без пути) в `.env.local`. |
-| Логи воркеров не доходят до Graylog (в интерфейсе Graylog пусто по `HOST_NAME` remote-хоста) | Чаще всего — сабмодуль `docker/fluent-log` не инициализирован (`git submodule update --init docker/fluent-log`), `fluent-bit` не поднят (`make fluent-up`) или нет исходящей связности до `log.variantgood.com:443`. Все 6 воркеров и сайдкар настраивать под remote-хост отдельно не нужно — общий `${EXT_FLUENT_PORT}` уже верен на любом хосте (см. раздел выше). | `docker compose logs fluent-bit` на предмет ошибок исходящего соединения; убедиться, что `make fluent-up` выполнен; preflight-curl №3 выше. |
+| Логи воркеров не доходят до Graylog (в интерфейсе Graylog пусто по `HOST_NAME` remote-хоста) | Сабмодуль `docker/fluent-log` не инициализирован; в `.env.local` нет `docker/fluent-log/docker-fluent.yml` в `COMPOSE_FILE` (sidecar не поднялся с `make up`); `fluent-bit` остановлен; `EXT_FLUENT_PORT` ошибочно переопределён на `0.0.0.0`; нет исходящей связности до `log.variantgood.com:443`. | `git submodule update --init docker/fluent-log`; проверить `COMPOSE_FILE` из шаблона; `make fluent-up` или полный `make up`; `EXT_FLUENT_PORT=127.0.0.1:24224`; `docker compose logs fluent-bit`; preflight-curl №3 выше. |
 
 ## AI на CPU — ограничение производительности
 

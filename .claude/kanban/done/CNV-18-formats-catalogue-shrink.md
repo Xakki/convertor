@@ -8,6 +8,8 @@
 - data-quality
 - docs
 
+**Epic:** [[CNV-47]] — подзадача 5.
+
 **Description:**
 При seed-миграции `ConversionRegistry` DB-матрица рекламирует на 57 пар меньше,
 чем старый PHP-hardcode. Все 57 пар проверены по Python-воркерам — ни одна
@@ -40,4 +42,13 @@ Docs / `ROADMAP.md` / UI-копия могут всё ещё перечисля�
 - Реализация недостающих пар остаётся Stage 7 / freeze — не в этой карточке.
 - Guard registry↔worker — **не** заводить отдельную карточку сейчас.
 
-**Status:** todo.
+**Status:** ready.
+
+**Execution Log:**
+- 2026-08-01: Inventory: live matrix 309 pairs (golden); dead docs/UI surfaces found.
+- 2026-08-01: Docs: ROADMAP matrix + queue-streams markup claim aligned to live; Stage 7 rows explicit.
+- 2026-08-01: UI: CuratedConversionPairs + ExampleCatalog markup→document; TEXTUAL_SOURCE_FORMATS drop rst/latex/wiki; SHOWCASE drop markup/archive; app-front FORMAT_GROUPS shrink.
+- 2026-08-01: No registry↔worker guard; no new format pairs (CNV-41 owns).
+- 2026-08-01: Residual: `make seed-examples` needed after ExampleCatalog category change (S3 path examples/document/…).
+- 2026-08-01: Unit OK — CuratedConversionPairsTest, ConversionRegistryTextSourceTest, ExampleCatalogTest.
+- 2026-08-01: → ready (catalogue shrink complete; AC met).

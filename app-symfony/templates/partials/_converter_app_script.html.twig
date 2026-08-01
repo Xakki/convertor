@@ -103,12 +103,11 @@
     // Текстовый allowlist source-форматов — 1:1 с бэкендом
     // (ConversionRegistry::TEXTUAL_SOURCE_FORMATS, app-symfony/src/Service/
     // Conversion/ConversionRegistry.php). НЕ category-based: DB-матрица
-    // (/api/v1/formats) сегодня регистрирует md/html/rst под category=
-    // 'document' (нет отдельной 'markup' категории у реально зарегистрированных
-    // воркеров) — фильтр по category молча вырезал бы md/html из UI (проверено
-    // на живом стенде). Меняешь список тут — синхронно меняй и на бэкенде.
+    // (/api/v1/formats) регистрирует md/html под category='document' — фильтр
+    // по category молча вырезал бы md/html из UI. Меняешь список тут — синхронно
+    // меняй и на бэкенде.
     const TEXTUAL_SOURCE_FORMATS = [
-        'txt', 'md', 'rst', 'latex', 'wiki', 'html', 'csv', 'json', 'xml', 'yaml', 'toml',
+        'txt', 'md', 'html', 'csv', 'json', 'xml', 'yaml', 'toml',
     ];
     // home-05: клиентское зеркало ConversionController::PREVIEWABLE_FORMATS —
     // целевые форматы, чей результат сервер считает текстовым превью (см. isPreviewable()
@@ -126,7 +125,7 @@
     // Список категорий не хардкодит форматы: он лишь задаёт приоритет уже
     // пришедших из /api/v1/formats значений FileCategory; неизвестная/новая
     // категория просто уедет в конец через fallback-индекс.
-    const SHOWCASE_CATEGORY_ORDER = ['document', 'image', 'data', 'audio', 'video', 'markup', 'archive'];
+    const SHOWCASE_CATEGORY_ORDER = ['document', 'image', 'data', 'audio', 'video'];
 
     // home-09: options = {lockedFrom, lockedTo, lockedCategory} — только на
     // conversion/pair.html.twig (source/target зафиксированы из URL пары и не
@@ -773,15 +772,10 @@
 
             async tryRefresh() {
                 try {
-                    const res = await fetch('/api/v1/auth/refresh', {
-                        method: 'POST',
-                        credentials: 'include',
-                    });
-                    if (!res.ok) return false;
-                    const d = await res.json();
-                    if (!d.token) return false;
-                    this.auth.token = d.token;
-                    localStorage.setItem('jwt', d.token);
+                    const { ok, token } = await window.sharedAuthRefresh();
+                    if (!ok || !token) return false;
+                    this.auth.token = token;
+                    localStorage.setItem('jwt', token);
                     return true;
                 } catch (e) {
                     return false;

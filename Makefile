@@ -20,9 +20,10 @@ export
 DC         = docker compose
 # Пере-вход в make с тест-окружением (идемпотентен — повторный TEST=1 безвреден).
 MAKE_TEST  = $(MAKE) --no-print-directory TEST=1
-# fluent-bit-сайдкар живёт в submodule-компоузе, которого НЕТ в COMPOSE_FILE:
-# на главном сервере логи идут в общий host-wide сборщик, свой сайдкар нужен
-# только remote-хостам (см. fluent-* таргеты).
+# fluent-bit-сайдкар — submodule-компоуз docker/fluent-log/docker-fluent.yml.
+# Трекаемый COMPOSE_FILE его не включает (saFin → host-level shared-fluent);
+# remote .env.local из .env.local_worker_example ДОБАВЛЯЕТ его в COMPOSE_FILE.
+# fluent-* таргеты поднимают сайдкар через $(DC_FLUENT) независимо от COMPOSE_FILE.
 DC_FLUENT  = COMPOSE_FILE=docker-compose.yml:docker/fluent-log/docker-fluent.yml:docker/fluent-logging.yml docker compose
 PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
@@ -103,7 +104,11 @@ config-check:
 	@$(DC) config -q
 
 .PHONY: harbor-login
-harbor-login: ## Login to Docker registry
+harbor-login: ## Login to Harbor (DOCKER_* from .env/.env.local)
+	@if [ -z "$(DOCKER_REGISTRY)" ] || [ -z "$(DOCKER_USER)" ] || [ -z "$(DOCKER_PASS)" ]; then \
+		echo "✋ harbor-login: задайте DOCKER_REGISTRY в .env, DOCKER_USER и DOCKER_PASS в .env.local"; \
+		exit 1; \
+	fi
 	docker login $(DOCKER_REGISTRY) -u $(DOCKER_USER) -p $(DOCKER_PASS)
 
 .PHONY: logs

@@ -58,14 +58,15 @@ on `network common declared as external, but could not be found` — that networ
 lives only on saFin. Card
 `.claude/kanban/grooming/remote-host-make-up-footgun.md`.
 
-**`-fluent-bit` is not part of `COMPOSE_FILE`** (since `cab0124` moved logging to
-a host-level shared fluent). Log shipping WORKS — uBook's `.env.local` sets
-`EXT_FLUENT_PORT=0.0.0.0:24224`, the sidecar listens there, and entries land in
-Graylog under source `192.168.10.12` (verified 2026-07-29). Since 2026-07-30
-`make fluent-up` / `fluent-restart` / `fluent-logs` work again: they run the
-submodule compose explicitly (`$(DC_FLUENT)` in the root Makefile), so a stopped
-sidecar can be brought back. Card
-`.claude/kanban/grooming/CNV-17-fluent-bit-orphan-remote-host.md`.
+**Remote fluent-bit = intentional project sidecar** (deviation from saFin's
+host-level shared-fluent). Worker `.env.local` from `.env.local_worker_example`
+adds `docker/fluent-log/docker-fluent.yml` to `COMPOSE_FILE`, so `make up` starts
+the sidecar with the stack. Required bind: `EXT_FLUENT_PORT=127.0.0.1:24224`
+(loopback only — docker logging-driver on host → sidecar; never `0.0.0.0`).
+If a live host still has an old `.env.local` WITHOUT that compose file,
+`make fluent-up` / `fluent-restart` / `fluent-logs` still work via `$(DC_FLUENT)`
+in the root Makefile. Card CNV-17
+(`.claude/kanban/progress/CNV-17-fluent-bit-orphan-remote-host.md`).
 
 **⚠ `docker compose config` over bare `ssh` LIES here.** `docker compose`
 auto-loads only `.env`; `.env.local` reaches compose solely because the root
@@ -108,10 +109,12 @@ ssh uBook 'cd /home/xakki/www/xakki/convertor && make workers-recreate'   # 4. -
   need explicit user approval). An untracked `shared-files/` dir is known
   cruft, not a blocker (the project has no shared volume; safe to ignore, and
   worth flagging for deletion).
-- **git submodule** `docker/fluent-log` — initialised on uBook (v0.1.4).
-  `COMPOSE_FILE` does NOT reference `docker/fluent-log/docker-fluent.yml`, so it
-  no longer gates `docker compose config`; the `fluent-*` targets reach it via
-  the Makefile's `$(DC_FLUENT)` override instead (since 2026-07-30).
+- **git submodule** `docker/fluent-log` — must be initialised on uBook.
+  Worker `.env.local` SHOULD list `docker/fluent-log/docker-fluent.yml` in
+  `COMPOSE_FILE` (see `.env.local_worker_example`); without it compose fails
+  on the missing path. `docker/fluent-logging.yml` only configures the logging
+  driver — no sidecar `include:` there. Fallback: `fluent-*` targets via
+  `$(DC_FLUENT)` in the root Makefile.
 - **Local build is now the fallback**, not the happy path — needed only if
   Harbor is unreachable from uBook or for one-off local debugging:
   `make build-workers build-ai-cpu`. First build after a Dockerfile change ran

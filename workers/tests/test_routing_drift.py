@@ -163,10 +163,12 @@ def _load_registry() -> dict[str, Any]:
     """
     script_path = REPO_ROOT / "app-symfony" / PHP_SCRIPT
     if shutil.which("php"):
+        env = {**os.environ, "APP_ENV": "test"}
         res = subprocess.run(
             ["php", str(script_path), "--json"],
             capture_output=True, text=True,
             cwd=str(REPO_ROOT / "app-symfony"),
+            env=env,
         )
         if res.returncode == 0:
             return _parse_registry_json(res.stdout, source="native php")

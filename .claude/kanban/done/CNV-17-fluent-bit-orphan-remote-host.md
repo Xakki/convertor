@@ -8,6 +8,8 @@
 - fluent-bit
 - remote-workers
 
+**Epic:** [[CNV-47]] — подзадача 8.
+
 **Description:**
 Коммит `cab0124` («fix fluent-logging - use shared fluent») убрал сервис `fluent-bit` из
 `docker/fluent-logging.yml` — проект перешёл на host-level shared fluent-bit. Доставка логов с
@@ -40,11 +42,11 @@ uBook **работает**: гитигнорнутый `.env.local` задаёт
 отклонение; saFin orphan prune — ops OK.
 
 **Acceptance Criteria:**
-- [ ] Модель: проектный fluent-bit sidecar на remote-хостах (не host-level shared)
-- [ ] Intake bind — `127.0.0.1:24224` (не `0.0.0.0`)
-- [ ] Документация: intentional отклонение от shared-fluent на remote; как поднять на новом хосте
-- [ ] `docs/workers-remote-deploy.md` синхронизирован с фактическим compose
-- [ ] Orphan'ы на saFin — prune ops OK (не блокер кода)
+- [x] Модель: проектный fluent-bit sidecar на remote-хостах (не host-level shared)
+- [x] Intake bind — `127.0.0.1:24224` (не `0.0.0.0`)
+- [x] Документация: intentional отклонение от shared-fluent на remote; как поднять на новом хосте
+- [x] `docs/workers-remote-deploy.md` синхронизирован с фактическим compose
+- [x] Orphan'ы на saFin — prune ops OK (не блокер кода)
 
 **Decisions:**
 - Оставляем проектный sidecar (не переходим на host-level shared на remote).
@@ -59,4 +61,10 @@ Groomed 2026-08-01: keep project sidecar; loopback bind; doc intentional; drop b
 **Контекст:** обновлено 2026-07-29 по итогам верификации на uBook (см. также
 `remote-host-make-up-footgun.md`).
 
-**Status:** todo.
+**Status:** ready.
+
+## Execution Log
+
+- 2026-08-01: started (todo→progress) on epic/CNV-47. Scope from Decisions: keep remote project sidecar; bind `127.0.0.1:24224`; document intentional deviation from saFin shared-fluent; sync `docs/workers-remote-deploy.md` + worker env example + ubook skill. Orphan prune saFin = ops OK (no code).
+- 2026-08-01: implemented — `.env.local_worker_example` loopback bind; `docs/workers-remote-deploy.md` synced (sidecar vs shared-fluent, no false include:); ubook-remote-workers skill + Makefile comment. Commit `23942e5` (Agent: docs; Co-authored-by stripped via commit-tree). saFin orphan prune = ops residual (not code). Live uBook `.env.local` still may have `0.0.0.0` — ops to rebind when convenient (gitignored).
+- 2026-08-01: progress→test→ready (docs/config AC met; no compose yaml change → docker-check N/A).

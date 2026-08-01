@@ -314,7 +314,7 @@ test-gateway: build-data-test ## KeyDB-слой WS-Gateway на РЕАЛЬНОМ
 	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_liveness_push.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_dlq_consumer.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
 
 .PHONY: test-e2e
-test-e2e: build-workers build-ffmpeg-test ## Реальный S3 in/out e2e для ffmpeg + data воркеров на тест-стенде
+test-e2e: build-workers build-ffmpeg-test ## Реальный S3 in/out e2e: data-воркер csv→json на тест-стенде
 	$(REQUIRE_TEST)
 	$(MAKE) up migrate
 	docker run --rm -u root \

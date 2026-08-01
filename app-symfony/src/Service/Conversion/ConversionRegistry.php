@@ -87,19 +87,16 @@ class ConversionRegistry
 
     /**
      * Explicit textual-source allowlist for {@see isTextSourceSupported()}
-     * (home-02-text-input) — Документы(txt) + Разметка(md/rst/latex/html/wiki)
-     * + Данные(csv/json/xml/yaml/toml), per ROADMAP.md «Матрица поддерживаемых
-     * конвертаций». A FIXED format list, not a category lookup: the DB-backed
-     * matrix ({@see buildMatrixFromCapabilities()}) collapses markup/data pairs
-     * into whatever `FileCategory` the registering worker declared (in
-     * production today that is `document` for md/html/rst — no dedicated
-     * `markup` category is actually registered), so branching on
+     * (home-02-text-input) — текстовые source-форматы из live-матрицы: документы
+     * (txt/md/html) + данные (csv/json/xml/yaml/toml). A FIXED format list, not
+     * a category lookup: the DB-backed matrix registers these under various
+     * `FileCategory` values (md/html под `document`), so branching on
      * {@see getCategory()} would silently reject legitimate textual sources.
      * Binary Document members (docx/odt/rtf/epub/pages/pdf) are deliberately
      * NOT in this list.
      */
     private const TEXTUAL_SOURCE_FORMATS = [
-        'txt', 'md', 'rst', 'latex', 'wiki', 'html', 'csv', 'json', 'xml', 'yaml', 'toml',
+        'txt', 'md', 'html', 'csv', 'json', 'xml', 'yaml', 'toml',
     ];
 
     /**

@@ -51,6 +51,16 @@ final class WorkerCapabilityGcService
      */
     private const SEED_INSTANCE_ID = '__seed__';
 
+    /**
+     * Известные junk instance_id — удаляются на каждом GC-проходе независимо от TTL
+     * (registry-09 / CNV-36). Seed (`__seed__`) сюда НЕ включать.
+     *
+     * @var list<string>
+     */
+    private const JUNK_INSTANCE_IDS = [
+        'test:worker',
+    ];
+
     public function __construct(
         private readonly ManagerRegistry $registry,
         private readonly ConversionRegistry $conversionRegistry,
@@ -82,6 +92,13 @@ final class WorkerCapabilityGcService
                 'threshold'      => $threshold->format('Y-m-d H:i:s'),
             ],
         );
+
+        foreach (self::JUNK_INSTANCE_IDS as $junkInstanceId) {
+            $deleted += (int) $conn->executeStatement(
+                'DELETE FROM worker_capabilities WHERE instance_id = :junkInstanceId',
+                ['junkInstanceId' => $junkInstanceId],
+            );
+        }
 
         if ($deleted > 0) {
             // Не ждать до часа (cache.app TTL, registry-05 ConversionRegistry::

@@ -230,7 +230,7 @@ PHP maps `state` → `ConversionStatus::tryFrom($state)`; an unknown/missing
 Workers return results via `ResultSignal` to the gateway WS connection.
 The gateway handles persist via the internal relay endpoint:
 
-- **Small (≤256 KB):** inline base64 in `completion{data}` WS frame → gateway
+- **Small (≤256 KB):** inline base64 in `result{inline}` WS frame → gateway
   POSTs to Symfony relay → `ConversionResultPersister`.
 - **Large:** worker POSTs binary to `POST /api/v1/worker/jobs/{id}/result`
   directly → Symfony stores to S3, then worker sends `result{resultKey}` WS

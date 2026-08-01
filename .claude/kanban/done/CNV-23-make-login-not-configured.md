@@ -8,6 +8,8 @@
 - harbor
 - ci
 
+**Epic:** [[CNV-47]] — подзадача 6.
+
 **Description:**
 Таргет `harbor-login` в корневом `Makefile` (строка ~90):
 ```makefile
@@ -47,4 +49,7 @@ harbor-login: ## Login to Docker registry
 **Контекст:** обнаружено 2026-07-23 при написании скилла `image-build-deploy`
 (топология сборки/деплоя образов convertor).
 
-**Status:** todo / ready
+**Status:** ready
+
+## Execution Log
+- 2026-08-01 — wired DOCKER_REGISTRY in .env; DOCKER_USER/PASS placeholders in .env.local_example; empty placeholders in .env; hardened make harbor-login; updated image-build-deploy skill; smoke logout→login OK. Commit 9f638fb.

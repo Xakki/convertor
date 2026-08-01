@@ -362,15 +362,10 @@
 
             async tryRefresh() {
                 try {
-                    const res = await fetch('/api/v1/auth/refresh', {
-                        method: 'POST',
-                        credentials: 'include',
-                    });
-                    if (!res.ok) return false;
-                    const d = await res.json();
-                    if (!d.token) return false;
-                    this.auth.token = d.token;
-                    localStorage.setItem('jwt', d.token);
+                    const { ok, token } = await window.sharedAuthRefresh();
+                    if (!ok || !token) return false;
+                    this.auth.token = token;
+                    localStorage.setItem('jwt', token);
                     return true;
                 } catch (e) {
                     return false;

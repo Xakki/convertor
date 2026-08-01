@@ -215,7 +215,7 @@ footer:
 # со skill redesign-auth-access-contract — описывает только реально
 # собираемые данные, ничего не выдумываем.
 legal:
-    updated_on: 'Last updated: July 21, 2026.'
+    updated_on: 'Last updated: August 1, 2026.'
     privacy:
         title: 'Privacy Policy — File Converter'
         heading: 'Privacy Policy'
@@ -223,7 +223,7 @@ legal:
         data_heading: 'What we collect'
         data_guest_cookie: '`guest_id` cookie — an httpOnly, signed identifier that lets you use the conversion service anonymously (as a guest) without creating an account, and lets us associate your conversions and history with that anonymous identity.'
         data_locale_cookie: '`locale` cookie — remembers your chosen interface language (English/Russian).'
-        data_consent_cookie: '`cookie_consent` cookie — remembers your choice ("Accept"/"Decline") in the cookie notice. The cookie itself is strictly necessary (it only stores the choice you made), but the optional convenience it unlocks — showing your conversion history on this device below the form on the homepage — only works if you choose "Accept". Choosing "Decline" simply hides that history; converting files itself does not depend on this choice and works identically either way.'
+        data_consent_cookie: '`cookie_consent` cookie — remembers your choice ("Accept"/"Decline") in the cookie notice. The cookie itself is strictly necessary (it only stores the choice you made), but the optional convenience it unlocks — showing your conversion history on this device in the service — only works if you choose "Accept". Choosing "Decline" simply hides that history; converting files itself does not depend on this choice and works identically either way.'
         data_oauth: 'Account profile data — if you sign in via Telegram or an OAuth provider (Google, GitHub, Yandex, VK), we receive and store basic profile information from that provider: your Telegram ID/username or, for OAuth, a verified email address, display name, username and avatar (exact fields depend on the provider). We also set an httpOnly session/refresh-token cookie to keep you signed in.'
         data_session_cookie: 'Sign-in session cookies — a short-lived `tg_login_nonce` cookie during Telegram sign-in, and an httpOnly refresh-token cookie after a successful sign-in, both strictly necessary to complete and maintain the login.'
         data_files: 'Uploaded files and conversion results — stored temporarily in our S3-compatible object storage while your conversion is processed and available for download, then automatically deleted (as soon as 24 hours for anonymous/guest use; longer, depending on your plan, for signed-in accounts).'
@@ -245,7 +245,7 @@ legal:
         service_heading: 'The service'
         service_text: 'File Converter lets you upload a file (or, for some formats, paste text) and convert it to another format. Some conversions can be used anonymously as a guest; conversions that use AI processing or produce video require signing in.'
         limits_heading: 'Limits and plans'
-        limits_text: 'The service enforces daily conversion quotas and a maximum upload size per plan (free vs. paid); current values are shown on the home page under “Limits and pricing”. We may adjust these limits as the service evolves.'
+        limits_text: 'The service enforces daily conversion quotas and a maximum upload size per plan (free vs. paid); current values are shown in the service interface. We may adjust these limits as the service evolves.'
         acceptable_use_heading: 'Acceptable use'
         acceptable_use_text: 'You agree not to:'
         acceptable_use_item_illegal: 'Upload content that is illegal, infringes someone else’s rights, or that you do not have the right to process.'

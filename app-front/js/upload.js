@@ -2,71 +2,53 @@
  * upload.js — File converter Alpine.js component
  */
 
-// Format groups mapping: source format → available target formats
+// Fallback catalogue when /api/v1/formats is unavailable; live matrix from API overrides on init().
 const FORMAT_GROUPS = {
   // Documents
   doc:   ['docx','odt','pdf','txt','html','md','rtf','epub'],
   docx:  ['odt','pdf','txt','html','md','rtf','epub'],
   odt:   ['docx','pdf','txt','html','md','rtf','epub'],
-  rtf:   ['docx','odt','pdf','txt','html','md'],
-  txt:   ['docx','odt','pdf','html','md'],
-  html:  ['docx','odt','pdf','txt','md'],
-  epub:  ['docx','odt','pdf','txt','html'],
-  // PDF
-  pdf:   ['docx','txt','md','jpg'],
-  // Markup
-  md:    ['rst','html','pdf','docx'],
-  rst:   ['md','html','pdf','docx'],
-  // Data
-  csv:   ['json','xml','yaml'],
-  json:  ['csv','xml','yaml'],
-  xml:   ['csv','json','yaml'],
-  yaml:  ['csv','json','xml'],
+  rtf:   ['docx','odt','pdf','txt','html','md','epub'],
+  txt:   ['docx','odt','pdf','html','md','rtf','epub'],
+  htm:   ['docx','odt','pdf','txt','html','md','rtf','epub'],
+  html:  ['docx','odt','pdf','txt','md','rtf','epub'],
+  md:    ['docx','odt','pdf','txt','html','rtf','epub'],
+  epub:  ['md'],
+  pdf:   ['docx','txt','md'],
+  // Data (no yaml↔yml cross)
+  csv:   ['json','xml','yaml','yml','toml'],
+  json:  ['csv','xml','yaml','yml','toml'],
+  xml:   ['csv','json','yaml','yml','toml'],
+  yaml:  ['csv','json','xml','toml'],
+  yml:   ['csv','json','xml','toml'],
+  toml:  ['csv','json','xml','yaml','yml'],
   // Images
-  jpg:   ['png','gif','bmp','webp','tiff','ico','avif','pdf'],
-  jpeg:  ['png','gif','bmp','webp','tiff','ico','avif','pdf'],
-  png:   ['jpg','gif','bmp','webp','tiff','ico','avif','pdf'],
-  gif:   ['jpg','png','bmp','webp','tiff'],
-  bmp:   ['jpg','png','gif','webp','tiff'],
-  webp:  ['jpg','png','gif','bmp','tiff'],
-  tiff:  ['jpg','png','gif','bmp','webp'],
-  svg:   ['png','jpg','pdf'],
-  ico:   ['png','jpg'],
-  avif:  ['jpg','png','webp'],
-  heic:  ['jpg','png','webp'],
+  jpg:   ['png','gif','bmp','webp','tiff','ico','pdf','docx','md','txt'],
+  jpeg:  ['png','gif','bmp','webp','tiff','ico','pdf','docx','md','txt'],
+  png:   ['jpg','gif','bmp','webp','tiff','ico','pdf','docx','md','txt'],
+  gif:   ['jpg','png','bmp','webp','tiff','ico','pdf'],
+  bmp:   ['jpg','png','gif','webp','tiff','ico','pdf'],
+  webp:  ['jpg','png','gif','bmp','tiff','ico','pdf'],
+  tiff:  ['jpg','png','gif','bmp','webp','ico','pdf','docx','md','txt'],
+  tif:   ['jpg','png','gif','bmp','webp','ico','pdf','docx','md','txt'],
+  ico:   ['png','jpg','gif','bmp','webp','tiff','pdf'],
   // Audio
   mp3:   ['wav','ogg','flac','aac','m4a','opus'],
   wav:   ['mp3','ogg','flac','aac','m4a','opus'],
   ogg:   ['mp3','wav','flac','aac','m4a','opus'],
-  flac:  ['mp3','wav','ogg','aac','m4a'],
-  aac:   ['mp3','wav','ogg','flac','m4a'],
-  m4a:   ['mp3','wav','ogg','flac','aac'],
-  opus:  ['mp3','wav','ogg','flac'],
-  wma:   ['mp3','wav','ogg','flac'],
+  flac:  ['mp3','wav','ogg','aac','m4a','opus'],
+  aac:   ['mp3','wav','ogg','flac','m4a','opus'],
+  m4a:   ['mp3','wav','ogg','flac','aac','opus'],
+  opus:  ['mp3','wav','ogg','flac','aac','m4a'],
+  wma:   ['mp3','wav','ogg','flac','aac','m4a','opus'],
   // Video
   mp4:   ['avi','mkv','mov','webm','mp3','wav','ogg','flac'],
-  avi:   ['mp4','mkv','mov','webm','mp3','wav'],
-  mkv:   ['mp4','avi','mov','webm','mp3','wav'],
-  mov:   ['mp4','avi','mkv','webm','mp3','wav'],
-  webm:  ['mp4','avi','mkv','mov'],
-  flv:   ['mp4','avi','mkv'],
-  wmv:   ['mp4','avi','mkv'],
-  // Archives
-  zip:   ['tar.gz'],
-  tar:   ['zip'],
-  gz:    ['zip'],
-  '7z':  ['zip','tar.gz'],
-  // Spreadsheets
-  xls:   ['xlsx','ods','csv','pdf'],
-  xlsx:  ['ods','csv','pdf'],
-  ods:   ['xlsx','csv','pdf'],
-  // Presentations
-  ppt:   ['pptx','odp','pdf'],
-  pptx:  ['odp','pdf'],
-  odp:   ['pptx','pdf'],
-  // CAD
-  dwg:   ['pdf','svg','png'],
-  dxf:   ['pdf','svg','png'],
+  avi:   ['mp4','mkv','mov','webm','mp3','wav','ogg','flac'],
+  mkv:   ['mp4','avi','mov','webm','mp3','wav','ogg','flac'],
+  mov:   ['mp4','avi','mkv','webm','mp3','wav','ogg','flac'],
+  webm:  ['mp4','avi','mkv','mov','mp3','wav','ogg','flac'],
+  flv:   ['mp4','avi','mkv','mov','webm','mp3','wav','ogg','flac'],
+  wmv:   ['mp4','avi','mkv','mov','webm','mp3','wav','ogg','flac'],
 };
 
 function converter() {

@@ -165,7 +165,7 @@ final class ConversionManagerGuestGateTest extends TestCase
         $manager = $this->buildManager($quota, $s3Client, $this->createStub(EntityManagerInterface::class));
 
         $this->expectException(AuthRequiredException::class);
-        $this->expectExceptionMessage('Войдите через Telegram для ai/video конвертаций');
+        $this->expectExceptionMessage('Для ai/video конвертаций нужен вход.');
 
         $manager->createConversion(new ConversionRequestDTO(
             $this->guestUser(),

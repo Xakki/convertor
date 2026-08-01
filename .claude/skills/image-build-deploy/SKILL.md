@@ -121,15 +121,11 @@ and turns every release into a ~3 GB push.
 
 ## Pitfalls (all hit for real 2026-07-23)
 
-- **`make harbor-login` is currently non-functional.** `DOCKER_REGISTRY`/
-  `DOCKER_USER`/`DOCKER_PASS` are unset in both `.env` and `.env.local`
-  (verified by grep — none of the three appear in either file). Pushes to
-  Harbor only succeed today because of a cached docker credential for
-  `harbor.xakki.ru` already present in the local `~/.docker/config.json`. On
-  a clean machine or CI runner with no prior `docker login`,
-  `release-workers`/`push-ai-base` fail — that's exactly the case where
-  `make harbor-login` is the (currently broken) recovery step. See kanban
-  card `make-login-not-configured` (grooming).
+- **`make harbor-login`** — vars wired (CNV-23 fixed): `DOCKER_REGISTRY` in
+  tracked `.env`, `DOCKER_USER`/`DOCKER_PASS` in `.env.local`. Run after
+  `docker logout harbor.xakki.ru` when push fails with auth errors
+  (401/403/`unauthorized`/`denied`); not a routine step of
+  `release-workers`.
 - **Never trust a push's exit code alone.** Verify the tag actually landed:
   `docker manifest inspect harbor.xakki.ru/convertor/<image>:<tag>` and
   compare the digest against the local image (`docker inspect --format
@@ -175,5 +171,5 @@ and turns every release into a ~3 GB push.
 - `worker-ai-image` — the two-layer AI image build/deploy detail.
 - `docs/workers-remote-deploy.md`, `docs/worker-ai-deploy.md` — full
   step-by-step remote-host and AI-worker instructions.
-- `.claude/kanban/grooming/CNV-23-make-login-not-configured.md` — the
-  `make harbor-login` gap tracked as a card.
+- `.claude/kanban/progress/CNV-23-make-login-not-configured.md` — CNV-23
+  (Harbor login env wiring) fixed.

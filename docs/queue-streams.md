@@ -26,8 +26,8 @@
 | `conv.ai`        | `ai`        | AI (STT / TTS / GPT-OCR) |
 
 **Routing key formula (PHP):** `key = isAi ? 'ai' : category`.
-`markup` category is stored in the DB but folded to `document` at routing time —
-`ConversionRegistry::streamFor()` returns `'document'` for any markup pair.
+В seed __seed__ нет пар с `category=markup` (0 строк); live md/html/htm хранятся как `document`.
+Если пара когда-либо получит `markup`, `ConversionRegistry::streamFor()` сворачивает её в `'document'`.
 OCR override: when `$ocr=true`, `streamFor()` always returns `'image'`, regardless of category.
 The Symfony Messenger transport name is `conv_<key>`; the stream name is `conv.<key>`.
 
@@ -180,7 +180,7 @@ all KeyDB writes and the PHP relay call.
 
 **Success path (inline ≤256 KB):**
 ```
-(1) worker → completion{data: base64}  (WS frame)
+(1) worker → result{inline: base64}  (WS frame)
 (2) gateway → POST /internal/relay     (Symfony ConversionResultPersister: S3 + MariaDB)
 (3) gateway → HSET conv:status:{id}    state=completed
 (4) gateway → XACK                     removes entry from PEL
@@ -261,6 +261,13 @@ messages, and check container logs in Graylog / Portainer.
    `data`, `ai`) has at least one worker declaring it in `CAPABILITIES["routing_keys"]`.
 2. **Matrix subset:** every `(from, to)` pair in a worker's `CAPABILITIES["matrix"]`
    is present in `ConversionRegistry` (worker matrix ⊆ registry).
+
+**Матрица `/formats` (ConversionRegistry):** строится по **всем** строкам
+`worker_capabilities` без фильтра по свежести, `status` или `lastSeen` (см.
+`ConversionRegistry::buildMatrixFromCapabilities()`, registry-06). Soft-filter
+матрицы сознательно отвергнут (CNV-6): liveness — сигнал мониторинга, не вход
+маршрутизации. Очистка устаревших и junk-строк — long-TTL GC / CNV-36, не
+soft-filter маршрутизации.
 
 This prevents two silent failure modes:
 - A stream exists in PHP routing but no worker listens → jobs accumulate forever.

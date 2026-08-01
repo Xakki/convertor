@@ -31,6 +31,8 @@ final class CuratedConversionPairs
             ['category' => 'document', 'from' => 'pdf', 'to' => 'docx'],
             ['category' => 'document', 'from' => 'docx', 'to' => 'pdf'],
             ['category' => 'document', 'from' => 'txt', 'to' => 'pdf'],
+            ['category' => 'document', 'from' => 'md', 'to' => 'html'],
+            ['category' => 'document', 'from' => 'html', 'to' => 'md'],
             // Изображения
             ['category' => 'image', 'from' => 'png', 'to' => 'jpg'],
             ['category' => 'image', 'from' => 'jpg', 'to' => 'png'],
@@ -44,9 +46,6 @@ final class CuratedConversionPairs
             // Видео
             ['category' => 'video', 'from' => 'mp4', 'to' => 'webm'],
             ['category' => 'video', 'from' => 'mov', 'to' => 'mp4'],
-            // Разметка
-            ['category' => 'markup', 'from' => 'md', 'to' => 'html'],
-            ['category' => 'markup', 'from' => 'html', 'to' => 'md'],
         ];
     }
 

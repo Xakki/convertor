@@ -7,6 +7,8 @@
 - registry
 - matrix
 
+**Epic:** [[CNV-47]] — подзадача 3.
+
 **Description:**
 `app-symfony/src/Service/Conversion/ConversionRegistry.php::buildRoutingPairs()` читает ВСЕ строки
 через `WorkerCapabilityRepository::findAllCapabilities()` (`app-symfony/src/Repository/WorkerCapabilityRepository.php:92-95`,
@@ -61,4 +63,11 @@ docs/comment note, что soft-filter матрицы сознательно от
 - (2026-08-01) Q2=A: чистить junk `test:worker`; seeds `__seed__` оставить.
   Реализация cleanup — follow-up `[[CNV-36-registry-09-gc-junk-worker-capabilities-test-worker]]`.
 
-**Status:** todo / ready
+**Status:** ready — awaiting user approval
+
+**Execution Log (2026-08-01):**
+- moved todo→progress; work started on branch `epic/CNV-47`
+- scope = docs-note only per Decisions Q1/Q2 (no soft-filter; junk cleanup = `[[CNV-36-registry-09-gc-junk-worker-capabilities-test-worker]]`)
+- docs-note added in `docs/queue-streams.md` §8 (matrix uses all `worker_capabilities` rows; no code filter change; CNV-36 untouched)
+- verified docs-only AC; no PHPUnit needed; QA pass for docs-note
+- moved to ready; awaiting user approval

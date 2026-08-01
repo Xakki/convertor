@@ -172,7 +172,7 @@ final class GuestAuthenticationTest extends WebTestCase
         $data = json_decode((string) $response->getContent(), true);
         self::assertIsArray($data);
         self::assertSame('auth_required', $data['error']);
-        self::assertSame('Войдите через Telegram для ai/video конвертаций', $data['message']);
+        self::assertSame('Для ai/video конвертаций нужен вход.', $data['message']);
 
         // Гейт ai/video режет ДО материализации → ни cookie, ни строки в `users`.
         self::assertNull(

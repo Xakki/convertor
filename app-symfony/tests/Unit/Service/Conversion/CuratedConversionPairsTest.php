@@ -37,7 +37,7 @@ final class CuratedConversionPairsTest extends TestCase
         $grouped = CuratedConversionPairs::grouped();
 
         self::assertSame(
-            ['document', 'image', 'data', 'audio', 'video', 'markup'],
+            ['document', 'image', 'data', 'audio', 'video'],
             array_keys($grouped),
         );
         self::assertSame(['from' => 'pdf', 'to' => 'docx'], $grouped['document'][0]);

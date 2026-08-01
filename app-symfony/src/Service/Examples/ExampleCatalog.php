@@ -13,9 +13,8 @@ namespace App\Service\Examples;
  * никаких «висящих» объектов и рассинхрона. Исходные сэмплы лежат в
  * resources/seed-examples/ (мелкие, собственного авторства).
  *
- * Обязательные категории (AC): document, image, audio, video, data. markup —
- * бонус; если воркер её не потянет на момент seed, объект просто не появится и
- * витрина её не покажет (эндпоинт фильтрует по факту наличия объекта).
+ * Обязательные категории (AC): document, image, audio, video, data — по одной
+ * паре на категорию; md→html входит в document (отдельной категории markup нет).
  */
 final class ExampleCatalog
 {
@@ -30,7 +29,7 @@ final class ExampleCatalog
             new ExampleDefinition('image', 'png', 'jpg', 'image.png', false),
             new ExampleDefinition('audio', 'wav', 'mp3', 'audio.wav', false),
             new ExampleDefinition('video', 'mp4', 'webm', 'video.mp4', false),
-            new ExampleDefinition('markup', 'md', 'html', 'markup.md', true),
+            new ExampleDefinition('document', 'md', 'html', 'markup.md', true),
         ];
     }
 

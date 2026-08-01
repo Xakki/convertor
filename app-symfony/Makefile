@@ -59,6 +59,10 @@ test-php: ## Run PHPUnit (в php-контейнере тест-стенда; php
 	$(REQUIRE_TEST)
 	$(PHP_EXEC) php vendor/bin/phpunit
 
+.PHONY: test-php-unit
+test-php-unit: ## Fast PHPUnit: only tests/Unit (no test-stand/DB)
+	$(PHP_EXEC) php vendor/bin/phpunit tests/Unit
+
 .PHONY: phpstan
 phpstan: ## Run PHPStan static analysis
 	$(PHP_EXEC) php vendor/bin/phpstan analyse

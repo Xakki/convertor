@@ -88,7 +88,7 @@ class ConversionManager
         // любых size/quota/S3-эффектов — 403 отдаётся дёшево и без сайд-эффектов.
         // (OCR-ветка форсит isAi=false/Image, поэтому под гейт не попадает.)
         if (! $privileged && ($isAi || $category === FileCategory::Video)) {
-            throw new AuthRequiredException('Войдите через Telegram для ai/video конвертаций');
+            throw new AuthRequiredException('Для ai/video конвертаций нужен вход.');
         }
 
         // Read metadata BEFORE the upload is consumed — keep size/mime from the

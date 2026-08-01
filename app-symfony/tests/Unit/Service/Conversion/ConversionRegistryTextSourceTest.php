@@ -10,13 +10,12 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * home-02-text-input: {@see ConversionRegistry::isTextSourceSupported()} — text-mode
- * source gate. A fixed textual-format allowlist (txt/md/rst/latex/wiki/html/
- * csv/json/xml/yaml/toml) ANDed with the SAME {@see ConversionRegistry::isSupported()}
- * pair check as the file-upload path (no separate compatibility table). The
- * allowlist is format-based, NOT category-based: the DB-backed matrix can
- * (and in production does) register md/html/rst under `FileCategory::Document`
- * rather than a dedicated `Markup` category, so branching on getCategory()
- * would silently reject legitimate textual sources.
+ * source gate. A fixed textual-format allowlist (txt/md/html/csv/json/xml/yaml/
+ * toml) ANDed with the SAME {@see ConversionRegistry::isSupported()} pair check
+ * as the file-upload path (no separate compatibility table). The allowlist is
+ * format-based, NOT category-based: the DB-backed matrix registers md/html under
+ * `FileCategory::Document` rather than a dedicated `Markup` category, so
+ * branching on getCategory() would silently reject legitimate textual sources.
  */
 final class ConversionRegistryTextSourceTest extends TestCase
 {

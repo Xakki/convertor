@@ -12,7 +12,8 @@
    паттерн уже принят для `/admin` (см. templates/admin/base.html.twig —
    "Option B": открытая оболочка + клиентский guard, единственная реальная
    граница безопасности — API `^/api/v1/admin`, ROLE_ADMIN). Здесь так же:
-   POST /api/v1/auth/refresh (httpOnly refresh-cookie) → при наличии токена
+   window.sharedAuthRefresh() (CNV-21: один inflight POST /api/v1/auth/refresh
+   на страницу, httpOnly refresh-cookie) → при наличии токена
    GET /api/v1/me (id/name/avatar_url/profile_url/is_admin — is_admin уже
    готов с сервера, JWT-роли вручную не декодируем). Admin-пункт —
    `<template x-if="isAdmin">`: узел ОТСУТСТВУЕТ в DOM, пока isAdmin не
@@ -129,6 +130,31 @@
 </header>
 
 <script>
+    // CNV-21: one inflight POST /api/v1/auth/refresh for the whole page.
+    // Concurrent callers await the same Promise; body parsed once.
+    // Cleared after settle so later 401-retries can refresh again.
+    window.__authRefreshInflight = window.__authRefreshInflight || null;
+    window.sharedAuthRefresh = window.sharedAuthRefresh || function sharedAuthRefresh() {
+        if (window.__authRefreshInflight) return window.__authRefreshInflight;
+        window.__authRefreshInflight = (async () => {
+            try {
+                const res = await fetch('/api/v1/auth/refresh', {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+                if (!res.ok) return { ok: false, token: null };
+                const d = await res.json();
+                const token = d && d.token ? d.token : null;
+                return { ok: !!token, token: token };
+            } catch (e) {
+                return { ok: false, token: null };
+            }
+        })().finally(() => {
+            window.__authRefreshInflight = null;
+        });
+        return window.__authRefreshInflight;
+    };
+
     function headerNav() {
         return {
             loggedIn: false,
@@ -140,12 +166,10 @@
             // на любом из шагов, тихо остаёмся в состоянии "не вошёл".
             async init() {
                 try {
-                    const res = await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' });
-                    if (!res.ok) return;
-                    const d = await res.json();
-                    if (!d.token) return;
+                    const { ok, token } = await window.sharedAuthRefresh();
+                    if (!ok || !token) return;
                     const meRes = await fetch('/api/v1/me', {
-                        headers: { Authorization: 'Bearer ' + d.token },
+                        headers: { Authorization: 'Bearer ' + token },
                         credentials: 'include',
                     });
                     if (!meRes.ok) return;

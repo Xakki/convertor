@@ -7,6 +7,8 @@
 - test
 - ci
 
+**Epic:** [[CNV-47]] — подзадача 10.
+
 **Problem:**
 `workers/tests/test_routing_drift.py` вызывает `docker exec … php bin/dump-matrix.php --json`
 БЕЗ установки переменной окружения `APP_ENV=test` (строки 184–186, также путь native php
@@ -30,9 +32,9 @@
 Вариант A: drift-тест проверяет тестовую БД (`APP_ENV=test`). Seed-only набор — принят как достаточный.
 
 **Acceptance Criteria:**
-- [ ] Native php path в `test_routing_drift.py` явно ставит `APP_ENV=test` (как docker-путь уже делает через тест-стенд)
-- [ ] Seed-only матрица в тестовой БД принята как достаточная для drift-проверки (без требования реальных регистраций воркеров)
-- [ ] `make TEST=1 test-drift` зелёный без зависимости от личной dev-БД
+- [x] Native php path в `test_routing_drift.py` явно ставит `APP_ENV=test` (как docker-путь уже делает через тест-стенд)
+- [x] Seed-only матрица в тестовой БД принята как достаточная для drift-проверки (без требования реальных регистраций воркеров)
+- [x] `make TEST=1 test-drift` зелёный без зависимости от личной dev-БД
 
 **Related cards:**
 - `[[registry-04-matrix-tooling-tests]]` — там drift-тест был переписан и лежит сейчас
@@ -53,4 +55,8 @@ Groomed 2026-08-01: pin APP_ENV=test on native path; accept seed-only; AC narrow
 → матрица читается из `convertor-test`. Плюс guard `REQUIRE_TEST` не даёт запустить
 `test-drift` без тест-окружения. Остаток: pin `APP_ENV=test` на native php path.
 
-**Status:** todo.
+**Status:** ready.
+
+**Execution Log:**
+- 2026-08-01: todo→progress; pin APP_ENV=test on native php path in test_routing_drift.py::_load_registry().
+- 2026-08-01: make TEST=1 test-drift green (5 passed); progress→test→ready.

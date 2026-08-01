@@ -29,7 +29,7 @@ description: Единый контракт редизайна auth/доступ�
   (`ai` — это флаг `isAi` из `ConversionRegistry::isAi()`, НЕ категория. `video` — категория `FileCategory::Video`. Категория/флаг вычисляются как сейчас в `ConversionManager`.)
 - Если пара требует логина, а текущий пользователь — guest (не имеет `ROLE_USER`): вернуть **HTTP 403** с телом:
   ```json
-  { "error": "auth_required", "message": "Войдите через Telegram для ai/video конвертаций" }
+  { "error": "auth_required", "message": "Для ai/video конвертаций нужен вход." }
   ```
 - Иначе (любая не-ai/не-video пара) — guest конвертит свободно (в пределах rate-limit/размера).
 - Проверку делать в `ConversionController::convert` / `ConversionManager` ДО постановки в очередь, на основе вычисленных `isAi`/`category`.

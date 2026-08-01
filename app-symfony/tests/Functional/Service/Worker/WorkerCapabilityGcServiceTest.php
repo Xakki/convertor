@@ -149,6 +149,28 @@ final class WorkerCapabilityGcServiceTest extends KernelTestCase
         );
     }
 
+    /**
+     * registry-09 / CNV-36: junk `test:worker` удаляется на каждом GC-проходе
+     * независимо от TTL; seed-сibling в том же workerType выживает.
+     */
+    public function testJunkTestWorkerInstanceIsAlwaysDeleted(): void
+    {
+        $this->insertRow(self::TEST_WORKER_TYPE, 'test:worker', new \DateTimeImmutable());
+        $this->insertRow(self::TEST_WORKER_TYPE, '__seed__', (new \DateTimeImmutable())->modify('-10 years'));
+
+        $result = $this->gc()->run();
+
+        self::assertGreaterThanOrEqual(1, $result['deleted']);
+        self::assertFalse(
+            $this->rowExists(self::TEST_WORKER_TYPE, 'test:worker'),
+            'junk instance_id test:worker must be deleted on every GC pass, regardless of last_seen age',
+        );
+        self::assertTrue(
+            $this->rowExists(self::TEST_WORKER_TYPE, '__seed__'),
+            'seed row must survive junk purge',
+        );
+    }
+
     private function gc(): WorkerCapabilityGcService
     {
         return static::getContainer()->get(WorkerCapabilityGcService::class);

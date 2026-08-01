@@ -188,20 +188,22 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 | Категория | Исходные форматы | Целевые форматы | Движок | AI? | MVP-статус |
 |-----------|-----------------|-----------------|--------|-----|------------|
-| **Документы** | doc, docx, odt, rtf, txt, html, epub, pages | docx, odt, pdf, txt, html, md, rtf, epub | LibreOffice + Pandoc | — | Стадия 1 |
-| **PDF операции** | pdf | docx, txt, md, jpg (страницы) | LibreOffice + pdftotext + pdftoppm | — | Стадия 1 (PDF→jpg — Стадия 7) |
-| **Разметка** | md, rst, latex, html, wiki | md, rst, html, pdf, docx | Pandoc | — | md/html — Стадия 1; rst/latex/wiki — Стадия 7 |
-| **Данные** | csv, json, xml, yaml, toml | csv, json, xml, yaml, toml | Python (pandas/lxml/tomllib) | — | Стадия 1 (toml вкл.) |
-| **Изображения** | jpg, png, gif, bmp, webp, tiff, svg, ico, avif, heic | jpg, png, gif, bmp, webp, tiff, ico, avif, pdf | ImageMagick / Pillow | — | Стадия 1 (SVG/HEIC/AVIF — Стадия 7) |
-| **OCR** | jpg, png, pdf, tiff | txt, md, docx | Tesseract (в image-воркере) | — | Стадия 1 |
+| **Документы** | doc, docx, odt, rtf, txt, html, htm, md; epub (только →md) | docx, odt, pdf, txt, html, md, rtf, epub | LibreOffice + Pandoc | — | Стадия 1 |
+| **PDF операции** | pdf | docx, txt, md | pdftotext + Pandoc / LibreOffice | — | Стадия 1 |
+| **Данные** | csv, json, xml, yaml/yml, toml | csv, json, xml, yaml/yml, toml | Python (pandas/lxml/tomllib) | — | Стадия 1 |
+| **Изображения** | jpg/jpeg, png, gif, bmp, webp, tiff/tif, ico | jpg, png, gif, bmp, webp, tiff, ico, pdf (+ txt, md, docx через OCR) | ImageMagick / Pillow | — | Стадия 1 |
+| **OCR (флаг `ocr`)** | — (не отдельный набор пар в `/formats`) | — | Tesseract в image-воркере | — | Стадия 1: `ocrCapable` на jpg/jpeg, png, tiff/tif → txt, md, docx; pdf с `ocr=true` — тот же путь |
 | **Аудио** | mp3, wav, ogg, flac, aac, m4a, opus, wma | mp3, wav, ogg, flac, aac, m4a, opus | FFmpeg | — | Стадия 1 |
-| **Видео** | mp4, avi, mkv, mov, webm, flv, wmv (+3gp) | mp4, avi, mkv, mov, webm | FFmpeg | — | Стадия 1 |
-| **Видео → Аудио** | mp4, avi, mkv, mov | mp3, wav, ogg, flac | FFmpeg | — | Стадия 1 |
-| **Речь → Текст** | mp3, wav, ogg, m4a, opus (≤2ч) | txt, srt, vtt | Whisper (local) / внешние API | ✅ | Стадия 2 |
+| **Видео** | mp4, avi, mkv, mov, webm, flv, wmv, 3gp | mp4, avi, mkv, mov, webm (+ mp3, wav, ogg, flac) | FFmpeg | — | Стадия 1 |
+| **Речь → Текст** | mp3, wav, ogg, flac, aac, m4a, opus (+ из видео; ≤2ч) | txt, srt, vtt | Whisper (local) / внешние API | ✅ | Стадия 2 |
 | **Текст → Речь** | txt, md (≤10 000 символов) | mp3, wav, ogg | TTS (local espeak/Coqui) / внешние API | ✅ | Стадия 2 |
+| **Разметка (отложено)** | rst, latex, wiki | md, rst, html, pdf, docx | Pandoc | — | Стадия 7 (md/html/htm — live в «Документы») |
+| **Документы (отложено)** | pages; epub (полный input) | как в «Документы» | LibreOffice + Pandoc | — | Стадия 7 |
+| **PDF→изображение** | pdf | jpg | pdftoppm | — | Стадия 7 |
+| **Изображения (отложено)** | svg, heic, avif | jpg, png, webp, avif, … | ImageMagick / Pillow | — | Стадия 7 |
 | **Архивы** | zip, tar, gz, bz2, 7z | zip, tar.gz | Python (zipfile/tarfile/py7zr) | — | Стадия 7 |
 | **CAD/DWG** | dwg, dxf | pdf, svg, png | LibreOffice Draw / ezdxf | — | Стадия 7 |
-| **Электронные таблицы** | xls, xlsx, ods, csv | xlsx, ods, csv, pdf | LibreOffice Calc | — | Стадия 7 |
+| **Электронные таблицы** | xls, xlsx, ods | xlsx, ods, csv, pdf | LibreOffice Calc | — | Стадия 7 (csv — live в «Данные») |
 | **Презентации** | ppt, pptx, odp | pptx, odp, pdf | LibreOffice Impress | — | Стадия 7 |
 
 ## Лимиты и тарифы
@@ -212,7 +214,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 > (`tier = isAi ? AI : mapCategory(category)`).
 
 **Тиры (4):**
-- **T1 Light**: document, markup, data, archive (CPU-дёшево).
+- **T1 Light**: document, data (CPU-дёшево). Enum `markup` / `archive` в `FileCategory` зарезервированы для routing fold и Stage 7 — в seed __seed__ **0 live-пар** с этими категориями.
 - **T2 Medium**: image (**вкл. OCR** — локальный Tesseract, image-воркер), audio.
 - **T3 Heavy**: video (тяжёлый транскод).
 - **T4 AI**: только STT/TTS (`isAi`, remote GPU, внешняя стоимость).
