@@ -1,0 +1,3 @@
+# kanban ID counters — managed by kanban-id.sh. Commit this file.
+prefix=registry
+registry=9

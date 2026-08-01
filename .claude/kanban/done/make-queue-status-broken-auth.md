@@ -44,4 +44,9 @@ xlen conv.<type>` и `docker exec xakki-convertor-keydb keydb-cli -n 2 xinfo gro
 **Контекст:** найдено в ходе диагностического прогона 2026-07-23 (проверка локальных и удалённых
 воркеров, хост xBook).
 
-**Status:** grooming.
+**Decisions:**
+- Закрыто как уже исправленное (2026-08-01): AUTH-обход при пустом `REDIS_PASSWORD` и переход
+  запроса на Streams (`XLEN`/`XINFO GROUPS` по `conv.*`) уже в `workers/Makefile`. Отдельная
+  работа не нужна.
+
+**Status:** done.

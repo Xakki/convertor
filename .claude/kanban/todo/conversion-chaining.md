@@ -39,6 +39,7 @@ User requests A→C explicitly; the backend finds the path and runs it transpare
   check/charge/refund by isAi — a mixed chain must reserve both up front or it half-runs.)
 - **Phase 0 timing = STAYS in Stage 7** [USER DECISION 2026-07-01] — whole epic post-MVP; do NOT pull
   `findPath()` forward, even though it is buildable on the current matrix today.
+- **(2026-08-01 grooming)** Дизайн готов; **не стартовать раньше Stage 7 / по приоритету ROADMAP**.
 
 **Phasing:**
 - **Phase 0** — `findPath()` on `ConversionRegistry` (pure, unit-testable, no wiring). Buildable on the
@@ -53,11 +54,15 @@ User requests A→C explicitly; the backend finds the path and runs it transpare
 - `registry-00-self-registration` — **reframed from HARD block to enablement lever.** The graph mechanism
   exists now (`buildMatrix()` → depth-2 BFS runs today); self-registration buys **edge accuracy**.
   Enablement should gate on either self-registration OR a curated MVP-validated edge subset.
-- `align-document-stream-matrix-dlq` (todo) — land BEFORE enabling chaining: its `PermanentError`
-  fast-DLQ turns a rejected intermediate edge into an immediate correctly-attributed failure instead of
-  15-20 min churn (essential once a chain can hit an unhandled edge mid-run).
+- `align-document-stream-matrix-dlq` — **DONE** (`done/`). PermanentError fast-DLQ already landed;
+  no longer a start-blocker for chaining design, still a prerequisite for safe enablement in prod.
 - `stage7-libreoffice-extra-formats` — the concrete consumer (its epub→pdf pandoc chain).
-- `quota-charge-refund-atomicity` (frozen) — chaining multiplies charge/refund per job (N hops),
-  widening the documented race. Note, don't fix here.
+- `quota-service-hardening` — **DONE** (`done/`). Former frozen `quota-charge-refund-atomicity`
+  concern addressed there; chaining still multiplies charge/refund per hop — follow the hardened API.
 
-**Status:** grooming (Stage 7). Design settled.
+**Acceptance Criteria:**
+- `findPath()` + depth-2 chaining per Decisions above; chained pairs not first-class in `/formats`.
+- Tests/QA green per project gates when implemented.
+- Start only when Stage 7 / ROADMAP priority says so (Decision 2026-08-01).
+
+**Status:** todo (Stage 7 — do not start early).

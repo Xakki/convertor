@@ -53,16 +53,7 @@ c. Уборка устаревших `worker_capabilities` строк (8 pre-pre
   заведён и протестирован.
 - QA green: `make phpstan`, `make cs-check`, PHPUnit, pytest.
 
-**Open questions:**
-- Guard на основе чего отличать remote-хост от главного сервера — отдельная env-переменная,
-  наличие сети `common`, или `COMPOSE_PROJECT_NAME`-конвенция (`convertor-remote-*`)?
-- Порог для liveness-алерта на `disconnected`-воркера — сколько часов до срабатывания?
-- Нужна ли отдельная миграция/скрипт для одноразовой очистки 8 orphan-строк, или это часть общего
-  решения из `liveness-orphaned-capability-reregister.md`?
-
 **Контекст:** найдено 2026-07-29 на хосте uBook в ходе диагностики простоя воркеров.
-
-**Status:** grooming
 
 **Update 2026-07-30 (рефакторинг Makefile/env): решено.** Серверная часть
 (php/cron/mariadb/keydb/nginx/ws-gateway) убрана под compose-профиль `server`,
@@ -77,3 +68,10 @@ worker-ffmpeg-video worker-image worker-libreoffice`.
 ⚠ Остаточное действие: на uBook нужно пересоздать `.env.local` из нового
 шаблона — со СТАРЫМ `.env.local` (без `COMPOSE_PROFILES`) `make up` по-прежнему
 потянет полный стек и упадёт на внешней сети `common`.
+
+**Decisions:**
+- Закрыто как уже исправленное в коде (2026-08-01 / фикс 2026-07-30): footgun `make up`/`down`
+  на remote закрыт compose-профилями (`server`/`monitoring` vs worker). Остаток — только ops
+  (пересоздать `.env.local` на uBook из шаблона); отдельная инженерная карточка не нужна.
+
+**Status:** done.

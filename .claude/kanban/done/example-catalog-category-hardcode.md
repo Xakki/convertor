@@ -32,19 +32,6 @@
 несуществующую категорию (объект не сгенерится seed-командой или витрина его отфильтрует), без
 явной ошибки на этапе сборки.
 
-**Open questions:**
-- Стоит ли вообще трогать? Набор намеренно небольшой и фиксированный (докблок класса), домен —
-  курируемая витрина, не листинг. Может, типобезопасность тут не окупает изменения (Trivial).
-- Если типизировать: менять ли поле `ExampleDefinition::category` со `string` на `FileCategory`,
-  или достаточно валидации литералов в тесте (тест сверяет, что все `category` из `all()` и
-  `requiredCategories()` — валидные `FileCategory::tryFrom`)? Нужно проверить всех потребителей
-  `ExampleDefinition::category` (эндпоинты `find()`/`findBySource()`, seed-команда, шаблоны
-  витрины) — ждут ли они строку.
-- Правильно ли, что `requiredCategories()` — подмножество, а не производное? Оно осознанно уже,
-  чем `FileCategory::cases()` (нет `markup`/`archive`), — это бизнес-решение AC home-04, а не
-  дрейф. Значит канон здесь НЕ «все значения enum», и слепое `FileCategory::cases()` было бы
-  неверно. Чем связываем: явным подмножеством enum-кейсов?
-
 **Recommendation:**
 Решить open questions при груминге. Вероятный минимальный вариант (если решим трогать): тип
 `ExampleDefinition::category` → `FileCategory` (или enum-значения в конструкторе), `requiredCategories()`
@@ -53,3 +40,9 @@
 `FileCategory`.
 
 **Reference:** `[[worker-type-lists-hardcode]]`, enum `App\Enum\FileCategory`
+
+**Decisions:**
+- Отменено (2026-08-01): строки категорий — осознанный курируемый набор витрины, не листинг
+  enum. Типизация против `FileCategory` даёт низкий ROI при Trivial-риске; трогать не будем.
+
+**Status:** cancelled.

@@ -30,13 +30,25 @@ worker/DLQ-транспортом напрямую.
 конверсии одним/двумя операторами; не задействуется штатным DLQ/at-least-once
 трафиком.
 
-**Recommendation:** добавить `#[ORM\Version]` на `Conversion` (оптимистичная
-блокировка) либо `SELECT ... FOR UPDATE` в `requeue()` перед проверкой
-статуса.
+**Recommendation:**
+`SELECT ... FOR UPDATE` в `DlqController::requeue()` перед проверкой статуса
+(не `#[ORM\Version]` на `Conversion`).
+
+**Acceptance Criteria:**
+- `requeue()` берёт строку `Conversion` через `SELECT ... FOR UPDATE` (в той же
+  транзакции, что проверка статуса / charge / incrementAttempt).
+- Параллельный второй requeue той же Failed-конверсии не списывает квоту
+  дважды и не ставит второй джоб (второй получает конфликт/already-requeued).
+- `#[ORM\Version]` на `Conversion` **не** добавлять.
+- Тесты на конкурентный requeue / блокировку; QA зелёные.
+
+**Decisions:**
+- (2026-08-01) Только `FOR UPDATE` в `requeue()`; без ORM Version на
+  `Conversion`.
 
 **Контекст:** найдено round-2 адверсариальным ревью attempt-marker фикса
 (ветка `task/conv-dead-no-consumer`, коммиты `184250f`/`8a63ea3`/`c1f6c2f`),
 2026-07-18. Не введено этим фиксом (пред-существующее), но всплыло при
 трассировке requeue-пути.
 
-**Status:** todo.
+**Status:** todo / ready

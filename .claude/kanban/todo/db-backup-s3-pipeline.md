@@ -30,23 +30,34 @@
 `./backup/dump.sql.gz`, без S3).
 
 **Что нужно сделать:**
-1. Решить нейминг бакета — по свежей конвенции соседей это `convertor-backups`
-   (ср. `myip-backups`, `proxy-service-backups`), не `convertor-dump`.
-2. Создать бакет + дать доступ юзеру S3. ⚠ **Блокер:** MCP `minio` умеет
-   аттачить только встроенные политики (`readwrite`/`readonly`), а нужна
-   кастомная (Get/List/Put без Delete, как у `pf-dump`) — значит либо
-   встроенная `readwrite` (можно удалять — хуже для бэкапов), либо политика
-   создаётся вне MCP.
-3. Включить версионирование бакета (push всегда новым ключом, ничего не
-   перезаписываем).
-4. Таргеты `make db-dump-push` / `db-dump-pull` — отгрузка **из контейнера**
-   (docker-only), не host-скриптом с качаемым `mc`.
-5. Расписание (Symfony Scheduler / cron-контейнер) + retention.
+1. Бакет `convertor-dump` + кастомная политика без Delete
+2. Версионирование; push всегда новым ключом
+3. Таргеты `make db-dump-push` / `db-dump-pull` из контейнера (docker-only)
+4. Cron/контейнер рядом с dump для расписания
+5. Retention — follow-up
 
 **Note:** блоб `mc` (30 MB) остаётся в истории git — `git rm` его оттуда не
 убирает. Чистка истории — отдельное решение (не делать без явного согласия).
 
+**Acceptance Criteria:**
+- [ ] Бакет `convertor-dump` создан; кастомная политика Get/List/Put **без Delete**
+- [ ] Версионирование бакета включено
+- [ ] `make db-dump-push` / `db-dump-pull` — отгрузка/скачивание из контейнера (docker-only)
+- [ ] Расписание: cron или sidecar-контейнер рядом с dump (MVP)
+- [ ] Документация таргетов в Makefile `##` help
+- [ ] Retention — follow-up (не блокер MVP этой карточки)
+
+**Decisions:**
+- Имя бакета оставляем `convertor-dump` (не переименовывать в `convertor-backups`).
+- Политика — кастомная без Delete (создать вне MCP при необходимости).
+- Расписание: cron/контейнер рядом с dump.
+- MVP: push/pull + versioning.
+- Retention — follow-up.
+
+**Work notes:**
+Groomed 2026-08-01: keep convertor-dump; no-Delete policy; cron+push/pull+versioning MVP; retention later.
+
 **Related cards:**
 - `[[docs-payments-integration]]` — тоже заморожённая интеграция
 
-**Status:** grooming.
+**Status:** todo.

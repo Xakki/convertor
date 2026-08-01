@@ -32,4 +32,11 @@
 **Контекст:** найдено при верификации hardening-05-conversions-admin-indexes
 (2026-07-17), пред-существующее, не связано с той картой.
 
-**Status:** todo.
+**Decisions:**
+- Поглощено `[[migrate-diff-schema-drift]]` — работа выполняется там (catch-up + `#[ORM\Index]`).
+- Карточка отменена как отдельная задача.
+
+**Work notes:**
+Groomed 2026-08-01: cancelled standalone; merged into migrate-diff-schema-drift.
+
+**Status:** cancelled (merged).

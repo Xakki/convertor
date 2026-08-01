@@ -17,5 +17,18 @@ grep) — значит каждый init зовёт refresh дважды или 
 **Recommendation:**
 Найти источник лишних вызовов (`grep -n "auth/refresh\|tryRefresh" app-symfony/
 templates/partials/_converter_app_script.html.twig _header.html.twig`),
-дедуплицировать (общий однократный refresh-промис на страницу). Косметика —
-лишние сетевые round-trip'ы, не баг.
+дедуплицировать через **shared page-level refresh Promise** (один inflight
+refresh на страницу; повторные callers ждут тот же Promise).
+
+**Acceptance Criteria:**
+- При загрузке `/` анонимным гостем — не больше одного inflight
+  `POST /api/v1/auth/refresh` (shared page-level Promise); callers
+  (`headerNav`, `converterApp`, др.) переиспользуют его.
+- Функциональность auth/refresh не регрессирует (гость / залогиненный).
+- Браузерная проверка: число refresh-запросов на cold load `/` снижено
+  (цель — 1, не 4).
+
+**Decisions:**
+- (2026-08-01) Shared page-level refresh Promise (дедуп inflight).
+
+**Status:** todo / ready

@@ -60,19 +60,13 @@ orphan.
   явным сообщением).
 - QA green: `make phpstan`, `make cs-check`, PHPUnit, pytest.
 
-**Open questions:**
-- Какое из трёх направлений (или комбинация) выбрать? Зависит от preference: tradeof между
-  трафиком, сложностью, скоростью self-heal.
-- Если периодическая самореги (направление 1) — какой интервал разумен? Текущий `LIVENESS_PUSH_INTERVAL_S=30s`
-  от gateway — 30–60с, так что воркер может пушиться реже.
-- Если escalation (направление 2) — какой порог N циклов различать startup-гонку от orphan?
-  Примерно 3–5 push-циклов = 90–150с в текущей конфигурации.
-- Должна ли неудача re-register на сигнал от шлюза (направление 3) форсировать разрыв соединения,
-  или gateway просто залогирует и ждёт естественного реконнекта?
-- Остаётся ли startup-race лог-шум при выборе решения, или требует явного решения (downgrade на DEBUG)?
-
 **Эпик:** `[[registry-00-self-registration]]`
 
 **Зависит от:** `[[registry-06-liveness-push]]`
 
-**Status:** grooming
+**Decisions:**
+- Закрыто как superseded (2026-08-01): сценарий orphan capability / re-register покрыт
+  `[[registry-08-worker-observability]]` и путём reregister из `[[worker-register-no-retry]]`.
+  Отдельная карточка больше не нужна.
+
+**Status:** cancelled (superseded).

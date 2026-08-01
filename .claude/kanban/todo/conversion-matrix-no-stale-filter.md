@@ -41,19 +41,24 @@
 `worker_capabilities`: строка `test:worker` и seed-строки `__seed__`, которые видны на admin
 workers page наравне с реальными воркерами.
 
-**Open questions (для grooming, НЕ для немедленного фикса — решение registry-06 уже осознанно
-принято):**
-- Нужно ли пересмотреть политику «long-TTL GC, не liveness-gating» — например, ввести отдельный
-  более короткий soft-фильтр именно для построения `/formats` (не трогая сам GC/eviction), или
-  оставить как есть и полагаться исключительно на GC?
-- Каким должен быть fallback, когда для категории не осталось ни одного живого воркера (сейчас —
-  статический seed-бейзлайн)?
-- Нужно ли чистить `worker_capabilities` от строки `test:worker` и/или скрывать `__seed__` строки
-  с admin workers page (или явно их там маркировать как «нелив» baseline, а не как воркер)?
-
-**Recommendation:** обсудить с владельцем `[[registry-06-liveness-push]]` — фиксить ли
-`test:worker`/`__seed__` мусор в реестре отдельно от вопроса о liveness-фильтрации матрицы.
+**Recommendation:**
+Политику registry-06 не пересматривать. Cleanup junk `test:worker` — в
+`[[registry-09-gc-junk-worker-capabilities-test-worker]]`. Опционально — короткий
+docs/comment note, что soft-filter матрицы сознательно отвергнут.
 
 **Эпик:** `[[registry-00-self-registration]]`, `[[registry-06-liveness-push]]`.
 
-**Status:** grooming.
+**Acceptance Criteria:**
+- Decision зафиксирован: soft-filter матрицы не вводить; registry-06
+  подтверждён; seeds остаются.
+- Cleanup junk `test:worker` вынесен в `registry-09` (не scope этой карточки).
+- Опционально: docs/comment note в коде/доке, что soft-filter отвергнут
+  (не обязательный код-фикс матрицы).
+
+**Decisions:**
+- (2026-08-01) Q1=A: без soft-filter для `/formats`; оставить registry-06
+  (все строки в матрице; liveness ≠ routing).
+- (2026-08-01) Q2=A: чистить junk `test:worker`; seeds `__seed__` оставить.
+  Реализация cleanup — follow-up `[[registry-09-gc-junk-worker-capabilities-test-worker]]`.
+
+**Status:** todo / ready

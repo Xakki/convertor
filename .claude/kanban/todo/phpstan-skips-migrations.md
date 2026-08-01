@@ -25,16 +25,24 @@ paths:
 - Опасность для production-deployment
 
 **Recommendation:**
-1. Добавить `migrations/` и `bin/` в paths PHPStan
-2. Добавить `bin/` в Finder для php-cs-fixer
-3. Подумать о baseline-файле для поглощения шума из старых миграций
-4. Применить cs-check/cs-fix также к обеим директориям
+1. Добавить `bin/` в paths PHPStan на level 8 + cs-fixer
+2. Добавить `migrations/` на level 5 либо через baseline
+3. cs для migrations — опционально позже
 
 **Контекст:** обнаружено при реализации карточки `[[registry-03-seed-migration]]` (2026-07-22) и `[[registry-04-matrix-tooling-tests]]` (2026-07-22). Связано с `[[migrate-diff-schema-drift]]` — обе касаются toolchain для миграций и служебных инструментов.
 
-**Open questions:**
-- (a) Добавить `migrations/` и `bin/` в paths на том же уровне PHPStan (`level: 8`), или нужна сниженная level (могут быть шумные findings в generated stubs)?
-- (b) Нужен ли baseline-файл, чтобы абсорбировать pre-existing findings из старых миграций перед добавлением в gate?
-- (c) Нужно ли также расширить cs-check/cs-fix на обе директории одновременно, или отдельно?
+**Acceptance Criteria:**
+- [ ] `bin/` добавлен в PHPStan paths на level 8; `make phpstan` зелёный
+- [ ] `bin/` добавлен в Finder php-cs-fixer; cs-check/cs покрывают `bin/`
+- [ ] `migrations/` под PHPStan: level 5 **или** baseline для pre-existing findings
+- [ ] Документировано в phpstan.neon / комментарии, почему migrations не на level 8
 
-**Status:** grooming.
+**Decisions:**
+- `bin/` — PHPStan level 8 + cs (обязательно в этой карточке).
+- `migrations/` — PHPStan level 5 **или** baseline (на выбор при реализации; цель — включить без шума от старых миграций).
+- cs для `migrations/` — опционально, follow-up (не блокер этой карточки).
+
+**Work notes:**
+Groomed 2026-08-01: bin@8+cs mandatory; migrations@5-or-baseline; cs migrations later.
+
+**Status:** todo.

@@ -25,15 +25,24 @@ Telegram, хотя доступны и другие провайдеры).
 
 **Задача:**
 Привести `AuthRequiredException`-сообщение в `ConversionManager` в соответствие
-(убрать «через Telegram», обобщить под мультипровайдерный `/login`) —
-опционально пропустить через translator, если у API-ошибок уже есть i18n-
-прецедент, иначе просто переформулировать хардкод. Свериться, не завязаны ли
-существующие тесты (`ConversionController`/`ConversionManager` тесты) на
-точный текст сообщения — при правке синхронно поправить и их.
+с фронтом: hardcode RU **без** «Telegram» (в духе `home.ai_gate_message`).
+Без API i18n / translator. Синхронно поправить тесты, завязанные на точный
+текст.
+
+**Acceptance Criteria:**
+- Сообщение `AuthRequiredException` в `ConversionManager::checkAuth()` — RU
+  hardcode без слова «Telegram» (согласовано с `home.ai_gate_message`).
+- API i18n / translator **не** вводить.
+- Тесты (`ConversionController` / `ConversionManager` и др.), ожидающие старый
+  текст, синхронизированы.
+- PHPUnit зелёный.
+
+**Decisions:**
+- (2026-08-01) Hardcode RU без «Telegram»; синк тестов; без API i18n.
 
 **Контекст:**
 Найдено в ходе home-01-header-nav (шапка/навигация): фронтовая копия геймта
 ai/video была обобщена под мультипровайдерный `/login`, backend-текст той же
 ошибки — не тронут (вне скоупа карточки, чисто header/nav).
 
-**Status:** grooming.
+**Status:** todo / ready

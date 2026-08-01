@@ -85,4 +85,8 @@ L222, `downloadConversion()` — L247, `downloadSource()` — L273),
 `app-symfony/tests/Functional/Controller/Web/DashboardControllerTest.php`
 (существующее HTTP-покрытие, JS не исполняет).
 
-**Status:** grooming.
+**Decisions:**
+- (2026-08-01) Open questions не было — scope/AC уже зафиксированы; → todo.
+
+**Status:** todo / ready
+

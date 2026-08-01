@@ -56,20 +56,23 @@ xBook) ~40 минут в ходе диагностики 2026-07-23; одна з
 почти тишина) даёт на выходе пустой txt. Конверсии 49-56 зациклились. Снято
 вручную: `XACK`+`XDEL` восьми записей + пометка конверсий failed.
 
-**Recommendation — два раздельных решения, на груминге:**
+**Acceptance Criteria:**
+- Воркер (`ws_client.py::_deliver()`): при `size == 0` — permanent fail
+  (`_send_fail(..., permanent=True)`), не success-`result` с пустым inline.
+  Symfony API по-прежнему отвергает пустой `data` (проверку не ослаблять).
+- Gateway result-path (`_handle_result` / relay): HTTP 4xx от Symfony → сразу
+  DLQ (`conv.dead`) + release, без бесконечного retry.
+- HTTP 5xx и сетевые ошибки на result-path → capped retry
+  (`times_delivered` / `MAX_RETRIES`, симметрично ветке `fail`); после лимита →
+  DLQ.
+- Idle-reclaim не может бесконечно крутить poison-job с пустым/4xx результатом.
+- Тесты: unit/интеграция на size=0 → permanent fail; на relay 4xx → DLQ;
+  на 5xx/сеть → retry до cap, затем DLQ.
+- Тесты/QA зелёные по проектным cmd.
 
-(a) **Контракт "пустой результат":** легитимен ли 0-байтный output? Либо
-API должен принимать пустой `data` и сохранять 0-байтный результат (правка
-`InternalWorkerController::result()`, убрать/смягчить проверку `$rawData ===
-''`), либо воркер должен трактовать пустой output конвертации как permanent
-fail (`_send_fail(..., permanent=True)` в `ws_client.py::_deliver()`) вместо
-отправки пустого `result`.
+**Decisions:**
+- (2026-08-01) Q1=B: size=0 → permanent fail на воркере (не success-result).
+- (2026-08-01) Q2=C: на result path: 4xx → DLQ сразу; 5xx/сеть → capped retry
+  (как у fail-ветки).
 
-(b) **Robustness основного пути:** relay 400 (permanent, non-transient
-client error) не должен ретраиться бесконечно — нужен путь в DLQ/пометку
-failed после N попыток для ветки `result`→non-2xx, симметричный тому, что уже
-есть для ветки `fail` (`_handle_fail`, `times_delivered > MAX_RETRIES` →
-`_to_dlq_and_release`). Сейчас poison-message на inline-result-пути горит
-вечно.
-
-**Status:** grooming.
+**Status:** todo / ready

@@ -21,12 +21,6 @@ unit-only PHP-разреза. `make test` и `make test-php-live` гоняют �
 задокументировал реальное поведение как есть, но вопрос «а хотим ли мы быстрый
 unit-only split» остаётся открытым.
 
-**Open questions:**
-- Нужен ли отдельный быстрый `test-php-unit` (только `tests/Unit`, без БД/стека)
-  для локальной разработки? Или текущего «всё через live-DB» достаточно?
-- Если да — какие тесты считаются unit (без kernel/DB) и стоит ли ввести
-  PHPUnit test-suite `unit` в `phpunit.xml`?
-
 **Impact:**
 Без быстрого разреза локальный TDD-цикл дороже (каждый прогон = стек+БД).
 Не блокер, качество/DX.
@@ -35,8 +29,6 @@ unit-only split» остаётся открытым.
 задокументировано в Makefile/README той картой; здесь — только вопрос о новом
 быстром таргете.
 
-**Status:** grooming.
-
 **Update 2026-07-30 (рефакторинг Makefile/env):** посылка карточки изменилась.
 `test-php-live` и `test-db-setup` удалены; `make test` теперь САМ поднимает
 изолированный тест-стенд (`xakki-convertor-test`) с готовой `convertor-test` и
@@ -44,3 +36,18 @@ unit-only split» остаётся открытым.
 непровижиненной БД больше нет by design. Открытый вопрос сузился: нужен ли
 быстрый `test-php-unit` (только `tests/Unit`, БЕЗ подъёма стенда) для локальной
 итерации — теперь это вопрос СКОРОСТИ, а не корректности.
+
+**Acceptance Criteria:**
+- [ ] Добавлен `make test-php-unit` — гоняет только `tests/Unit`, без подъёма тест-стенда
+- [ ] `make test` остаётся каноническим CI-таргетом (полный сьют на live-стенде)
+- [ ] Документировано в `##` help Makefile
+
+**Decisions:**
+- Да: добавить `make test-php-unit` (только `tests/Unit`), без подъёма стенда.
+- `make test` остаётся каноническим CI-таргетом.
+- Отдельный PHPUnit suite `unit` в `phpunit.xml` — по необходимости при реализации (не блокер решения).
+
+**Work notes:**
+Groomed 2026-08-01: approve fast unit-only target; make test stays CI canonical.
+
+**Status:** todo.
