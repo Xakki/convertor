@@ -1,0 +1,72 @@
+groups:
+# =====================================================================
+# convertor — KeyDB Streams queue health (project label = "convertor")
+# Source of truth: deploy/monitoring/convertor.rules (sync → dockprom).
+# Worker CPU/MEM live in DB/admin (CNV-35), not Prometheus — worker-pool
+# health here is proxied via stream consumers / lag / pending idle.
+# =====================================================================
+- name: convertor
+  rules:
+  # Exporter pod down or unreachable for 5m → no queue visibility.
+  - alert: ConvertorExporterDown
+    expr: convertor_exporter_up == 0 or up{job="convertor-exporter"} == 0
+    for: 5m
+    labels:
+      severity: warning
+      project: convertor
+    annotations:
+      summary: "Convertor metrics exporter is down"
+      description: "convertor-metrics-exporter has been unreachable for 5 min. KeyDB Streams metrics unavailable."
+      summary_resolved: "Convertor metrics exporter recovered"
+      description_resolved: "convertor-metrics-exporter is back online."
+
+  # DLQ should normally be empty — any message sitting there for 10m = stuck job.
+  - alert: ConvertorDeadLetterGrowing
+    expr: convertor_dead_letter_messages > 0
+    for: 10m
+    labels:
+      severity: warning
+      project: convertor
+    annotations:
+      summary: "Convertor dead-letter queue has messages"
+      description: "{{ $value }} message(s) in the convertor DLQ for 10+ min. Investigate failed conversions in conv.dead stream."
+      summary_resolved: "Convertor dead-letter queue cleared"
+
+  # Undelivered backlog — consumers cannot keep up (or none attached).
+  # Metric: convertor_stream_group_lag (exporter XINFO/XRANGE). Threshold 100
+  # matches Grafana panel red step; tune if steady-state backlog is higher.
+  - alert: ConvertorQueueLagHigh
+    expr: max by (stream) (convertor_stream_group_lag{group="convertor"}) > 100
+    for: 10m
+    labels:
+      severity: warning
+      project: convertor
+    annotations:
+      summary: "Convertor queue lag high on {{ $labels.stream }}"
+      description: "Stream {{ $labels.stream }} group lag is {{ $value }} (>100) for 10+ min. Scale workers or check ws-gateway consumers."
+      summary_resolved: "Convertor queue lag recovered on {{ $labels.stream }}"
+
+  # Zero registered consumers ≈ worker pool / gateway reader down for that stream.
+  - alert: ConvertorNoConsumers
+    expr: convertor_stream_group_consumers{group="convertor"} == 0
+    for: 10m
+    labels:
+      severity: critical
+      project: convertor
+    annotations:
+      summary: "Convertor has no consumers on {{ $labels.stream }}"
+      description: "Consumer group 'convertor' on {{ $labels.stream }} has 0 consumers for 10+ min. Check ws-gateway and category workers."
+      summary_resolved: "Convertor consumers restored on {{ $labels.stream }}"
+
+  # Oldest PEL entry idle too long — stalled consumer holding work without ACK.
+  # 600000 ms = 10 min (above typical XAUTOCLAIM reclaim idle).
+  - alert: ConvertorPendingStall
+    expr: convertor_stream_pending_max_idle_ms{group="convertor"} > 600000
+    for: 5m
+    labels:
+      severity: warning
+      project: convertor
+    annotations:
+      summary: "Convertor pending stall on {{ $labels.stream }}"
+      description: "Oldest pending entry on {{ $labels.stream }} idle {{ $value }}ms (>10 min) for 5+ min. Check reclaim / stuck worker."
+      summary_resolved: "Convertor pending stall cleared on {{ $labels.stream }}"

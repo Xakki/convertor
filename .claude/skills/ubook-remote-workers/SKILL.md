@@ -150,6 +150,26 @@ The proof of a successful deploy lives in the **main-server** DB, because
   `healthy`, none restarting — necessary but not sufficient; the DB check
   above is the real confirmation.
 
+## Ops notes
+
+### CNV-44 (2026-08-02) — recreate AI named volumes
+
+Named volumes `worker-ai-models` / `worker-ai-data` had stale compose label
+`com.docker.compose.project=convertor-remote-xbook` (pre-rename). Compose
+project on this host is `convertor-remote-ubook`, so every `make up` warned
+about orphans. Fix: stop+rm AI container → `docker volume rm` both volumes →
+`make workers-recreate` (compose recreates volumes with correct labels).
+Decision was recreate+redownload, not migrate.
+
+- Whisper models are **lazy** (not pulled at container start). After recreate
+  the HF cache was empty; warming `WhisperModel("base", device="cpu",
+  compute_type="int8")` inside the running container redownloaded in
+  **~17 s load / ~25 s with smoke transcribe**, cache ≈ **148 MB** on the
+  volume (`du` ≈ 142M; HF file-bytes sum ≈ 296 MB before hub hardlink
+  accounting). Unauthenticated HF Hub (no `HF_TOKEN`) — fine for this size.
+- Post-fix: `make up` has **no** orphan/`xbook` warnings for these volumes;
+  labels show `convertor-remote-ubook`.
+
 ## See also
 - `image-build-deploy` — image topology, main-server deploy, Harbor.
 - `docs/workers-remote-deploy.md` — full generic remote-host setup (preflight

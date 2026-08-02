@@ -1,0 +1,192 @@
+# Публичный standalone-compose для remote-воркеров (без клона репо).
+# Источник правды зеркалит сервисы воркеров из корневого docker-compose.yml,
+# но без build:/KeyDB/S3/fluent/ws-gateway/metrics-exporter.
+#
+# Профили (один сервис = один профиль):
+#   document | audio | video | image | data | ai
+# CUDA / worker-ai:cuda в публичный путь НЕ входят.
+#
+# Пример:
+#   docker compose --env-file .env --profile document --profile image up -d
+
+name: ${COMPOSE_PROJECT_NAME:-convertor-remote}
+
+services:
+    worker-libreoffice:
+        profiles: ["document"]
+        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-libreoffice:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-always}
+        container_name: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-libreoffice"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV:-prod}
+            TZ: ${TZ:-UTC}
+            WORKER_MODULE: workers.libreoffice.worker
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-libreoffice
+            WORKER_TYPE: document
+            WORKER_HOST: ${HOST_NAME:-}
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
+        healthcheck:
+            test: ["CMD", "soffice", "--version"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 20s
+
+    worker-ffmpeg-audio:
+        profiles: ["audio"]
+        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-ffmpeg:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-always}
+        container_name: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ffmpeg-audio"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV:-prod}
+            TZ: ${TZ:-UTC}
+            WORKER_MODULE: workers.ffmpeg.worker
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ffmpeg-audio
+            WORKER_TYPE: audio
+            WORKER_HOST: ${HOST_NAME:-}
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
+        healthcheck:
+            test: ["CMD", "ffmpeg", "-version"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+
+    worker-ffmpeg-video:
+        profiles: ["video"]
+        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-ffmpeg:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-always}
+        container_name: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ffmpeg-video"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV:-prod}
+            TZ: ${TZ:-UTC}
+            WORKER_MODULE: workers.ffmpeg.worker
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ffmpeg-video
+            WORKER_TYPE: video
+            WORKER_HOST: ${HOST_NAME:-}
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
+        healthcheck:
+            test: ["CMD", "ffmpeg", "-version"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+
+    worker-image:
+        profiles: ["image"]
+        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-image:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-always}
+        container_name: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-image"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV:-prod}
+            TZ: ${TZ:-UTC}
+            WORKER_MODULE: workers.image.worker
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-image
+            WORKER_TYPE: image
+            WORKER_HOST: ${HOST_NAME:-}
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
+        healthcheck:
+            test: ["CMD", "convert", "-version"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+
+    worker-data:
+        profiles: ["data"]
+        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-data:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-always}
+        container_name: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-data"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        environment:
+            APP_ENV: ${APP_ENV:-prod}
+            TZ: ${TZ:-UTC}
+            WORKER_MODULE: workers.data.worker
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-data
+            WORKER_TYPE: data
+            WORKER_HOST: ${HOST_NAME:-}
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
+        healthcheck:
+            test: ["CMD", "python3", "-c", "import pandas, yaml, lxml; print('ok')"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 10s
+
+    # Только CPU. CUDA в публичный путь не входит — см. docs/worker-ai-deploy.md.
+    worker-ai:
+        profiles: ["ai"]
+        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-ai:${IMAGE_TAG:-latest}-cpu
+        pull_policy: ${AI_PULL_POLICY:-always}
+        container_name: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ai"
+        hostname: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ai"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 60s
+        stop_signal: SIGTERM
+        volumes:
+            - worker-ai-models:/home/app/.cache/huggingface
+        environment:
+            APP_ENV: ${APP_ENV:-prod}
+            TZ: ${TZ:-UTC}
+            WORKER_MODULE: workers.ai.worker
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ai
+            WORKER_TYPE: ai
+            WORKER_HOST: ${HOST_NAME:-}
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
+            WHISPER_MODEL: ${WHISPER_MODEL:-base}
+            WHISPER_DEVICE: ${WHISPER_DEVICE:-}
+            WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-}
+            TTS_ENGINE: ${TTS_ENGINE:-espeak}
+            EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+            LLM_BACKEND: ${LLM_BACKEND:-llamacpp}
+            LLM_MODEL_REPO: ${LLM_MODEL_REPO:-Qwen/Qwen2.5-0.5B-Instruct-GGUF}
+            LLM_MODEL_FILE: ${LLM_MODEL_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+        command: ["python3", "-m", "workers.ai"]
+        healthcheck:
+            test: ["CMD", "python3", "-c", "import faster_whisper; print('ok')"]
+            interval: 60s
+            timeout: 15s
+            retries: 3
+            start_period: 60s
+
+volumes:
+    worker-ai-models:
+        name: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ai-models"

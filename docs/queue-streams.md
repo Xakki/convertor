@@ -230,7 +230,9 @@ the gateway always reads one entry per credit; batching lives in credits, not in
 
 A sidecar container **`convertor-metrics-exporter`** polls KeyDB streams and groups,
 exposing Prometheus metrics. Dockprom Prometheus scrapes the exporter; dashboards and
-alerts live in Grafana at `mon.xakki.ru`.
+alerts live in Grafana at `mon.xakki.ru`. How to enable the `monitoring` profile,
+apply alert rules, and interpret alerts — **`docs/monitoring.md`** (in-repo source:
+`deploy/monitoring/`).
 
 | Metric | Labels | Meaning |
 |--------|--------|---------|

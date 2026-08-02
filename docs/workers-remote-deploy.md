@@ -9,6 +9,10 @@
 Symfony API по HTTPS. `ws-gateway` и `metrics-exporter` остаются ТОЛЬКО на
 главном сервере — их на remote-хосте поднимать не нужно и незачем.
 
+> **Публичный bootstrap без клона репо:** `deploy/` + gist (`curl | bash`) —
+> см. `deploy/README.md`. Этот документ — полный путь через клон репозитория
+> и Makefile (fluent-sidecar, GPU/CUDA и т.п.).
+
 Про сборку/запуск именно AI-воркера отдельно (GPU/CPU, двухслойная схема
 `ai-base` → `ai.cuda`/`ai.cpu`) — см. `docs/worker-ai-deploy.md`; здесь эта
 сборка используется как один из шести сервисов набора.

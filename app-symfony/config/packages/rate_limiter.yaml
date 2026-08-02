@@ -1,30 +1,50 @@
 framework:
     rate_limiter:
-        # Лимит анонимных (guest) конвертаций по IP. Применяется в
-        # ConversionController::convert только для не-ROLE_USER. Стартовое N=20/час.
+        # Счётчики в cache.app → KeyDB DB0 (общий пул всех PHP-инстансов).
+        # Дефолт Symfony cache.rate_limiter = filesystem (per-container) — НЕ используем.
+        # Лимит анонимных (guest) конвертаций по IP (+ по guestId, см. ApiRateLimiter).
+        # Стартовое N=20/час.
         anon_convert:
             policy: 'sliding_window'
             limit: 20
             interval: '1 hour'
-        # Лимит анонимных запросов GET /api/v1/quota по IP (не-ROLE_USER).
-        # Ленивая guest-модель уже убрала рост `users` от флуда /quota; этот
-        # лимитер — общая защита от request-флуда на дешёвом эндпоинте
-        # (defense-in-depth). /quota поллит фронт, потому щедрый N=60/час.
+            cache_pool: cache.app
+        # Лимит анонимных запросов GET /api/v1/quota по IP (+ guestId).
+        # /quota поллит фронт, потому щедрый N=60/час.
         anon_quota:
             policy: 'sliding_window'
             limit: 60
             interval: '1 hour'
+            cache_pool: cache.app
         # Лимит GET /api/v1/auth/telegram/poll по IP. Легитимный цикл ≈ 2с×150
         # попыток / TTL 300с — оставляем запас на один полный вход + ретраи.
         anon_telegram_poll:
             policy: 'sliding_window'
             limit: 200
             interval: '5 minutes'
+            cache_pool: cache.app
+        # Анти-burst для ROLE_USER на POST /convert (не дневная квота).
+        # Ключи: IP и user:{id} — reject если любой превышен (ApiRateLimiter).
+        user_convert:
+            policy: 'sliding_window'
+            limit: 120
+            interval: '1 hour'
+            cache_pool: cache.app
+        # Анти-burst для ROLE_USER на GET /quota.
+        user_quota:
+            policy: 'sliding_window'
+            limit: 120
+            interval: '1 hour'
+            cache_pool: cache.app
+        # Грубий пол для всего /api/v1/* (ApiIpRateLimitListener), 300/мин на IP.
+        api_ip:
+            policy: 'sliding_window'
+            limit: 300
+            interval: '1 minute'
+            cache_pool: cache.app
 
 # В тестах getClientIp() всегда 127.0.0.1 → все guest-запросы делят одно ведро.
-# Дефолтный storage (cache.rate_limiter→filesystem) переживает запуски phpunit и
-# копит токены между прогонами. Кладём лимитер в in-memory (array) пул, чтобы
-# каждый прогон стартовал с чистого ведра и тесты не флакали на 429.
+# Redis/KeyDB в unit-прогоне не нужен: array-пул, чистый старт каждого phpunit.
 when@test:
     framework:
         rate_limiter:
@@ -33,6 +53,12 @@ when@test:
             anon_quota:
                 cache_pool: 'cache.rate_limiter.test_array'
             anon_telegram_poll:
+                cache_pool: 'cache.rate_limiter.test_array'
+            user_convert:
+                cache_pool: 'cache.rate_limiter.test_array'
+            user_quota:
+                cache_pool: 'cache.rate_limiter.test_array'
+            api_ip:
                 cache_pool: 'cache.rate_limiter.test_array'
         cache:
             pools:

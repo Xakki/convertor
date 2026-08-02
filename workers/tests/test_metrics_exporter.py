@@ -157,16 +157,19 @@ def test_collect_stream_sets_gauges():
         xinfo_groups={"conv.document": [fake_group]},
         xpending_results={"conv.document": {}},
     )
+    m.xpending_range.return_value = [{"time_since_delivered": 50, "message_id": "99-0"}]
 
     with patch.object(exp._stream_length, "labels") as mock_len, \
          patch.object(exp._group_pending, "labels") as mock_pend, \
          patch.object(exp._group_lag, "labels") as mock_lag, \
-         patch.object(exp._group_consumers, "labels") as mock_cons:
+         patch.object(exp._group_consumers, "labels") as mock_cons, \
+         patch.object(exp._pending_max_idle, "labels") as mock_idle:
 
         mock_len.return_value = MagicMock()
         mock_pend.return_value = MagicMock()
         mock_lag.return_value = MagicMock()
         mock_cons.return_value = MagicMock()
+        mock_idle.return_value = MagicMock()
 
         exp._collect_stream(m, "conv.document")
 
@@ -181,6 +184,8 @@ def test_collect_stream_sets_gauges():
 
         mock_cons.assert_called_with(stream="conv.document", group="convertor")
         mock_cons.return_value.set.assert_called_with(2)
+
+        mock_idle.return_value.set.assert_called_with(50.0)
 
 
 def test_collect_stream_skips_other_groups():
@@ -218,6 +223,29 @@ def test_collect_stream_sets_pending_max_idle_via_xpending_range():
         mock_idle.return_value.set.assert_called_with(12345.0)
 
     m.xpending_range.assert_called_once_with("conv.audio", "convertor", min="-", max="+", count=1)
+
+
+def test_collect_stream_resets_pending_max_idle_when_pel_empty():
+    """Empty PEL must set pending_max_idle_ms=0 (no stale high values)."""
+    fake_group = {
+        "name": "convertor",
+        "pending": 0,
+        "consumers": 2,
+        "lag": 0,
+        "last-delivered-id": "100-0",
+    }
+    m = _make_redis_mock(
+        xlens={"conv.document": 1},
+        xinfo_groups={"conv.document": [fake_group]},
+    )
+
+    with patch.object(exp._pending_max_idle, "labels") as mock_idle:
+        mock_idle.return_value = MagicMock()
+        exp._collect_stream(m, "conv.document")
+        mock_idle.assert_called_with(stream="conv.document", group="convertor")
+        mock_idle.return_value.set.assert_called_with(0.0)
+
+    m.xpending_range.assert_not_called()
 
 
 def test_collect_stream_xinfo_error_skips_gracefully():

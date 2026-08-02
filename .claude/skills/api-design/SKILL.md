@@ -29,6 +29,13 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
   (400/401/403/404/409/422/429/500), не голый 500 с трассой.
 - **Роутинг** — PHP-атрибуты `#[Route(...)]` на классе (базовый префикс) и на
   методе (суффикс + `methods:`), не YAML/XML роуты.
+- **Rate limit (CNV-34)** — счётчики в `cache.app` (KeyDB DB0), конфиг
+  `config/packages/rate_limiter.yaml`. Грубий пол `api_ip` 300/мин —
+  `ApiIpRateLimitListener` на `/api/v1/*` (исключения: formats/examples/
+  internal/worker/webhook/auth-start). Convert/quota — `ApiRateLimiter`
+  (guest: `anon_*` по IP + `guest:{id}`; ROLE_USER: `user_*` по IP +
+  `user:{id}`). 429: `{"error":"..."}` + `Retry-After`. Источник чисел —
+  yaml, не этот абзац.
 
 ## Аутентификация и доступ
 

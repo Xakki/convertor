@@ -83,6 +83,10 @@ gateway-down: ## Stop & remove только ws-gateway
 gateway-recreate: ## Force-recreate ТОЛЬКО ws-gateway на свежий образ, --no-deps (иначе depends_on тянет keydb)
 	$(DC) up -d --force-recreate --no-deps ws-gateway
 
+.PHONY: metrics-exporter-recreate
+metrics-exporter-recreate: ## Force-recreate metrics-exporter (profile monitoring), --no-deps
+	$(DC) up -d --force-recreate --no-deps metrics-exporter
+
 .PHONY: gateway-logs
 gateway-logs: ## Tail логи ws-gateway
 	$(DC) logs -f ws-gateway
@@ -216,6 +220,13 @@ release-workers: release-tag release-guard build-workers build-ai-cpu ## Cache-w
 	docker tag $(AI_CPU_IMAGE) $(HARBOR_NS)/worker-ai:latest-cpu
 	docker push $(HARBOR_NS)/worker-ai:$(RELEASE_TAG)-cpu
 	docker push $(HARBOR_NS)/worker-ai:latest-cpu
+	@$(MAKE) publish-deploy-gist
+
+# Публикация deploy/ в публичный gist (проекция для curl|bash). Warn+skip если
+# DEPLOY_GIST_ID пуст или нет gh/jq — релиз образов при этом уже успешен.
+.PHONY: publish-deploy-gist
+publish-deploy-gist: ## Обновить публичный gist содержимым deploy/ (нужен DEPLOY_GIST_ID; иначе skip)
+	@bash deploy/publish-to-gist.sh
 
 .PHONY: rebuild-workers
 rebuild-workers: DOCKER_BUILD_FLAGS := --no-cache --pull
@@ -312,10 +323,8 @@ test-gateway: build-data-test ## KeyDB-слой WS-Gateway на РЕАЛЬНОМ
 	    $(IMG)/worker-data:test \
 	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_liveness_push.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_dlq_consumer.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
 
-.PHONY: test-e2e
-test-e2e: build-workers build-ffmpeg-test ## Реальный S3 in/out e2e: data-воркер csv→json на тест-стенде
-	$(REQUIRE_TEST)
-	$(MAKE) up migrate
+# Общий docker-run для e2e/smoke (KeyDB+S3+DB env → pytest -m e2e).
+define RUN_E2E_PYTEST
 	docker run --rm -u root \
 	    --network $(COMPOSE_PROJECT_NAME)-network \
 	    -e REDIS_HOST=$(KEYDB_CONT) -e REDIS_DB=$(REDIS_QUEUE_DB) -e REDIS_PASSWORD \
@@ -326,6 +335,22 @@ test-e2e: build-workers build-ffmpeg-test ## Реальный S3 in/out e2e: dat
 	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
 	    $(IMG)/worker-ffmpeg:test \
 	    python3 -m pytest workers/tests/test_workers_e2e.py -m e2e -p no:cacheprovider -ra -v
+endef
+
+.PHONY: test-e2e
+test-e2e: build-workers build-ffmpeg-test ## Реальный S3 in/out e2e (все категории) на тест-стенде
+	$(REQUIRE_TEST)
+	$(MAKE) COMPOSE_PROFILES=server,test,ai up migrate
+	$(RUN_E2E_PYTEST)
+
+# Smoke = тот же e2e-прогон (1 конвертация на document/image/audio/video/data/ai).
+# AI-профиль включается явно (в .env.test по умолчанию ai выключен — тяжёлый образ).
+# Вызов: `make smoke` (пере-вход TEST=1) или `make TEST=1 smoke-run`.
+.PHONY: smoke-run
+smoke-run: build-workers build-ffmpeg-test ## Internal: smoke e2e на тест-стенде (+ AI profile)
+	$(REQUIRE_TEST)
+	$(MAKE) COMPOSE_PROFILES=server,test,ai up migrate
+	$(RUN_E2E_PYTEST)
 
 # Public-API integration e2e (PHPUnit, group=integration): POST /convert → poll
 # status → download по РЕАЛЬНОМУ HTTP против стенда, по одному кейсу на категорию

@@ -164,6 +164,10 @@ db-dump-pull: ## Скачать дамп из S3 в ./backup/dump.sql.gz (DUMP_K
 test: test-up ## Полный прогон: тест-стенд + PHPUnit + pytest воркеров + drift-guard
 	$(MAKE_TEST) test-php test-python test-drift
 
+.PHONY: smoke
+smoke: ## Smoke e2e: 1 конвертация/категорию (doc/image/audio/video/data/ai) на тест-стенде
+	$(MAKE_TEST) smoke-run
+
 .PHONY: test-up
 test-up: ## Поднять тест-стенд (свой compose-проект/порты/БД) + накатить миграции
 	$(MAKE_TEST) up migrate

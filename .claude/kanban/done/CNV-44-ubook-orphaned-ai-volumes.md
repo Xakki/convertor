@@ -1,6 +1,7 @@
 ### uBook: тома `worker-ai-models`/`worker-ai-data` подписаны старым именем compose-проекта
 
 **Criticality:** Low
+**Epic:** [[CNV-54]]
 
 **TAGS:**
 - tech-debt
@@ -24,10 +25,10 @@ AI-воркера) до сих пор помечены лейблом старо
 аналог) их можно случайно удалить, не осознав, что это боевой кэш моделей, а не мусор.
 
 **Acceptance Criteria:**
-- [ ] Старые тома с лейблом `convertor-remote-xbook` удалены / заменены
-- [ ] Новые тома созданы под `convertor-remote-ubook` (корректные лейблы)
-- [ ] ML-модели перекачаны; `make up` на uBook без orphan-предупреждений по этим томам
-- [ ] Кратко зафиксировано в ops-заметке / skill ubook (время/трафик redownload)
+- [x] Старые тома с лейблом `convertor-remote-xbook` удалены / заменены
+- [x] Новые тома созданы под `convertor-remote-ubook` (корректные лейблы)
+- [x] ML-модели перекачаны; `make up` на uBook без orphan-предупреждений по этим томам
+- [x] Кратко зафиксировано в ops-заметке / skill ubook (время/трафик redownload)
 
 **Decisions:**
 - Действие: recreate + redownload (не migrate содержимого старых томов).
@@ -38,4 +39,8 @@ Groomed 2026-08-01: recreate+redownload (not migrate); ops card.
 
 **Контекст:** обнаружено 2026-07-30 при верификации Harbor pull-деплоя воркеров на uBook.
 
-**Status:** todo.
+**Execution Log:**
+- 2026-08-02: uBook — stop+rm `convertor-remote-ubook-worker-ai`, `docker volume rm worker-ai-models worker-ai-data`, `make workers-recreate` → volumes recreated with `com.docker.compose.project=convertor-remote-ubook`.
+- 2026-08-02: Models are lazy at startup; warmed Whisper `base`/cpu/int8 via `docker exec` → ~17s load / ~25s total, volume ≈148 MB. `make up` — no orphan/`xbook` warnings; AI healthy. Ops note added to skill `ubook-remote-workers`.
+
+**Status:** ready.

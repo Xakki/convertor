@@ -191,20 +191,21 @@ def _collect_stream(r: redis.Redis, stream: str) -> None:
         lag = _compute_lag(r, stream, g, xlen)
         _group_lag.labels(stream=stream, group=name).set(lag)
 
-        # Optional: idle time of the oldest PEL entry via XPENDING range.
+        # Idle time of the oldest PEL entry via XPENDING range.
         # xpending() summary returns min/max as ID strings (no idle time).
         # xpending_range(..., count=1) returns [{'time_since_delivered': ms, ...}].
+        # Always set the gauge (0 when PEL empty) so stale high values cannot linger.
+        idle_ms = 0.0
         if pending > 0:
             try:
                 oldest = r.xpending_range(stream, name, min="-", max="+", count=1)
                 if oldest:
-                    idle_ms = oldest[0].get("time_since_delivered")
-                    if idle_ms is not None:
-                        _pending_max_idle.labels(stream=stream, group=name).set(
-                            float(idle_ms)
-                        )
+                    raw = oldest[0].get("time_since_delivered")
+                    if raw is not None:
+                        idle_ms = float(raw)
             except redis.RedisError:
-                pass  # optional metric — skip gracefully
+                pass  # optional metric — leave idle_ms=0
+        _pending_max_idle.labels(stream=stream, group=name).set(idle_ms)
 
 
 def _scrape(r: redis.Redis) -> None:

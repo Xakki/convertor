@@ -1,6 +1,7 @@
 ### Публичный запуск remote-воркеров (deploy/ + gist install)
 
 **Criticality:** Medium
+**Epic:** [[CNV-54]]
 
 **TAGS:**
 - deploy
@@ -62,5 +63,17 @@ S3/KeyDB напрямую (только gateway).
 - DOCKER_REGISTRY / `.env` login — остаётся на `make-login-not-configured`, не здесь.
 - Ранее (2026-07-20): Harbor `harbor.xakki.ru/convertor/*` (anonymous pull); gist как
   проекция `deploy/`, не отдельный публичный git-репо (fallback только если gist тесен).
+- (2026-08-02) Publish через `deploy/publish-to-gist.sh` + `gh api PATCH` (не
+  интерактивный `gh gist edit`); warn+skip если `DEPLOY_GIST_ID` пуст.
 
-**Status:** todo.
+**Status:** progress — реализация в репо; gist ещё не создан (нужен ручной
+`DEPLOY_GIST_ID` один раз).
+
+**Execution Log:**
+- 2026-08-02: добавлен `deploy/` (compose profiles, `.env.example`, `install.sh`,
+  `README.md`, `publish-to-gist.sh`); `make publish-deploy-gist` в хвосте
+  `release-workers`; плейсхолдеры `DEPLOY_GIST_*` в `.env`; обновлены
+  `docs/worker-ai-deploy.md` + указатель в `docs/workers-remote-deploy.md`.
+  Sanity: `bash -n`, `docker compose … config -q`, skip publish без ID.
+- 2026-08-02: review nits — lowercase `COMPOSE_PROJECT_NAME` placeholder,
+  `/deploy/.env` в `.gitignore`, безопасное quoting `WORKER_API_TOKEN` в install.sh.

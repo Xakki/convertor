@@ -655,7 +655,10 @@ services:
         environment:
             APP_ENV: ${APP_ENV}
             TZ: ${TZ}
-            REDIS_HOST: ${REDIS_HOST:-keydb}
+            # Project-prefixed container name: metrics-exporter sits on backend+common;
+            # plain "keydb" can resolve to another project's KeyDB on external `common`
+            # (e.g. shared-keydb) and scrape empty DBs — lag/consumer gauges stay absent.
+            REDIS_HOST: ${METRICS_REDIS_HOST:-${COMPOSE_PROJECT_NAME}-keydb}
             REDIS_PORT: ${REDIS_PORT:-6379}
             REDIS_DB: ${REDIS_QUEUE_DB:-2}
             REDIS_PASSWORD: ${REDIS_PASSWORD}

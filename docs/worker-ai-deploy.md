@@ -4,6 +4,16 @@
 
 ## Быстрый старт
 
+**Рекомендуемый публичный путь (без клона репо)** — каталог `deploy/` + gist
+(`curl | bash`), только CPU-образ:
+
+```bash
+curl -fsSL https://gist.githubusercontent.com/<OWNER>/<GIST_ID>/raw/install.sh | bash
+```
+
+Подробности, матрица профилей и создание gist — `deploy/README.md`. CUDA в
+публичный путь **не** входит.
+
 **CPU-вариант публикуется в Harbor** — happy path его просто пуллит, собирать не
 нужно:
 

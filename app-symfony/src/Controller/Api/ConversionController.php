@@ -15,11 +15,11 @@ use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionRegistry;
 use App\Service\Quota\QuotaService;
+use App\Service\RateLimit\ApiRateLimiter;
 use App\Service\Storage\S3Storage;
 use AsyncAws\S3\Exception\NoSuchKeyException;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\HeaderUtils;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -29,7 +29,6 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
-use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Security\Http\Attribute\CurrentUser;
 use Symfony\Component\Security\Http\Attribute\IsGranted;
@@ -52,10 +51,7 @@ class ConversionController extends AbstractController
         private readonly ConversionRepository $conversionRepository,
         private readonly QuotaService $quotaService,
         private readonly S3Storage $s3,
-        #[Autowire(service: 'limiter.anon_convert')]
-        private readonly RateLimiterFactory $anonConvertLimiter,
-        #[Autowire(service: 'limiter.anon_quota')]
-        private readonly RateLimiterFactory $anonQuotaLimiter,
+        private readonly ApiRateLimiter $apiRateLimiter,
     ) {
     }
 
@@ -156,15 +152,10 @@ class ConversionController extends AbstractController
         // залогиненному пройти guest-роуты, но НЕ наоборот).
         $privileged = $this->isGranted('ROLE_USER');
 
-        // Rate-limit гостя по IP (залогиненные ограничены только квотой).
-        if (! $privileged) {
-            $limit = $this->anonConvertLimiter->create($request->getClientIp())->consume(1);
-            if (! $limit->isAccepted()) {
-                return $this->json(
-                    ['error' => 'Too many anonymous conversions, please try later or log in'],
-                    Response::HTTP_TOO_MANY_REQUESTS,
-                );
-            }
+        // Per-IP + per-user/guest rate limit (CNV-34). Гость: anon_*; ROLE_USER: user_*.
+        $rateLimited = $this->apiRateLimiter->enforceConvert($request, $user, $privileged);
+        if ($rateLimited !== null) {
+            return $rateLimited;
         }
 
         // Text-вход материализуется во временный файл (fromText()) и идёт по
@@ -658,17 +649,11 @@ class ConversionController extends AbstractController
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
         }
 
-        // Ленивая guest-модель уже убрала рост `users` от флуда /quota; этот
-        // лимитер — общая защита от request-флуда на дешёвом эндпоинте
-        // (defense-in-depth), только для гостя (залогиненных не трогаем).
-        if (! $this->isGranted('ROLE_USER')) {
-            $limit = $this->anonQuotaLimiter->create($request->getClientIp())->consume(1);
-            if (! $limit->isAccepted()) {
-                return $this->json(
-                    ['error' => 'Too many requests, please try later'],
-                    Response::HTTP_TOO_MANY_REQUESTS,
-                );
-            }
+        // Per-IP + per-user/guest anti-burst (CNV-34); дневная квота — отдельно в QuotaService.
+        $privileged  = $this->isGranted('ROLE_USER');
+        $rateLimited = $this->apiRateLimiter->enforceQuota($request, $user, $privileged);
+        if ($rateLimited !== null) {
+            return $rateLimited;
         }
 
         $quota                     = $this->quotaService->getRemainingQuota($user);
@@ -676,7 +661,7 @@ class ConversionController extends AbstractController
 
         // Для гостя переопределяем: ai недоступен (0/0), план — "guest". Не полагаемся
         // на User.plan гостя (free-fallback дал бы ai_conversions:1/лимит:1).
-        if (! $this->isGranted('ROLE_USER')) {
+        if (! $privileged) {
             $quota['ai_conversions']       = 0;
             $quota['ai_conversions_limit'] = 0;
             $quota['plan']                 = 'guest';
