@@ -20,6 +20,7 @@ use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
+use Symfony\Component\HttpKernel\Exception\GoneHttpException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\HttpKernel\Exception\UnsupportedMediaTypeHttpException;
 use Symfony\Component\Messenger\MessageBusInterface;
@@ -149,6 +150,160 @@ class ConversionManager
         $this->quotaService->charge($user, $isAi);
 
         return $conversion;
+    }
+
+    /**
+     * Повтор конверсии из кабинета: новая строка Conversion (не reuse), копия
+     * исходника в S3 (независимый lifecycle от исходной строки), квота как у
+     * обычного submit. Исходник уже в `-inputs` — клиент файл не грузит.
+     *
+     * Порядок гейтов до side-эффектов: owner → path-safe key → S3 exists (410) →
+     * toggle → quota.check; затем copy → persist → dispatch → charge.
+     *
+     * @throws \RuntimeException     чужая / несуществующая (контроллер → 404)
+     * @throws GoneHttpException     исходник истёк / вычищен (→ 410)
+     * @throws ConversionDisabledException пара отключена админом (→ 409)
+     */
+    public function retryConversion(int $id, User $user): Conversion
+    {
+        $source = $this->requireOwnedConversion($id, $user);
+        $input  = $source->getInputFile();
+        $srcKey = $input->getStoragePath();
+
+        $this->assertSafeObjectKey($srcKey, 'inputs/');
+
+        if (! $this->s3->objectExists($this->s3->inputsBucket(), $srcKey)) {
+            throw new GoneHttpException('Input file expired or no longer available');
+        }
+
+        $fromFormat = $source->getFromFormat();
+        $toFormat   = $source->getToFormat();
+        $isAi       = $source->isAi();
+        $ocr        = $source->isOcr();
+        $category   = $source->getCategory();
+
+        if ($this->toggleService !== null && ! $this->toggleService->isEnabled($fromFormat, $toFormat)) {
+            throw new ConversionDisabledException('Конвертация временно отключена');
+        }
+
+        $this->quotaService->check($user, $isAi);
+
+        // Серверная копия в новый ключ — delete одной строки не затронет другую.
+        $dstKey = 'inputs/' . date('Y/m/d') . '/' . bin2hex(random_bytes(16)) . '.' . $fromFormat;
+        $this->assertSafeObjectKey($dstKey, 'inputs/');
+        $this->s3->copyObject(
+            $this->s3->inputsBucket(),
+            $srcKey,
+            $this->s3->inputsBucket(),
+            $dstKey,
+            $input->getMimeType(),
+        );
+
+        $inputFile = new FileStorage();
+        $inputFile->setOriginalName($input->getOriginalName());
+        $inputFile->setStoragePath($dstKey);
+        $inputFile->setMimeType($input->getMimeType());
+        $inputFile->setSizeBytes($input->getSizeBytes());
+        $inputFile->setExpiresAt(new \DateTimeImmutable('+48 hours'));
+
+        $conversion = new Conversion();
+        $conversion->setUser($user);
+        $conversion->setInputFile($inputFile);
+        $conversion->setFromFormat($fromFormat);
+        $conversion->setToFormat($toFormat);
+        $conversion->setCategory($category);
+        $conversion->setIsAi($isAi);
+        $conversion->setIsOcr($ocr);
+
+        $this->em->persist($inputFile);
+        $this->em->persist($conversion);
+        $this->em->flush();
+
+        $this->dispatch($conversion);
+        $this->quotaService->charge($user, $isAi);
+
+        return $conversion;
+    }
+
+    /**
+     * Hard-delete конверсии владельца: S3 input (+ result, если есть) и строки
+     * Conversion + FileStorage. Не soft-delete. Чужая/несуществующая →
+     * RuntimeException (контроллер мапит в 404, не палим факт существования).
+     *
+     * Ключи валидируются (префикс inputs/|results/, без `..`) до обращения к S3.
+     * Сбой/отсутствие объекта в S3 не блокирует вычистку БД (как FileCleanupService).
+     */
+    public function deleteConversion(int $id, User $user): void
+    {
+        $conversion = $this->requireOwnedConversion($id, $user);
+        $inputFile  = $conversion->getInputFile();
+        $outputFile = $conversion->getOutputFile();
+
+        $inputKey = $inputFile->getStoragePath();
+        $this->assertSafeObjectKey($inputKey, 'inputs/');
+        $this->deleteObjectQuietly($this->s3->inputsBucket(), $inputKey);
+
+        if ($outputFile !== null) {
+            $outputKey = $outputFile->getStoragePath();
+            $this->assertSafeObjectKey($outputKey, 'results/');
+            $this->deleteObjectQuietly($this->s3->resultsBucket(), $outputKey);
+        }
+
+        // Conversion — первым (FK на FileStorage), затем сами FileStorage.
+        $this->em->remove($conversion);
+        $this->em->remove($inputFile);
+        if ($outputFile !== null) {
+            $this->em->remove($outputFile);
+        }
+        $this->em->flush();
+    }
+
+    /**
+     * Owner-scope загрузка: чужая / несуществующая → RuntimeException (единый
+     * сигнал для контроллера → 404).
+     */
+    private function requireOwnedConversion(int $id, User $user): Conversion
+    {
+        $conversion = $this->conversionRepository->find($id);
+
+        if ($conversion === null || $conversion->getUser()->getId() !== $user->getId()) {
+            throw new \RuntimeException('Conversion not found');
+        }
+
+        return $conversion;
+    }
+
+    /**
+     * Path-traversal защита для ключей из БД перед S3. Разрешены только ключи
+     * с ожидаемым префиксом (`inputs/` / `results/`), без `..`, `\0`, `\`,
+     * ведущего `/`. Имена объектов генерируем сами (uuid.ext) — пользовательский
+     * filename в ключ никогда не попадает.
+     */
+    private function assertSafeObjectKey(string $key, string $expectedPrefix): void
+    {
+        if (
+            $key === ''
+            || ! str_starts_with($key, $expectedPrefix)
+            || str_contains($key, '..')
+            || str_contains($key, "\0")
+            || str_contains($key, '\\')
+            || str_starts_with($key, '/')
+        ) {
+            throw new \RuntimeException('Invalid storage path');
+        }
+    }
+
+    /**
+     * Идемпотентное удаление S3-объекта: любой сбой глотаем — строка БД всё
+     * равно вычищается (см. FileCleanupService::deleteObject).
+     */
+    private function deleteObjectQuietly(string $bucket, string $key): void
+    {
+        try {
+            $this->s3->deleteObject($bucket, $key);
+        } catch (\Throwable) {
+            // объект уже удалён / транзиентный сбой — не блокируем hard-delete БД
+        }
     }
 
     /**

@@ -1,6 +1,7 @@
 ### В репозитории отсутствует CI-pipeline (все тесты запускаются только вручную)
 
 **Criticality:** High
+**Epic:** [[CNV-48]]
 
 **TAGS:**
 - tech-debt
@@ -30,13 +31,13 @@
 5. Документировать гейты в README
 
 **Acceptance Criteria:**
-- [ ] GitHub Actions workflow запускается на каждый PR
-- [ ] Блокирующие checks: phpstan + cs-check + `TEST=1` test-php + test-python + test-drift
-- [ ] e2e / integration — warn-only (не блокируют merge)
-- [ ] CI поднимает live docker test-проект по образцу `make test`
-- [ ] Failing blocking checks не дают merge в main
-- [ ] Статус pipeline виден в PR; логи доступны
-- [ ] Документация о гейтах в README или ROADMAP
+- [x] GitHub Actions workflow запускается на каждый PR
+- [x] Блокирующие checks: phpstan + cs-check + `TEST=1` test-php + test-python + test-drift
+- [x] e2e / integration — warn-only (не блокируют)
+- [x] CI поднимает live docker test-проект по образцу `make test`
+- [x] Failing blocking checks не дают merge в main — *документировано: required check `Quality gates` в branch protection (Settings → Branches); YAML сам merge не блокирует*
+- [x] Статус pipeline виден в PR; логи доступны — *стандарт GHA Checks*
+- [x] Документация о гейтах в README или ROADMAP
 
 **Decisions:**
 - CI = GitHub Actions.
@@ -45,8 +46,18 @@
 - В CI — live docker test-проект как у `make test` (изолированный compose-проект со своей БД).
 - Pre-push хук — вне scope этой карточки.
 - Расширение PHPStan на `migrations/`/`bin/` — отдельно (`[[CNV-29-phpstan-skips-migrations]]`).
+- CI: `COMPOSE_FILE` без fluent-logging; Harbor secrets обязательны для gates; host pytest через `.venv-ci` (PEP 668).
 
 **Work notes:**
 Groomed 2026-08-01: GHA + blocking gates + live test stand; e2e/integration warn-only.
 
-**Status:** todo.
+**Status:** ready.
+
+## Execution Log
+
+- 2026-08-02: todo→progress. Inspected Makefile/`TEST=1`/`.env.test`.
+- Job graph: **gates** (blocking) vs **warn-e2e** (`continue-on-error`). Harbor login + `TEST=1 pull` + `test-up`; no fluent on GHA; PUID/PGID from runner.
+- Composer: `.github/workflows/ci.yml` + README CI section.
+- Fix: pytest via `python3 -m venv .venv-ci` (PEP 668 blocks `--user` pip on ubuntu-latest).
+- Local validation: `pyyaml` parse OK; `make docker-check` OK; actionlint/yamllint not installed.
+- Residuals: full GHA run not executed here; branch protection must be set in GitHub UI; parallel jobs may stress runner disk (libreoffice images); Harbor secrets must be configured before first green PR.

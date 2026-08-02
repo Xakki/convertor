@@ -18,20 +18,19 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\Cookie;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\Routing\Attribute\Route;
 
 /**
- * Telegram bot-login по МОДЕЛИ MAGIC-LINK (same-device).
+ * Telegram bot-login по МОДЕЛИ PAIRING + POLL (same-device).
  *
  * Флоу: сайт зовёт /start → получает CODE + deep_link + httpOnly-cookie
  * `tg_login_nonce` в браузер-инициатор → пользователь жмёт «Войти» в боте
- * (webhook помечает CODE authorized + шлёт в чат magic-ссылку) → пользователь
- * открывает magic-ссылку `GET /callback?code=...` в ТОМ ЖЕ браузере → nonce-cookie
- * совпадает с сохранённым hash(nonce) → выдаём JWT + refresh-cookie и редиректим
- * в приложение. Под firewall `auth` (public).
+ * (webhook помечает CODE authorized) → исходная вкладка поллит
+ * `GET /poll?code=...` с nonce-cookie → при совпадении выдаём refresh-cookie.
+ * Под firewall `auth` (public).
  *
  * Nonce-привязка закрывает login-CSRF/session-fixation: атакующий, знающий
  * публичный CODE, не завершит вход (его браузер не несёт nonce-cookie → 403).
@@ -50,12 +49,14 @@ class TelegramLoginController extends AbstractController
         private readonly GuestCookieFactory $guestCookie,
         #[Autowire('%env(TELEGRAM_BOT_USERNAME)%')]
         private readonly string $telegramBotUsername,
+        #[Autowire(service: 'limiter.anon_telegram_poll')]
+        private readonly RateLimiterFactory $anonTelegramPollLimiter,
     ) {
     }
 
     #[Route('/start', methods: ['POST'])]
     #[OA\Tag(name: 'Auth')]
-    #[OA\Post(summary: 'Инициировать Telegram bot-login (magic-link)', security: [])]
+    #[OA\Post(summary: 'Инициировать Telegram bot-login (pairing + poll)', security: [])]
     #[OA\Response(
         response: 200,
         description: 'Публичный код + deep-link в бота (+ httpOnly-cookie tg_login_nonce)',
@@ -81,74 +82,67 @@ class TelegramLoginController extends AbstractController
         return $response;
     }
 
-    #[Route('/callback', methods: ['GET'])]
+    #[Route('/poll', methods: ['GET'])]
     #[OA\Tag(name: 'Auth')]
-    #[OA\Get(summary: 'Завершение Telegram-логина (magic-ссылка из бота)', security: [])]
+    #[OA\Get(summary: 'Опрос статуса Telegram-логина (исходная вкладка)', security: [])]
     #[OA\Parameter(name: 'code', in: 'query', required: true, schema: new OA\Schema(type: 'string'))]
-    #[OA\Parameter(name: 's', in: 'query', required: true, description: 'linkSecret из TG-чата', schema: new OA\Schema(type: 'string'))]
-    #[OA\Response(response: 302, description: 'Успех → редирект на / залогиненным (refresh-cookie выставлена)')]
-    #[OA\Response(response: 403, description: 'nonce-cookie ИЛИ linkSecret не совпал → fixation/takeover отбиты')]
-    #[OA\Response(response: 400, description: 'Нет code/s/cookie, код неизвестен/не авторизован/истёк')]
-    public function callback(Request $request): Response
+    #[OA\Response(response: 200, description: 'authorized — refresh-cookie выставлена, код погашен')]
+    #[OA\Response(response: 204, description: 'pending — апрува в боте ещё нет')]
+    #[OA\Response(response: 403, description: 'nonce-cookie не совпал → fixation отбита')]
+    #[OA\Response(response: 400, description: 'Нет code/cookie')]
+    #[OA\Response(response: 410, description: 'Код истёк / уже погашен')]
+    #[OA\Response(response: 429, description: 'Слишком много запросов')]
+    public function poll(Request $request): Response
     {
-        $code       = (string) $request->query->get('code', '');
-        $linkSecret = (string) $request->query->get('s', '');
-        $nonce      = (string) $request->cookies->get(TelegramLoginNonceCookieFactory::NAME, '');
-
-        // Нужны ВСЕ три: публичный code, linkSecret из TG-чата (query `s`) и
-        // nonce-cookie браузера-инициатора. Любого нет → незавершаемая ссылка.
-        if ($code === '' || $linkSecret === '' || $nonce === '') {
-            return $this->failPage(Response::HTTP_BAD_REQUEST);
+        $limit = $this->anonTelegramPollLimiter->create((string) $request->getClientIp())->consume(1);
+        if (! $limit->isAccepted()) {
+            return $this->json(
+                ['error' => 'Too many requests, please try later'],
+                Response::HTTP_TOO_MANY_REQUESTS,
+            );
         }
 
-        $result = $this->codeStore->redeem($code, $nonce, $linkSecret);
+        $code  = (string) $request->query->get('code', '');
+        $nonce = (string) $request->cookies->get(TelegramLoginNonceCookieFactory::NAME, '');
+
+        // Нужны оба: публичный code и nonce-cookie браузера-инициатора.
+        if ($code === '' || $nonce === '') {
+            return $this->json(['error' => 'code and tg_login_nonce required'], Response::HTTP_BAD_REQUEST);
+        }
+
+        $result = $this->codeStore->redeem($code, $nonce);
+
+        if ($result['status'] === TelegramLoginCodeStore::STATUS_PENDING) {
+            return new Response('', Response::HTTP_NO_CONTENT);
+        }
 
         if ($result['status'] === TelegramLoginCodeStore::STATUS_MISMATCH) {
-            // nonce mismatch → не тот браузер (fixation отбита); linkSecret
-            // mismatch → нет секрета из TG-чата (takeover отбит). Код НЕ сожжён.
-            return $this->failPage(Response::HTTP_FORBIDDEN);
+            // nonce mismatch → не тот браузер (fixation отбита). Код НЕ сожжён.
+            return $this->json(['error' => 'mismatch'], Response::HTTP_FORBIDDEN);
         }
 
         if ($result['status'] !== TelegramLoginCodeStore::STATUS_AUTHORIZED) {
-            // pending / expired / unknown → начать вход заново.
-            return $this->failPage(Response::HTTP_BAD_REQUEST);
+            // expired / unknown → начать вход заново.
+            return $this->json(['error' => 'expired'], Response::HTTP_GONE);
         }
 
         $user = $result['userId'] !== null ? $this->users->find($result['userId']) : null;
         if ($user === null || ! $user->isActive()) {
-            return $this->failPage(Response::HTTP_BAD_REQUEST);
+            return $this->json(['error' => 'expired'], Response::HTTP_GONE);
         }
 
-        // Merge guest-истории (у callback есть и nonce-, и guest-cookie).
+        // Merge guest-истории (у poll есть и nonce-, и guest-cookie).
         $guestClear = $this->mergeGuestHistory($request, $user);
 
-        // JWT фронту НЕ отдаём в URL — выставляем refresh-cookie; SPA на загрузке
-        // тянет access-token через POST /auth/refresh. Редирект на приложение.
-        $response = new RedirectResponse('/');
+        // JWT фронту НЕ отдаём в теле — выставляем refresh-cookie; SPA тянет
+        // access-token через POST /auth/refresh.
+        $response = $this->json(['status' => 'authorized']);
         $response->headers->setCookie($this->refreshCookie->create($this->refreshTokens->issueFamily($user)));
         // Одноразовый nonce погашен (код тоже сожжён внутри redeem).
         $response->headers->setCookie($this->nonceCookie->clear());
         if ($guestClear !== null) {
             $response->headers->setCookie($guestClear);
         }
-
-        return $response;
-    }
-
-    /**
-     * Понятная страница провала логина (magic-ссылка недействительна). Гасим
-     * nonce-cookie, чтобы протухший nonce не мешал следующей попытке.
-     */
-    private function failPage(int $status): Response
-    {
-        $html = '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
-            . '<title>Вход не завершён</title></head><body style="font-family:sans-serif;text-align:center;padding:3rem">'
-            . '<h1>Ссылка недействительна</h1>'
-            . '<p>Начните вход заново на сайте и откройте новую ссылку на том же устройстве.</p>'
-            . '<p><a href="/">Вернуться на сайт</a></p></body></html>';
-
-        $response = new Response($html, $status, ['Content-Type' => 'text/html; charset=utf-8']);
-        $response->headers->setCookie($this->nonceCookie->clear());
 
         return $response;
     }

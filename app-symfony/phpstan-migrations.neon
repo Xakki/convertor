@@ -1,0 +1,9 @@
+# Отдельный прогон для Doctrine migrations (см. phpstan.neon).
+# Level 5, не 8: миграции — hand-written SQL + boilerplate AbstractMigration
+# (неиспользуемый Schema, seed-массивы без строгих shape'ов, автоген diff).
+# Level 8 даёт шум без выигрыша для deploy-безопасности; level 5 ловит
+# реальные синтаксис/тип-ошибки. Вызывается из `make phpstan`.
+parameters:
+    level: 5
+    paths:
+        - migrations

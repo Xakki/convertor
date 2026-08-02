@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.DOCKER_USER }}" ] || [ -z "${{ secrets.DOCKER_PASS }}" ]; then
+            echo "::error::Missing required secrets: DOCKER_USER and/or DOCKER_PASS"
+            exit 1
+          fi
+
+      - name: Prepare .env.local and Harbor login
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+          S3_SECRET: ${{ secrets.S3_SECRET }}
+        run: |
+          PUID=$(id -u)
+          PGID=$(id -g)
+          printf '%s\n' \
+            "COMPOSE_FILE=docker-compose.yml:docker/limits.yml" \
+            "PUID=${PUID}" \
+            "PGID=${PGID}" \
+            "S3_SECRET=${S3_SECRET}" \
+            "DOCKER_USER=${DOCKER_USER}" \
+            "DOCKER_PASS=${DOCKER_PASS}" \
+            > .env.local
+          echo "$DOCKER_PASS" | docker login harbor.xakki.ru -u "$DOCKER_USER" --password-stdin
+
+      # Host pytest for test-drift (PEP 668: use venv, not --user pip).
+      - name: Install host pytest
+        run: |
+          python3 -m venv .venv-ci
+          .venv-ci/bin/pip install -q pytest
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+
+      - name: Pull images (warm)
+        run: make TEST=1 pull
+
+      - name: Start test stand
+        run: make test-up
+
+      - name: PHPStan
+        run: make TEST=1 phpstan
+
+      - name: Code style check
+        run: make TEST=1 cs-check
+
+      - name: PHPUnit
+        run: make TEST=1 test-php
+
+      - name: Python worker tests
+        run: make TEST=1 test-python
+
+      - name: Drift guards
+        run: make TEST=1 test-drift
+
+      - name: Tear down test stand
+        if: always()
+        run: make test-down
+
+  warn-e2e:
+    name: E2E / integration (warn-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Skip if S3_SECRET missing
+        id: skip
+        run: |
+          if [ -z "${{ secrets.S3_SECRET }}" ]; then
+            echo "::warning::S3_SECRET not set — skipping e2e and api-integration tests"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate Harbor secrets
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          if [ -z "${{ secrets.DOCKER_USER }}" ] || [ -z "${{ secrets.DOCKER_PASS }}" ]; then
+            echo "::error::Missing required secrets: DOCKER_USER and/or DOCKER_PASS"
+            exit 1
+          fi
+
+      - name: Prepare .env.local and Harbor login
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+          S3_SECRET: ${{ secrets.S3_SECRET }}
+        run: |
+          PUID=$(id -u)
+          PGID=$(id -g)
+          printf '%s\n' \
+            "COMPOSE_FILE=docker-compose.yml:docker/limits.yml" \
+            "PUID=${PUID}" \
+            "PGID=${PGID}" \
+            "S3_SECRET=${S3_SECRET}" \
+            "DOCKER_USER=${DOCKER_USER}" \
+            "DOCKER_PASS=${DOCKER_PASS}" \
+            > .env.local
+          echo "$DOCKER_PASS" | docker login harbor.xakki.ru -u "$DOCKER_USER" --password-stdin
+
+      - name: Install host pytest
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          python3 -m venv .venv-ci
+          .venv-ci/bin/pip install -q pytest
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+
+      - name: Pull images (warm)
+        if: steps.skip.outputs.skip != 'true'
+        run: make TEST=1 pull
+
+      - name: Start test stand
+        if: steps.skip.outputs.skip != 'true'
+        run: make test-up
+
+      - name: E2E tests
+        if: steps.skip.outputs.skip != 'true'
+        run: make TEST=1 test-e2e
+
+      - name: API integration tests
+        if: steps.skip.outputs.skip != 'true'
+        run: make TEST=1 test-api-integration
+
+      - name: Tear down test stand
+        if: always() && steps.skip.outputs.skip != 'true'
+        run: make test-down

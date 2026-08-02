@@ -103,7 +103,7 @@ final class TelegramWebhookControllerTest extends WebTestCase
         self::assertSame(200, $client->getResponse()->getStatusCode());
     }
 
-    public function testCallbackQueryAuthorizesCodeAndSendsMagicLink(): void
+    public function testCallbackQueryAuthorizesCodeAndTellsUserToReturn(): void
     {
         $client    = static::createClient();
         $container = static::getContainer();
@@ -117,29 +117,21 @@ final class TelegramWebhookControllerTest extends WebTestCase
             ->willReturn($user);
         $container->set(TelegramUserProvisioner::class, $provisioner);
 
-        // authorize возвращает сырой linkSecret; он должен попасть в magic-ссылку
-        // (query `s`) и НИКУДА больше (только в чат авторизовавшего).
         $store = $this->createMock(TelegramLoginCodeStore::class);
-        $store->expects(self::once())->method('authorize')->with('ABC', 321)->willReturn('LINK-SECRET-XYZ');
+        $store->expects(self::once())->method('authorize')->with('ABC', 321)->willReturn(true);
         $container->set(TelegramLoginCodeStore::class, $store);
 
         $bot = $this->createMock(TelegramBotClient::class);
         $bot->expects(self::once())
             ->method('answerCallbackQuery')
-            ->with('cbid-1', self::stringContains('Готово'));
-        // Magic-ссылка уходит В ЧАТ авторизовавшего (кнопка с url: code + linkSecret).
+            ->with('cbid-1', self::stringContains('Вернитесь'));
+        // Без magic-URL: только текст «вернитесь в браузер».
         $bot->expects(self::once())
             ->method('sendMessage')
             ->with(
                 777,
-                self::anything(),
-                self::callback(static function (?array $markup): bool {
-                    $btn = $markup['inline_keyboard'][0][0] ?? [];
-                    $url = $btn['url']                      ?? '';
-
-                    return str_contains($url, '/api/v1/auth/telegram/callback?code=ABC')
-                        && str_contains($url, 's=LINK-SECRET-XYZ');
-                }),
+                'Авторизация успешна. Вернитесь в браузер.',
+                null,
             );
         $container->set(TelegramBotClient::class, $bot);
 
@@ -163,10 +155,10 @@ final class TelegramWebhookControllerTest extends WebTestCase
         $provisioner->method('findOrCreateUser')->willReturn($this->makeUser(9));
         $container->set(TelegramUserProvisioner::class, $provisioner);
 
-        // authorize вернул null → код истёк ИЛИ уже не pending (status-guard):
-        // magic-ссылка НЕ шлётся (нет linkSecret), пользователю говорим начать заново.
+        // authorize вернул false → код истёк ИЛИ уже не pending (status-guard):
+        // сообщение «вернитесь» НЕ шлётся, пользователю говорим начать заново.
         $store = $this->createStub(TelegramLoginCodeStore::class);
-        $store->method('authorize')->willReturn(null);
+        $store->method('authorize')->willReturn(false);
         $container->set(TelegramLoginCodeStore::class, $store);
 
         $bot = $this->createMock(TelegramBotClient::class);

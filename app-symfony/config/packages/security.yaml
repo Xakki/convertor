@@ -77,6 +77,10 @@ security:
         # `^/admin` НЕ гейтится (открытая оболочка, достижима навигацией;
         # секретов не содержит) — доступ режется client-guard'ом + admin-API.
         - { path: ^/api/v1/admin, roles: ROLE_ADMIN }
+        # CNV-8: retry/delete — только ROLE_USER. Должны стоять ДО общего
+        # ^/api/v1/convert (ROLE_GUEST), иначе гость пройдёт firewall.
+        - { path: ^/api/v1/convert/\d+/retry, roles: ROLE_USER }
+        - { path: ^/api/v1/convert/\d+$, methods: [DELETE], roles: ROLE_USER }
         # Гостю открыты: convert, status/download (/convert/{id}/...), history, quota.
         # Гейт ai/video режется в контроллере (403 auth_required), не на firewall.
         - { path: ^/api/v1/convert, roles: ROLE_GUEST }

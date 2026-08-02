@@ -9,6 +9,7 @@ use App\Entity\User;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\DBAL\LockMode;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -19,6 +20,19 @@ class ConversionRepository extends ServiceEntityRepository
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, Conversion::class);
+    }
+
+    /**
+     * Загрузка строки с пессимистичной блокировкой (`SELECT … FOR UPDATE`).
+     * Вызывать только внутри открытой транзакции (например
+     * {@see \Doctrine\ORM\EntityManagerInterface::wrapInTransaction()}) — иначе Doctrine
+     * отвергнет LockMode. Используется admin DLQ-requeue, чтобы два
+     * одновременных requeue одной Failed-конверсии не списали квоту дважды
+     * и не поставили два джоба (второй после ожидания лока видит уже не-Failed).
+     */
+    public function findOneByIdForUpdate(int $id): ?Conversion
+    {
+        return $this->find($id, LockMode::PESSIMISTIC_WRITE);
     }
 
     /**

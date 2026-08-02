@@ -5,3 +5,12 @@ parameters:
     level: 8
     paths:
         - src
+        # Служебные CLI-утилиты проекта (не Symfony stubs вроде console/phpunit —
+        # они тоже здесь; уровень 8 как у src).
+        - bin
+
+# migrations/ анализируются отдельно на level 5 — см. phpstan-migrations.neon
+# и таргет `make phpstan`. Почему не level 8: миграции — hand-written SQL +
+# boilerplate AbstractMigration (неиспользуемый Schema, seed-массивы без
+# строгих shape'ов, автоген diff). Level 8 даёт шум без выигрыша для
+# deploy-безопасности; level 5 ловит реальные синтаксис/тип-ошибки.

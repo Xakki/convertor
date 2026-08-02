@@ -66,6 +66,7 @@ test-php-unit: ## Fast PHPUnit: only tests/Unit (no test-stand/DB)
 .PHONY: phpstan
 phpstan: ## Run PHPStan static analysis
 	$(PHP_EXEC) php vendor/bin/phpstan analyse
+	$(PHP_EXEC) php vendor/bin/phpstan analyse -c phpstan-migrations.neon
 
 .PHONY: cs
 cs: ## Fix code style with php-cs-fixer

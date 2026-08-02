@@ -7,7 +7,8 @@ common:
     brand: 'File Converter'
     login_telegram: 'Log in via Telegram'
     login_telegram_opening: 'Opening Telegram…'
-    login_hint: 'Continue in Telegram: tap “Log in”, then open the link it sends you on this same device.'
+    login_telegram_waiting: 'Waiting for confirmation…'
+    login_hint: 'Continue in Telegram: tap “Log in”, then return to this tab — sign-in will finish automatically.'
     logout: 'Log out'
     you_are_logged_in: 'signed in'
     close: 'Close'
@@ -117,6 +118,7 @@ home:
         formats_load_failed: 'Failed to load the format list'
         telegram_start_failed: 'Failed to start Telegram sign-in (%status%).'
         telegram_network: 'Network error while starting Telegram sign-in.'
+        telegram_expired: 'Sign-in code expired. Please start again.'
         session_expired: 'Session expired — please sign in again. The job was reset, retry after signing in.'
         upload_network: 'Network error while uploading the file'
         # home-02: text-mode client soft-validation (server still enforces the
@@ -161,10 +163,17 @@ dashboard:
         empty: 'No conversions yet.'
         ai_badge: 'AI'
         load_more: 'Load more'
+        retry: 'Retry'
+        delete: 'Delete'
+        delete_confirm: 'Remove this conversion from history?'
         error:
             expired: 'This result has expired and is no longer available.'
             not_ready: 'This conversion is not completed yet.'
             unsupported: 'This result cannot be previewed.'
+            retry_failed: 'Could not retry conversion.'
+            source_gone: 'Source file expired — retry unavailable.'
+            quota: 'Daily quota exceeded.'
+            delete_failed: 'Could not delete conversion.'
 
 login:
     title: 'Sign in — File Converter'

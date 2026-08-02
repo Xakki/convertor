@@ -11,6 +11,12 @@ use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: ConversionRepository::class)]
 #[ORM\Table(name: 'conversions')]
+#[ORM\Index(name: 'IDX_CONVERSIONS_USER_ID', columns: ['user_id'])]
+#[ORM\Index(name: 'IDX_CONVERSIONS_CREATED_AT', columns: ['created_at'])]
+#[ORM\Index(name: 'FK_CONVERSIONS_INPUT', columns: ['input_file_id'])]
+#[ORM\Index(name: 'FK_CONVERSIONS_OUTPUT', columns: ['output_file_id'])]
+#[ORM\Index(name: 'IDX_CONVERSIONS_STATUS_UPDATED_AT', columns: ['status', 'updated_at'])]
+#[ORM\Index(name: 'IDX_CONVERSIONS_STATUS_CREATED_AT', columns: ['status', 'created_at'])]
 #[ORM\HasLifecycleCallbacks]
 class Conversion
 {

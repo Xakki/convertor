@@ -1,6 +1,7 @@
 # Гость: e2e-тест success-пути 202 (материализация + cookie)
 
 **Критичность:** Low (coverage-gap, не баг)
+**Epic:** [[CNV-48]]
 **TAGS:** backend, tests, auth, guest
 
 ## Проблема
@@ -41,3 +42,11 @@ free non-ai/non-video пара), проверяющий одним прогон�
   Bearer/ROLE_USER на живом e2e-стенде (`#[Group('integration')]`), не для гостя.
 
 Найдено ревью карты `guest-row-flood-hardening` (2026-07-12).
+
+## Execution Log
+
+- 2026-08-02: todo→progress; тест `GuestConvertCookieE2eTest` — WebTestCase jpg→txt,
+  fake S3, живой Messenger на изолированный стрим `conv.__guest_cookie_e2e__`
+  (KeyDB db3 тест-стенда), asserts 202 + HMAC `guest_id` + ровно +1 guest row.
+- 2026-08-02: `phpunit GuestConvertCookieE2eTest` → OK (1 test, 13 assertions);
+  `make TEST=1 cs` → OK; progress→test→ready.

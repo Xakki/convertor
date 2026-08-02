@@ -1,6 +1,6 @@
 ---
 name: redesign-auth-access-contract
-description: Единый контракт редизайна auth/доступа convertor — анонимная конвертация (guest-User по cookie), гейтинг ai/video, Telegram-логин через бота (Symfony webhook, magic-link на своём устройстве, nonce-bound), мультипровайдерный OAuth-логин (Google/GitHub/Yandex/VK, эпик oauth-00). ОБЯЗАТЕЛЕН к прочтению для карт anon-conversion-guest-model (backend-A), telegram-bot-login-flow (backend-B), upload-ui-bot-auth-rework (frontend-C), и подзадач oauth-01…06. Триггеры: guest-User, ROLE_GUEST, anon convert, гейт ai/video, telegram webhook, /auth/telegram/start, /auth/telegram/callback, magic-link login, tg_login_nonce, deep-link t.me start=CODE, merge guest history, OAuth, SocialIdentity, /auth/oauth/{provider}/start, /auth/oauth/{provider}/callback, findOrCreateUser, PKCE, VK ID, emailVerified.
+description: Единый контракт редизайна auth/доступа convertor — анонимная конвертация (guest-User по cookie), гейтинг ai/video, Telegram-логин через бота (Symfony webhook, pairing + HTTP poll 2s, nonce-bound), мультипровайдерный OAuth-логин (Google/GitHub/Yandex/VK, эпик oauth-00). ОБЯЗАТЕЛЕН к прочтению для карт anon-conversion-guest-model (backend-A), telegram-bot-login-flow (backend-B), upload-ui-bot-auth-rework (frontend-C), и подзадач oauth-01…06. Триггеры: guest-User, ROLE_GUEST, anon convert, гейт ai/video, telegram webhook, /auth/telegram/start, /auth/telegram/poll, pairing+poll, tg_login_nonce, deep-link t.me start=CODE, merge guest history, OAuth, SocialIdentity, /auth/oauth/{provider}/start, /auth/oauth/{provider}/callback, findOrCreateUser, PKCE, VK ID, emailVerified.
 ---
 
 # Контракт: редизайн auth + доступа (convertor)
@@ -9,8 +9,7 @@ description: Единый контракт редизайна auth/доступ�
 
 ## Решения (вшиты, не переоткрывать)
 - **Бот** — Symfony webhook-контроллер (НЕ отдельный сервис).
-- **Логин** — pairing + poll (cross-device): сайт генерит CODE → deep-link в бота → «Войти» в боте → backend помечает CODE authorized + биндит ТГ → исходный браузер поллит и получает JWT.
-  (эта строка описывает НЕ то, что реально поставлено — см. карту `auth-docs-drift-pairing-poll`; актуальная модель — magic-link, раздел «Telegram bot login API» ниже)
+- **Логин** — pairing + poll (cross-device, same-tab): сайт минтит CODE → deep-link в бота → «Войти» в боте → backend помечает CODE authorized + биндит ТГ → исходный браузер поллит и получает JWT.
 - **Аноним** — guest-User по httpOnly-cookie. `Conversion.user` остаётся **NOT NULL** (владеет guest). При логине история guest'а перепривязывается к реальному User.
 
 ## Роли и firewall
@@ -46,7 +45,7 @@ description: Единый контракт редизайна auth/доступ�
 ## Telegram bot login API (зона B, читает C)
 Все три — под firewall `auth` (public, security:false), кроме webhook (свой секрет).
 
-**МОДЕЛЬ = MAGIC-LINK на своём устройстве (НЕ poll).** Секрет завершения логина доставляется в Telegram-чат тому, кто нажал «Войти» — не торчит в публичном poll. Same-device: логин завершается в том же браузере, где начали (привязка nonce-cookie). Это закрывает login-CSRF/takeover (#1); session-fixation закрывается nonce-cookie.
+**МОДЕЛЬ = PAIRING + POLL (same-device, same-tab).** Исходная вкладка сама узнаёт об апруве в боте и завершает вход на месте. Nonce-cookie закрывает login-CSRF/session-fixation: атакующий, знающий публичный CODE, не завершит вход (его браузер не несёт nonce-cookie → 403 mismatch, код не сжигается).
 
 1. **`POST /api/v1/auth/telegram/start`** → инициировать вход.
    - Генерит `code` (публичный, для deep-link, высокая энтропия) + серверный `nonce`.
@@ -54,19 +53,17 @@ description: Единый контракт редизайна auth/доступ�
    - Ответ: `{ "code": "<opaque>", "deep_link": "https://t.me/anyconvertor_bot?start=<code>", "expires_in": 300 }`.
    - username бота — из `%env(TELEGRAM_BOT_USERNAME)%`.
 
-2. **`GET /api/v1/auth/telegram/callback?code=<code>&s=<linkSecret>`** → завершение (браузер открывает magic-ссылку из бота).
-   - Проверки (ВСЕ обязательны, атомарно в `redeem`): `code` существует и `status=authorized`; **cookie `tg_login_nonce` совпадает** с `nonceHash` (иначе 403 — не тот браузер → fixation отбит); **`s` (linkSecret) из query совпадает** с `linkSecretHash` (иначе 403 — нет секрета из TG-чата → takeover отбит); code не истёк.
-   - Успех: `findOrCreateUser` уже связан с code при авторизации (см. webhook) → выдать JWT + refresh-cookie (`RefreshTokenService::issueFamily`) + merge guest-истории (`GuestUserService::mergeInto` по `guest_id` cookie) + погасить guest-cookie + **инвалидировать code (one-time)** + погасить `tg_login_nonce`. Ответ — редирект на страницу приложения в залогиненном виде (передать JWT фронту: см. раздел Frontend).
-   - Провал (нет code/не authorized/nonce mismatch/expired): 4xx + понятная страница «ссылка недействительна, начните вход заново».
-   - **НЕТ polling-эндпоинта.** Фронт после открытия deep-link просто ждёт, что пользователь завершит в Telegram и вернётся по magic-ссылке (навигация браузера).
+2. **`GET /api/v1/auth/telegram/poll?code=<code>`** + cookie `tg_login_nonce` → опрос статуса (исходная вкладка).
+   - Ответы: `204 pending` (апрува в боте ещё нет) | `200 authorized` (refresh-cookie + merge guest-истории + clear nonce + one-time redeem) | `410 expired` (код истёк / уже погашен) | `403 mismatch` (nonce-cookie не совпал — fixation отбита, код **не** сжигается) | `400 missing` (нет code или cookie) | `429 rate limit` (limiter `anon_telegram_poll` по IP).
+   - Факторы обмена: **только `code` + nonce-cookie** (linkSecret не используется).
+   - `redeem(code, nonce)` — Lua one-time: проверка nonceHash + `status=authorized` → `DEL` ключа; mismatch **не** сжигает code.
+   - Успех `200`: `findOrCreateUser` уже связан с code при авторизации (см. webhook) → refresh-cookie (`RefreshTokenService::issueFamily`) + merge guest-истории (`GuestUserService::mergeInto` по `guest_id` cookie) + погасить guest-cookie + инвалидировать code (one-time) + погасить `tg_login_nonce`. Тело: `{"status":"authorized"}`; access-JWT фронт берёт через `POST /auth/refresh`.
 
 3. **`POST /api/v1/telegram/webhook`** → приём апдейтов Telegram.
    - Защита: заголовок `X-Telegram-Bot-Api-Secret-Token` == `%env(TELEGRAM_WEBHOOK_SECRET)%` (завести env, секрет в `.env.local`). Отдельный firewall/паттерн `^/api/v1/telegram/webhook`, security:false, проверка секрета в контроллере.
    - Обработка `message` с `/start <code>`: показать инлайн-кнопку «Войти» (`answerCallback`/`sendMessage` c `reply_markup` inline_keyboard, callback_data несёт `code`).
-   - Обработка `callback_query` «Войти»: **только если `code` в статусе `pending`** (guard: первый тап побеждает; повторный/форварженный тап НЕ перепривязывает) — `findOrCreateUser(telegramId, username, first_name)`, сгенерить **`linkSecret`** (высокая энтропия), пометить `code` → `authorized` + сохранить `user.id` + `hash(linkSecret)` (в Redis, `nonceHash` сохраняется). Затем **отправить в чат magic-ссылку** `https://<APP_HOST>/api/v1/auth/telegram/callback?code=<code>&s=<linkSecret>` — «Нажмите, чтобы войти на устройстве, где начали». Ссылка (и `linkSecret`) уходит ТОЛЬКО в чат авторизовавшего.
-   - **ДВА секрета на `/callback` обязательны** (см. п.3): `tg_login_nonce`-cookie (закрывает fixation — привязка к браузеру-инициатору) И `linkSecret` из query (закрывает takeover — доставлен только авторизовавшему через TG). Без linkSecret magic-ссылка несла бы лишь публичный `code` → атакующий, заминтивший code+nonce, завершил бы вход как жертва. Оба хэша сравнивать; `redeem` гасит code (one-time) ТОЛЬКО при совпадении обоих; mismatch — без гашения (no-DoS).
-   - **Merge-нюанс:** webhook не видит browser-cookie; merge делает `callback` (у него есть и `tg_login_nonce`, и `guest_id` cookie) при выдаче JWT — вызывает `GuestUserService::mergeInto(realUser, guestIdИзCookie)`.
-   - `APP_HOST` для magic-ссылки — из env (`APP_URL`), не хардкод.
+   - Обработка `callback_query` «Войти»: **только если `code` в статусе `pending`** (guard: первый тап побеждает; повторный/форварженный тап НЕ перепривязывает) — `findOrCreateUser(telegramId, username, first_name)`, `authorize(code, userId)` помечает `code` → `authorized` (bool, без linkSecret). Затем отправить текст **«Авторизация успешна. Вернитесь в браузер.»** — без URL-кнопки, без magic-link.
+   - **Merge** происходит в `poll` (не в webhook): у poll есть и `tg_login_nonce`, и `guest_id` cookie → `GuestUserService::mergeInto(realUser, guestIdИзCookie)`.
 
 - **Bot-API клиент** (зона B): сервис `TelegramBotClient` — `sendMessage`, `answerCallbackQuery`, `editMessageReplyMarkup`, `setWebhook`; base `https://api.telegram.org/bot<TOKEN>/`, токен `%env(TELEGRAM_BOT_TOKEN)%` (уже забинжен в services.yaml как `$telegramBotToken`).
 - **make-таргет** `tg-set-webhook` — регистрирует webhook-URL + секрет (через console-команду или curl-таргет; docker-only паттерн проекта).
@@ -130,7 +127,7 @@ description: Единый контракт редизайна auth/доступ�
   `code_verifier` генерит `OauthController` (`base64url(random_bytes(32))`), хранит в `OauthStateStore`
   между `/start` и `/callback`. VK также возвращает `device_id` на callback (не известен на `/start`,
   читается прямо из query и прокидывается в token-обмен).
-- **Переиспользование сессионного механизма** — идентично Telegram-callback, тот же код:
+- **Переиспользование сессионного механизма** — идентично Telegram-poll, тот же код:
   `RefreshTokenService::issueFamily()` + `RefreshCookieFactory` (JWT в URL НЕ уходит, ставится
   refresh-cookie, SPA берёт access-токен через `POST /auth/refresh`) + `GuestUserService::mergeInto()`
   (валидный `guest_id` cookie → перепривязка истории + гашение cookie).
@@ -147,8 +144,8 @@ description: Единый контракт редизайна auth/доступ�
 
 ## Frontend (зона C, читает A и B)
 - Снести из `templates/conversion/index.html.twig`: `<script src=telegram-widget.js>`, `window.onTelegramAuth`.
-- Кнопка «Войти через Telegram»: `POST /auth/telegram/start` (`credentials:'include'` — чтобы принять `tg_login_nonce`) → открыть `deep_link` + показать «Продолжите в Telegram: нажмите «Войти», затем откройте пришедшую ссылку на этом же устройстве». **Никакого поллинга.**
-- Завершение — через `GET /auth/telegram/callback` (пользователь открывает magic-ссылку из бота): backend редиректит на приложение уже залогиненным. Передача JWT фронту: callback ставит JWT во временную httpOnly-cookie/сессию ИЛИ редиректит на страницу с one-time-обменником — согласовать реализацию (проще: callback выставляет тот же механизм, что и refresh, и фронт на загрузке тянет access-token через `/auth/refresh`). Итог: после возврата фронт видит себя залогиненным.
+- Кнопка «Войти через Telegram»: `POST /auth/telegram/start` (`credentials:'include'` — чтобы принять `tg_login_nonce`) → открыть `deep_link` + запустить poll-цикл на тот же `code`: `setTimeout` 2s + generation-токен (паттерн из `_converter_app_script.html.twig`), cap 150 попыток / TTL 300s. Показать hint «Продолжите в Telegram: нажмите «Войти», затем вернитесь в браузер» + спиннер ожидания.
+- Завершение — через poll: на `200 authorized` → `POST /auth/refresh`, обновить состояние / перейти на главную без magic-link. На `410`/timeout — показать «код истёк, начните заново».
 - Аноним конвертит без логина. Для ai/video-таргетов: показать гейт «войдите»; на 403 `auth_required` от `convert` — предложить логин.
 - `authFetch`: guest-запросы (status/download/convert без Bearer) идут с `credentials:'include'` (guest-cookie); при наличии JWT — Bearer. Download guest — тоже через fetch+blob с cookie.
 

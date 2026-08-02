@@ -10,6 +10,8 @@ use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity]
 #[ORM\Table(name: 'payments')]
+#[ORM\Index(name: 'IDX_PAYMENTS_USER_ID', columns: ['user_id'])]
+#[ORM\Index(name: 'IDX_PAYMENTS_STATUS', columns: ['status'])]
 class Payment
 {
     #[ORM\Id]

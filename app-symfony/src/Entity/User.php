@@ -10,6 +10,10 @@ use Symfony\Component\Security\Core\User\UserInterface;
 
 #[ORM\Entity(repositoryClass: UserRepository::class)]
 #[ORM\Table(name: 'users')]
+#[ORM\UniqueConstraint(name: 'UNIQ_USERS_TELEGRAM_ID', columns: ['telegram_id'])]
+#[ORM\UniqueConstraint(name: 'UNIQ_USERS_PHONE', columns: ['phone'])]
+#[ORM\UniqueConstraint(name: 'UNIQ_USERS_EMAIL', columns: ['email'])]
+#[ORM\UniqueConstraint(name: 'UNIQ_USERS_GUEST_ID', columns: ['guest_id'])]
 #[ORM\HasLifecycleCallbacks]
 class User implements UserInterface
 {
@@ -20,7 +24,7 @@ class User implements UserInterface
     #[ORM\Column(type: 'integer')]
     private ?int $id = null;
 
-    #[ORM\Column(type: 'bigint', nullable: true, unique: true)]
+    #[ORM\Column(type: 'bigint', nullable: true)]
     private ?string $telegramId = null;
 
     /**
@@ -46,10 +50,10 @@ class User implements UserInterface
     #[ORM\Column(type: 'string', length: 255, nullable: true)]
     private ?string $photoUrl = null;
 
-    #[ORM\Column(type: 'string', length: 20, nullable: true, unique: true)]
+    #[ORM\Column(type: 'string', length: 20, nullable: true)]
     private ?string $phone = null;
 
-    #[ORM\Column(type: 'string', length: 180, nullable: true, unique: true)]
+    #[ORM\Column(type: 'string', length: 180, nullable: true)]
     private ?string $email = null;
 
     #[ORM\Column(type: 'string', length: 50)]
@@ -90,7 +94,7 @@ class User implements UserInterface
      * Сырое значение cookie-id гостя (уникальное). У обычного пользователя = null.
      * Аутентификатор ищет гостя по этому полю (только среди активных).
      */
-    #[ORM\Column(type: 'string', length: 64, nullable: true, unique: true)]
+    #[ORM\Column(type: 'string', length: 64, nullable: true)]
     private ?string $guestId = null;
 
     public function __construct()

@@ -1,6 +1,7 @@
 ### DLQ-requeue: нет оптимистичной/пессимистичной блокировки при параллельном requeue
 
 **Criticality:** Nit
+**Epic:** [[CNV-48]]
 
 **TAGS:**
 - tech-debt
@@ -51,4 +52,10 @@ worker/DLQ-транспортом напрямую.
 2026-07-18. Не введено этим фиксом (пред-существующее), но всплыло при
 трассировке requeue-пути.
 
-**Status:** todo / ready
+**Status:** ready
+
+**Execution Log (2026-08-02):**
+- moved todo→progress; work started on branch `epic/CNV-48` — `SELECT ... FOR UPDATE` lock in `DlqController::requeue()`
+- (2026-08-02) FOR UPDATE via ConversionRepository::findOneByIdForUpdate inside wrapInTransaction with status/S3/charge/incrementAttempt; second requeue → 409 not_failed; no ORM Version
+- QA: phpunit DlqControllerTest + ConversionForUpdateRepositoryTest OK (10/10); make phpstan OK; make cs-check OK
+- commit 7805b38 api: lock DLQ requeue with FOR UPDATE

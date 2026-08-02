@@ -1,10 +1,10 @@
 {% extends 'base.html.twig' %}
 
-{# dashboard-page-01: личный кабинет (view-only) — аккаунт + квоты + история.
-   Открытая оболочка (см. App\Controller\Web\DashboardController), auth-
-   состояние целиком клиентское (dashboardApp(), тот же паттерн, что и
-   headerNav()/converterApp() на `/`, см. комментарий в partials/
-   _header.html.twig). Повтор/удаление конверсий — вне скоупа. #}
+{# dashboard-page-01: личный кабинет — аккаунт + квоты + история (+ retry/
+   delete для ROLE_USER, CNV-8). Открытая оболочка (см. App\Controller\
+   Web\DashboardController), auth-состояние целиком клиентское (dashboardApp(),
+   тот же паттерн, что и headerNav()/converterApp() на `/`, см. комментарий
+   в partials/_header.html.twig). #}
 
 {% block title %}{{ 'dashboard.title'|trans }}{% endblock %}
 
@@ -189,6 +189,25 @@
                                         >
                                             <span x-show="downloadingId !== c.id">{{ 'common.download'|trans }}</span>
                                             <span x-show="downloadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
+                                        </button>
+                                    </template>
+                                    {# CNV-8: retry/delete — только ROLE_USER (loggedIn). ── #}
+                                    <template x-if="loggedIn">
+                                        <button
+                                            @click="retryConversion(c.id)"
+                                            :disabled="retryLoadingId === c.id"
+                                            class="rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-medium text-sky-600 hover:bg-sky-50 disabled:opacity-50"
+                                        >
+                                            <span x-show="retryLoadingId !== c.id">{{ 'dashboard.history.retry'|trans }}</span>
+                                            <span x-show="retryLoadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
+                                        </button>
+                                        <button
+                                            @click="deleteConversion(c.id)"
+                                            :disabled="deleteLoadingId === c.id"
+                                            class="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                                        >
+                                            <span x-show="deleteLoadingId !== c.id">{{ 'dashboard.history.delete'|trans }}</span>
+                                            <span x-show="deleteLoadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
                                         </button>
                                     </template>
                                 </div>

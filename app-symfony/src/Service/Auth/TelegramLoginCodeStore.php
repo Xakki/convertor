@@ -7,30 +7,26 @@ namespace App\Service\Auth;
 use App\Service\Queue\RedisConnectionFactory;
 
 /**
- * One-time коды Telegram-логина по МОДЕЛИ MAGIC-LINK, в KeyDB db 1 (sessions —
+ * One-time коды Telegram-логина по МОДЕЛИ PAIRING + POLL, в KeyDB db 1 (sessions —
  * тот же store, что и refresh-семейства).
  *
- * ДВА независимых секрета обязательны на завершении (закрывают разные атаки):
- *  - `nonce` — браузера-инициатора; в Redis хранится `hash(nonce)`, сырой nonce
- *    в httpOnly-cookie `tg_login_nonce`. Закрывает session-fixation: завершить
- *    вход можно только из того же браузера, что начал.
- *  - `linkSecret` — генерится ПРИ авторизации и уходит ТОЛЬКО в TG-чат
- *    авторизовавшего (в magic-ссылке, query `s`); в Redis хранится
- *    `hash(linkSecret)`. Закрывает account-takeover: атакующий, заминтивший
- *    code+nonce и сфишивший жертву на «Войти», НЕ владеет linkSecret (тот ушёл
- *    в чат жертвы), поэтому его /callback провалится — он не получит JWT жертвы.
+ * Обменный фактор на завершении — `nonce` браузера-инициатора: в Redis хранится
+ * `hash(nonce)`, сырой nonce в httpOnly-cookie `tg_login_nonce`. Закрывает
+ * session-fixation: завершить вход можно только из того же браузера, что начал.
+ * Факт `status=authorized` (после тапа «Войти» в боте) — доказательство апрува;
+ * отдельный linkSecret не нужен (magic-link выпилен).
  *
- * Ключ `tg:login:{code}` → JSON {status, userId, nonceHash, linkSecretHash}.
+ * Ключ `tg:login:{code}` → JSON {status, userId, nonceHash}.
  * Жизненный цикл:
  *  - mint:      SET ... EX 300 NX  (status=pending, nonceHash), TTL 5 мин.
  *  - authorize: read-modify-write (Lua, KEEPTTL) ТОЛЬКО из статуса `pending`
  *               (guard: первый тап побеждает — форварженный/повторный тап НЕ
  *               перепривязывает код к другому пользователю) — ставит
- *               status=authorized + userId + linkSecretHash, СОХРАНЯЯ nonceHash.
- *  - redeem:    единый EVAL с презентованными nonceHash+linkSecretHash — GET;
+ *               status=authorized + userId, СОХРАНЯЯ nonceHash.
+ *  - redeem:    единый EVAL с презентованным nonceHash — GET;
  *               нет ключа → expired; pending → pending (ключ НЕ трогаем);
- *               authorized и ОБА хэша совпали → снять userId, DEL (one-time),
- *               authorized; authorized, но любой хэш не совпал → mismatch БЕЗ
+ *               authorized и nonceHash совпал → снять userId, DEL (one-time),
+ *               authorized; authorized, но хэш не совпал → mismatch БЕЗ
  *               DEL (чужой не DoS-нет легитимный логин — код доживёт до TTL).
  *
  * Не final — функциональные тесты подменяют его в контейнере через createMock.
@@ -44,11 +40,11 @@ class TelegramLoginCodeStore
     public const STATUS_EXPIRED    = 'expired';
     public const STATUS_MISMATCH   = 'mismatch';
 
-    // Атомарный one-time redeem с двойным гейтом (nonce + linkSecret). KEYS[1]=ключ,
-    // ARGV[1]=presentedNonceHash, ARGV[2]=presentedLinkSecretHash. Возвращает
-    // {status[, userId]}: expired | pending | mismatch | authorized.
-    // Сравнение хэшей — plain `~=`: nonce/linkSecret — 256-битные секреты, не
-    // подбираются итеративно, timing-side-channel не даёт форжа (accepted
+    // Атомарный one-time redeem с nonce-гейтом. KEYS[1]=ключ,
+    // ARGV[1]=presentedNonceHash. Возвращает {status[, userId]}:
+    // expired | pending | mismatch | authorized.
+    // Сравнение хэшей — plain `~=`: nonce — 256-битный секрет, не
+    // подбирается итеративно, timing-side-channel не даёт форжа (accepted
     // defense-in-depth). cjson.null от отсутствующего userId → проверка type=='number'.
     private const REDEEM_LUA = <<<'LUA'
         local raw = redis.call('GET', KEYS[1])
@@ -59,12 +55,9 @@ class TelegramLoginCodeStore
             return {'expired'}
         end
         if d.status == 'authorized' then
-            -- Двойной гейт ДО гашения: любой mismatch НЕ гасит код (иначе
+            -- Гейт ДО гашения: mismatch НЕ гасит код (иначе
             -- знающий публичный code атакующий сожжёт чужой логин одним запросом).
             if type(d.nonceHash) ~= 'string' or d.nonceHash ~= ARGV[1] then
-                return {'mismatch'}
-            end
-            if type(d.linkSecretHash) ~= 'string' or d.linkSecretHash ~= ARGV[2] then
                 return {'mismatch'}
             end
             redis.call('DEL', KEYS[1])
@@ -76,8 +69,8 @@ class TelegramLoginCodeStore
 
     // Read-modify-write авторизации ТОЛЬКО из pending (status-guard: первый тап
     // побеждает; форварженный/повторный тап уже-authorized кода не перепривязывает).
-    // Сохраняет nonceHash + KEEPTTL, добавляет userId + linkSecretHash. KEYS[1]=ключ,
-    // ARGV[1]=userId, ARGV[2]=linkSecretHash. Возвращает 1 при успехе, 0 иначе
+    // Сохраняет nonceHash + KEEPTTL, добавляет userId. KEYS[1]=ключ,
+    // ARGV[1]=userId. Возвращает 1 при успехе, 0 иначе
     // (нет ключа / уже не pending).
     private const AUTHORIZE_LUA = <<<'LUA'
         local raw = redis.call('GET', KEYS[1])
@@ -90,7 +83,6 @@ class TelegramLoginCodeStore
         if d.status ~= 'pending' then return 0 end
         d.status = 'authorized'
         d.userId = tonumber(ARGV[1])
-        d.linkSecretHash = ARGV[2]
         redis.call('SET', KEYS[1], cjson.encode(d), 'KEEPTTL')
         return 1
         LUA;
@@ -132,39 +124,35 @@ class TelegramLoginCodeStore
     }
 
     /**
-     * Пометить код authorized (ТОЛЬКО из pending), привязать user.id и сгенерить
-     * `linkSecret`: в Redis кладём `hash(linkSecret)`, сырой linkSecret возвращаем —
-     * webhook положит его в magic-ссылку (query `s`) и отправит в TG-чат. nonceHash
+     * Пометить код authorized (ТОЛЬКО из pending), привязать user.id. nonceHash
      * сохраняется, KEEPTTL — исходное 5-минутное окно не продлеваем.
      *
-     * Возвращает сырой linkSecret при успехе или null, если код истёк/неизвестен
+     * Возвращает true при успехе или false, если код истёк/неизвестен
      * или уже не в статусе pending (первый тап уже победил).
      */
-    public function authorize(string $code, int $userId): ?string
+    public function authorize(string $code, int $userId): bool
     {
-        $linkSecret = $this->newSecret();
-
         $result = $this->redisFactory->create()->eval(
             self::AUTHORIZE_LUA,
-            [self::KEY_PREFIX . $code, (string) $userId, $this->hashSecret($linkSecret)],
+            [self::KEY_PREFIX . $code, (string) $userId],
             1,
         );
 
-        return (int) $result === 1 ? $linkSecret : null;
+        return (int) $result === 1;
     }
 
     /**
-     * Атомарно опросить и (при authorized + совпавших nonce И linkSecret) погасить
-     * код. $nonce — сырое значение из cookie `tg_login_nonce`; $linkSecret — сырое
-     * значение из query `s` magic-ссылки. Оба хэшируем и сверяем внутри eval.
+     * Атомарно опросить и (при authorized + совпавшем nonce) погасить код.
+     * $nonce — сырое значение из cookie `tg_login_nonce`; хэшируем и сверяем
+     * внутри eval.
      *
      * @return array{status: string, userId: ?int}
      */
-    public function redeem(string $code, string $nonce, string $linkSecret): array
+    public function redeem(string $code, string $nonce): array
     {
         $result = $this->redisFactory->create()->eval(
             self::REDEEM_LUA,
-            [self::KEY_PREFIX . $code, $this->hashSecret($nonce), $this->hashSecret($linkSecret)],
+            [self::KEY_PREFIX . $code, $this->hashSecret($nonce)],
             1,
         );
 

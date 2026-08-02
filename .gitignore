@@ -18,6 +18,7 @@ app-symfony/config/jwt/
 *.pid
 docker/mysqld_exporter.cnf
 __pycache__/
+.venv-ci/
 *.pyc
 .i
 /.claude/kanban/grooming/TODO.md

@@ -19,20 +19,16 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 /**
  * Merge-seam end-to-end против РЕАЛЬНОГО store (KeyDB test db) и РЕАЛЬНОЙ БД
- * (convertor-test). Прогоняет весь путь callback'а: real mint → capture nonce →
- * real authorize(code, userId) → GET /callback с nonce-cookie + guest-cookie
+ * (convertor-test). Прогоняет весь путь poll: real mint → capture nonce →
+ * real authorize(code, userId) → GET /poll с nonce-cookie + guest-cookie
  * настоящего guest-User, у которого есть Conversion-строки. Проверяет, что
  * строки ДЕЙСТВИТЕЛЬНО перевешиваются на залогиненного пользователя И guest-
  * cookie гасится.
- *
- * Отличие от прежнего теста (guest, которого нет в БД → mergeInto no-op):
- * здесь guest реально существует, так что регресс merge-шва провалит тест,
- * а не пройдёт вхолостую.
  */
 #[Group('integration')]
-final class TelegramLoginCallbackMergeTest extends WebTestCase
+final class TelegramLoginPollMergeTest extends WebTestCase
 {
-    public function testCallbackReassignsRealGuestConversionsAndClearsGuestCookie(): void
+    public function testPollReassignsRealGuestConversionsAndClearsGuestCookie(): void
     {
         $client    = static::createClient();
         $container = static::getContainer();
@@ -61,19 +57,14 @@ final class TelegramLoginCallbackMergeTest extends WebTestCase
         $c1Id    = $c1->getId();
         $c2Id    = $c2->getId();
 
-        // Реальный store: mint → nonce → authorize(code, realUser.id) → linkSecret.
-        $minted     = $store->mint();
-        $linkSecret = $store->authorize($minted['code'], $realPk);
-        self::assertNotNull($linkSecret, 'authorize должен вернуть linkSecret');
+        // Реальный store: mint → nonce → authorize(code, realUser.id).
+        $minted = $store->mint();
+        self::assertTrue($store->authorize($minted['code'], $realPk), 'authorize должен вернуть true');
 
-        // Против РЕАЛЬНОГО Lua (не in-memory дубля) — обе критичные защиты, и обе
-        // НЕ гасят код (легитимный логин ниже всё ещё проходит):
-        //  - FIXATION: чужой браузер (неверный nonce, верный linkSecret) → mismatch.
-        $fixation = $store->redeem($minted['code'], 'nonce-of-another-browser', $linkSecret);
+        // Против РЕАЛЬНОГО Lua (не in-memory дубля) — FIXATION: чужой браузер
+        // (неверный nonce) → mismatch, код НЕ гасится.
+        $fixation = $store->redeem($minted['code'], 'nonce-of-another-browser');
         self::assertSame(TelegramLoginCodeStore::STATUS_MISMATCH, $fixation['status']);
-        //  - TAKEOVER: атакующий с code+nonce, но БЕЗ linkSecret из чата → mismatch.
-        $takeover = $store->redeem($minted['code'], $minted['nonce'], 'attacker-guessed-secret');
-        self::assertSame(TelegramLoginCodeStore::STATUS_MISMATCH, $takeover['status']);
 
         // Ставим оба cookie браузера-инициатора: nonce (совпадёт) + guest_id.
         $client->getCookieJar()->set(
@@ -83,14 +74,15 @@ final class TelegramLoginCallbackMergeTest extends WebTestCase
             new \Symfony\Component\BrowserKit\Cookie(GuestCookieFactory::NAME, $guestTokens->sign($guestId)),
         );
 
-        // Полный успех: code + nonce-cookie + linkSecret (query `s`) — все совпали.
+        // Полный успех: code + nonce-cookie совпали.
         $client->request(
             'GET',
-            '/api/v1/auth/telegram/callback?code=' . $minted['code'] . '&s=' . rawurlencode($linkSecret),
+            '/api/v1/auth/telegram/poll?code=' . rawurlencode($minted['code']),
         );
 
-        self::assertSame(302, $client->getResponse()->getStatusCode());
-        self::assertSame('/', $client->getResponse()->headers->get('Location'));
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame('authorized', $body['status']);
 
         // guest_id погашен на ответе — доказывает, что взята merge-ветка.
         $guestClear = null;

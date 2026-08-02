@@ -14,6 +14,12 @@ framework:
             policy: 'sliding_window'
             limit: 60
             interval: '1 hour'
+        # Лимит GET /api/v1/auth/telegram/poll по IP. Легитимный цикл ≈ 2с×150
+        # попыток / TTL 300с — оставляем запас на один полный вход + ретраи.
+        anon_telegram_poll:
+            policy: 'sliding_window'
+            limit: 200
+            interval: '5 minutes'
 
 # В тестах getClientIp() всегда 127.0.0.1 → все guest-запросы делят одно ведро.
 # Дефолтный storage (cache.rate_limiter→filesystem) переживает запуски phpunit и
@@ -25,6 +31,8 @@ when@test:
             anon_convert:
                 cache_pool: 'cache.rate_limiter.test_array'
             anon_quota:
+                cache_pool: 'cache.rate_limiter.test_array'
+            anon_telegram_poll:
                 cache_pool: 'cache.rate_limiter.test_array'
         cache:
             pools:

@@ -30,7 +30,13 @@
             previewExpired: '{{ 'dashboard.history.error.expired'|trans|e('js') }}',
             previewNotReady: '{{ 'dashboard.history.error.not_ready'|trans|e('js') }}',
             previewUnsupported: '{{ 'dashboard.history.error.unsupported'|trans|e('js') }}',
+            // CNV-8: retry/delete из истории кабинета (POST retry, DELETE convert).
+            retryFailed: '{{ 'dashboard.history.error.retry_failed'|trans|e('js') }}',
+            retrySourceGone: '{{ 'dashboard.history.error.source_gone'|trans|e('js') }}',
+            retryQuota: '{{ 'dashboard.history.error.quota'|trans|e('js') }}',
+            deleteFailed: '{{ 'dashboard.history.error.delete_failed'|trans|e('js') }}',
         },
+        deleteConfirm: '{{ 'dashboard.history.delete_confirm'|trans|e('js') }}',
         status: {
             pending: '{{ 'home.status.pending'|trans|e('js') }}',
             processing: '{{ 'home.status.processing'|trans|e('js') }}',
@@ -89,6 +95,8 @@
             historyMore: false,
             downloadingId: null,
             sourceLoadingId: null,
+            retryLoadingId: null,
+            deleteLoadingId: null,
             sourceGone: {},
             preview: { open: false, id: null, text: '', truncated: false, loading: false, toFormat: null },
 
@@ -329,6 +337,70 @@
             closePreview() { this.preview.open = false; },
             downloadPreview() {
                 if (this.preview.id) this.downloadConversion(this.preview.id, this.preview.toFormat);
+            },
+
+            // CNV-8: повтор конверсии — новая задача из того же исходника (ROLE_USER).
+            // 410 → sourceGone[id]; 429 → квота; успех → prepend копии строки с новым id.
+            async retryConversion(id) {
+                if (this.retryLoadingId) return;
+                this.retryLoadingId = id;
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/retry', { method: 'POST' });
+                    if (res.status === 401) return;
+                    if (res.status === 410) {
+                        this.sourceGone[id] = true;
+                        this.error = I18N.errors.retrySourceGone;
+                        return;
+                    }
+                    if (res.status === 429) {
+                        this.error = I18N.errors.retryQuota;
+                        return;
+                    }
+                    if (!res.ok) {
+                        this.error = I18N.errors.retryFailed;
+                        return;
+                    }
+                    const d = await res.json();
+                    const orig = this.conversions.find((c) => c.id === id);
+                    if (orig) {
+                        this.conversions = [{
+                            ...orig,
+                            id: d.conversion_id,
+                            status: d.status,
+                            result_size: null,
+                            processing_ms: null,
+                            created_at: new Date().toISOString(),
+                        }, ...this.conversions];
+                    } else {
+                        await this.loadHistory(true);
+                    }
+                    this.loadQuota();
+                } catch (e) {
+                    this.error = I18N.errors.retryFailed;
+                } finally {
+                    this.retryLoadingId = null;
+                }
+            },
+
+            // CNV-8: hard-delete строки истории (ROLE_USER). confirm() перед запросом.
+            async deleteConversion(id) {
+                if (this.deleteLoadingId) return;
+                if (!confirm(I18N.deleteConfirm)) return;
+                this.deleteLoadingId = id;
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id, { method: 'DELETE' });
+                    if (res.status === 401) return;
+                    if (!res.ok) {
+                        this.error = I18N.errors.deleteFailed;
+                        return;
+                    }
+                    this.conversions = this.conversions.filter((c) => c.id !== id);
+                    delete this.sourceGone[id];
+                } catch (e) {
+                    this.error = I18N.errors.deleteFailed;
+                } finally {
+                    this.deleteLoadingId = null;
+                }
             },
 
             filenameFrom(disposition) {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller\Admin\Api;
 
+use App\Entity\Conversion;
 use App\Enum\ConversionStatus;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
@@ -65,32 +66,12 @@ final class DlqController extends AbstractController
             return $this->json(['error' => '"conversionId" field is required'], Response::HTTP_BAD_REQUEST);
         }
 
-        $conversion = $this->conversions->find($conversionId);
-        if ($conversion === null) {
-            return $this->json(['error' => 'Conversion not found'], Response::HTTP_NOT_FOUND);
-        }
-
-        if ($conversion->getStatus() !== ConversionStatus::Failed) {
-            return $this->json([
-                'error'   => 'not_failed',
-                'message' => sprintf(
-                    'Conversion is in status "%s"; only "failed" conversions can be requeued',
-                    $conversion->getStatus()->value,
-                ),
-            ], Response::HTTP_CONFLICT);
-        }
-
-        // Gate BEFORE flipping status: an enqueue the worker can never fetch
-        // (input already reaped by FileCleanupService) must not zombie the row
-        // into a fresh pending stuck forever — 409 tells the operator to ask
-        // the user to re-upload instead.
-        if (! $this->s3->objectExists($this->s3->inputsBucket(), $conversion->getInputFile()->getStoragePath())) {
-            return $this->json([
-                'error'   => 'input_gone',
-                'message' => 'Source file was already cleaned up; the user must re-upload to retry this conversion',
-            ], Response::HTTP_CONFLICT);
-        }
-
+        // Критическая секция под SELECT … FOR UPDATE (CNV-11): загрузка строки,
+        // проверка статуса, S3-gate, charge и incrementAttempt — в ОДНОЙ
+        // транзакции. Параллельный второй requeue ждёт лок, затем видит уже
+        // не-Failed → 409 not_failed без повторного списания и без второго джоба.
+        // #[ORM\Version] на Conversion намеренно не добавляем (решение карточки).
+        //
         // Order matters (MINOR fix, see class docblock): status → Pending,
         // attempt bumped, quota re-charged, and ALL of it flushed to the DB
         // BEFORE dispatch(). If dispatch() ran first, a fast worker could report
@@ -98,17 +79,50 @@ final class DlqController extends AbstractController
         // Failed/old-attempt — the persister would drop a legitimate result.
         //
         // charge() применяет списание raw `UPDATE` (немедленный, в обход
-        // UnitOfWork) — оборачиваем его вместе с flush статуса/attempt в ОДНУ
-        // транзакцию (паттерн ConversionResultPersister). Иначе списание
-        // закоммитится, а падение flush оставит юзера пере-списанным при строке
-        // в Failed.
-        $this->em->wrapInTransaction(function () use ($conversion): void {
+        // UnitOfWork) — вместе с flush статуса/attempt в одной транзакции
+        // (паттерн ConversionResultPersister). Иначе списание закоммитится, а
+        // падение flush оставит юзера пере-списанным при строке в Failed.
+        $outcome = $this->em->wrapInTransaction(function () use ($conversionId): Conversion|JsonResponse {
+            $conversion = $this->conversions->findOneByIdForUpdate($conversionId);
+            if ($conversion === null) {
+                return $this->json(['error' => 'Conversion not found'], Response::HTTP_NOT_FOUND);
+            }
+
+            if ($conversion->getStatus() !== ConversionStatus::Failed) {
+                return $this->json([
+                    'error'   => 'not_failed',
+                    'message' => sprintf(
+                        'Conversion is in status "%s"; only "failed" conversions can be requeued',
+                        $conversion->getStatus()->value,
+                    ),
+                ], Response::HTTP_CONFLICT);
+            }
+
+            // Gate BEFORE flipping status: an enqueue the worker can never fetch
+            // (input already reaped by FileCleanupService) must not zombie the row
+            // into a fresh pending stuck forever — 409 tells the operator to ask
+            // the user to re-upload instead.
+            if (! $this->s3->objectExists($this->s3->inputsBucket(), $conversion->getInputFile()->getStoragePath())) {
+                return $this->json([
+                    'error'   => 'input_gone',
+                    'message' => 'Source file was already cleaned up; the user must re-upload to retry this conversion',
+                ], Response::HTTP_CONFLICT);
+            }
+
             $conversion->setStatus(ConversionStatus::Pending);
             $conversion->setErrorMessage(null);
             $conversion->setProcessingMs(null);
             $conversion->incrementAttempt();
             $this->quotaService->charge($conversion->getUser(), $conversion->isAi());
+
+            return $conversion;
         });
+
+        if ($outcome instanceof JsonResponse) {
+            return $outcome;
+        }
+
+        $conversion = $outcome;
 
         try {
             $this->conversionManager->dispatch($conversion);

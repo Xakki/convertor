@@ -139,7 +139,7 @@ services:
             $sameSite: '%env(REFRESH_COOKIE_SAMESITE)%'
             $maxAge: '%env(int:REFRESH_TTL)%'
 
-    # Cookie `tg_login_nonce` (магик-линк логин). Secure — та же семантика, что и
+    # Cookie `tg_login_nonce` (pairing+poll логин). Secure — та же семантика, что и
     # refresh-cookie; TTL = TTL кода (5 мин), задаётся в фабрике по умолчанию.
     App\Service\Auth\TelegramLoginNonceCookieFactory:
         arguments:

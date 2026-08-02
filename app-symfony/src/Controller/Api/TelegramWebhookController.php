@@ -26,11 +26,11 @@ use Symfony\Component\Routing\Attribute\Route;
  *  - message `/help` → короткая справка о боте.
  *  - message `/convert` → ссылка на веб-приложение для конвертации файла.
  *  - callback_query «Войти» → findOrCreateUser + пометить code authorized +
- *    отправить в чат magic-ссылку callback'а (завершить вход НА СВОЁМ устройстве).
+ *    текст «вернитесь в браузер» (исходная вкладка заберёт сессию через poll).
  *
- * Модель — MAGIC-LINK: секрет завершения (сама ссылка) уходит ТОЛЬКО в чат
- * авторизовавшего, а не торчит в публичном poll. Двухшаговость намеренна: сам
- * /start НЕ авторизует — авторизует тап по кнопке.
+ * Модель — PAIRING + POLL: апрув в боте помечает code authorized; завершение
+ * входа — в исходной вкладке по `code` + nonce-cookie. Двухшаговость намеренна:
+ * сам /start НЕ авторизует — авторизует тап по кнопке.
  */
 #[Route('/api/v1/telegram/webhook')]
 class TelegramWebhookController extends AbstractController
@@ -152,34 +152,24 @@ class TelegramWebhookController extends AbstractController
             is_string($from['first_name'] ?? null) ? $from['first_name'] : null,
         );
 
-        // authorize возвращает сырой linkSecret (или null, если код истёк ИЛИ уже
-        // не pending — status-guard: первый тап побеждает, форвард не перепривязывает).
-        // findOrCreateUser персистит юзера → id всегда присвоен.
+        // authorize = true только из pending (status-guard: первый тап побеждает,
+        // форвард не перепривязывает). findOrCreateUser персистит юзера → id всегда присвоен.
         $userId = $user->getId();
         \assert($userId !== null);
-        $linkSecret = $this->codeStore->authorize($code, $userId);
-        if ($linkSecret === null) {
+        if (! $this->codeStore->authorize($code, $userId)) {
             $this->botClient->answerCallbackQuery($callbackId, 'Код истёк или уже использован, начните вход заново.');
 
             return;
         }
 
         $this->logger->info('Telegram bot-login authorized', ['userId' => $user->getId()]);
-        $this->botClient->answerCallbackQuery($callbackId, 'Готово! Откройте пришедшую ссылку.');
+        $this->botClient->answerCallbackQuery($callbackId, 'Готово! Вернитесь в браузер.');
 
-        // Magic-ссылка с linkSecret уходит ТОЛЬКО в чат авторизовавшего. Завершить
-        // вход нужно: (а) из браузера-инициатора (nonce-cookie — против fixation)
-        // И (б) владея linkSecret из этого чата (против takeover). Атакующий,
-        // заминтивший code+nonce, не получит linkSecret → его /callback = 403.
+        // Без magic-ссылки: исходная вкладка сама заберёт сессию через poll
+        // (code + nonce-cookie). Сообщаем пользователю вернуться в браузер.
         $chatId = $this->extractChatId(is_array($callbackQuery['message'] ?? null) ? $callbackQuery['message'] : []);
         if ($chatId !== null) {
-            $link = rtrim($this->appUrl, '/') . '/api/v1/auth/telegram/callback?code=' . rawurlencode($code)
-                . '&s=' . rawurlencode($linkSecret);
-            $this->botClient->sendMessage(
-                $chatId,
-                'Нажмите, чтобы войти на устройстве, где начали:',
-                ['inline_keyboard' => [[['text' => 'Войти на сайт', 'url' => $link]]]],
-            );
+            $this->botClient->sendMessage($chatId, 'Авторизация успешна. Вернитесь в браузер.');
         }
     }
 

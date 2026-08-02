@@ -9,6 +9,7 @@ use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: PlanRepository::class)]
 #[ORM\Table(name: 'plans')]
+#[ORM\UniqueConstraint(name: 'UNIQ_PLANS_NAME', columns: ['name'])]
 class Plan
 {
     #[ORM\Id]
@@ -16,7 +17,7 @@ class Plan
     #[ORM\Column(type: 'integer')]
     private int $id;
 
-    #[ORM\Column(type: 'string', length: 50, unique: true)]
+    #[ORM\Column(type: 'string', length: 50)]
     private string $name;
 
     #[ORM\Column(type: 'integer')]

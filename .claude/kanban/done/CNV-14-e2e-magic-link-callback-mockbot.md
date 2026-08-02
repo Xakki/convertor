@@ -1,6 +1,7 @@
 ### E2E Telegram-логин poll-флоу с мок-ботом
 
 **Criticality:** Low
+**Epic:** [[CNV-48]]
 
 **TAGS:**
 - test
@@ -62,4 +63,9 @@ nonce-cookie, one-time, no-burn на mismatch, защиту заголовка
 **Контекст:** выделено из [[e2e-login-helper-magic-link]] (2026-07-11); ретаргетнуто
 под poll-модель ([[CNV-42-telegram-login-confirm-in-bot-no-magic-link]], 2026-07-28).
 
-**Status:** todo.
+**Status:** ready.
+
+**Execution Log:**
+- 2026-08-02: started — e2e Telegram poll round-trip with mock Bot API (CNV-14)
+- 2026-08-02: implemented TelegramAuthRoundTripE2eTest (integration) — start→webhook→poll, mock Bot only, KeyDB db3; 2 tests green; commit 53e3b0c
+- 2026-08-02: QA — phpunit --group integration --filter TelegramAuthRoundTripE2eTest OK (2); phpstan src OK; cs fixed

@@ -75,6 +75,10 @@ use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionRegistry;
 use Symfony\Component\Dotenv\Dotenv;
 
+// PHPStan (level 8) не знает CLI-суперглобал `$argv`; берём из $_SERVER.
+/** @var list<string> $cliArgv */
+$cliArgv = array_values(array_map(strval(...), \is_array($_SERVER['argv'] ?? null) ? $_SERVER['argv'] : []));
+
 // Same `.env`/`.env.local`/`.env.<env>[.local]` loading bin/console and
 // public/index.php get via symfony/runtime — needed because config like
 // DATABASE_URL is resolved from these files, not raw container env vars.
@@ -98,7 +102,8 @@ try {
 }
 
 if ($capabilities === []) {
-    fwrite(STDERR,
+    fwrite(
+        STDERR,
         "dump-matrix: worker_capabilities table is EMPTY — refusing to silently fall back to the "
         . "hardcoded matrix (that would validate nothing; see registry-03/registry-04). Run the "
         . "registry-03 seed migration or register a worker first.\n",
@@ -116,7 +121,8 @@ $registry->invalidateMatrix();
 $formats = $registry->getSupportedFormats();
 
 if ($formats === []) {
-    fwrite(STDERR,
+    fwrite(
+        STDERR,
         "dump-matrix: registry produced an EMPTY matrix from a non-empty capability set "
         . "(" . count($capabilities) . " row(s) — all unparseable?) — refusing to print an empty document.\n",
     );
@@ -130,7 +136,7 @@ foreach ($formats as $f) {
 }
 ksort($map);
 
-if (in_array('--json', $argv, true)) {
+if (in_array('--json', $cliArgv, true)) {
     $routingKeySet = [];
     $jsonMatrix    = [];
     foreach ($map as $key => $value) {
@@ -159,7 +165,7 @@ foreach ($map as $key => $value) {
 
 $fixture = dirname(__DIR__) . '/tests/Fixtures/conversion_matrix.golden.txt';
 
-if (in_array('--write', $argv, true)) {
+if (in_array('--write', $cliArgv, true)) {
     file_put_contents($fixture, $lines);
     fwrite(STDERR, 'Wrote ' . count($map) . " entries to {$fixture}\n");
 } else {

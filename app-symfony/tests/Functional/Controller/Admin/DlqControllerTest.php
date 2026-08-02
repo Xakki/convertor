@@ -245,6 +245,58 @@ final class DlqControllerTest extends WebTestCase
     }
 
     /**
+     * CNV-11: повторный requeue уже переведённой в Pending конверсии — 409
+     * `not_failed` (already-requeued), квота не списывается повторно, второй
+     * dispatch не вызывается. Под FOR UPDATE тот же исход у параллельного
+     * вызова: второй ждёт лок, затем видит не-Failed.
+     */
+    public function testSecondRequeueReturnsConflictWithoutDoubleChargeOrDispatch(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+        $em        = $container->get(EntityManagerInterface::class);
+
+        $conversion   = $this->persistConversion($em, ConversionStatus::Failed);
+        $owner        = $conversion->getUser();
+        $ownerId      = $owner->getId();
+        $conversionId = $conversion->getId();
+        $dailyBefore  = $owner->getDailyConversions();
+
+        $s3Client = $this->createStub(S3Client::class);
+        $s3Client->method('headObject')->willReturn(ResultMockFactory::create(HeadObjectOutput::class));
+        $container->set(S3Storage::class, new S3Storage($s3Client, 'test_'));
+
+        $bus = $this->createMock(MessageBusInterface::class);
+        $bus->expects(self::once())
+            ->method('dispatch')
+            ->willReturnCallback(static fn (object $message, array $stamps = []): Envelope => new Envelope($message, $stamps));
+        $container->set(MessageBusInterface::class, $bus);
+
+        $token   = $this->jwtFor($this->persistUser(true));
+        $server  = ['HTTP_AUTHORIZATION' => "Bearer {$token}", 'CONTENT_TYPE' => 'application/json'];
+        $payload = json_encode(['conversionId' => $conversionId], JSON_THROW_ON_ERROR);
+
+        $client->request('POST', '/api/v1/admin/dead-letter/requeue', server: $server, content: $payload);
+        self::assertSame(200, $client->getResponse()->getStatusCode(), (string) $client->getResponse()->getContent());
+
+        $client->request('POST', '/api/v1/admin/dead-letter/requeue', server: $server, content: $payload);
+        self::assertSame(409, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('not_failed', $body['error']);
+
+        $em->clear();
+        $reloadedOwner = $em->find(User::class, $ownerId);
+        self::assertNotNull($reloadedOwner);
+        // Ровно одно принудительное re-charge (+1), не два.
+        self::assertSame($dailyBefore + 1, $reloadedOwner->getDailyConversions());
+
+        $reloadedConversion = $em->find(Conversion::class, $conversionId);
+        self::assertNotNull($reloadedConversion);
+        self::assertSame(ConversionStatus::Pending, $reloadedConversion->getStatus());
+        self::assertSame(1, $reloadedConversion->getAttempt());
+    }
+
+    /**
      * MINOR fix: a synchronous dispatch() failure (e.g. KeyDB XADD error) must
      * NOT leave the row zombie-Pending with no job actually enqueued.
      * Compensating rollback: status back to Failed, the +1 re-charge refunded

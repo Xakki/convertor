@@ -52,14 +52,15 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
     (нет валидного Bearer → аутентифицирует как guest-User по cookie `guest_id`).
   - `role_hierarchy`: `ROLE_USER` наследует `ROLE_GUEST`, `ROLE_ADMIN` наследует
     `ROLE_USER`.
-  - `access_control` (см. файл целиком для точного порядка): `/api/v1/formats` —
-    `PUBLIC_ACCESS`; `/api/v1/admin` — `ROLE_ADMIN`; `/api/v1/convert`,
-    `/api/v1/quota` — `ROLE_GUEST`; `/api/v1/me` — `PUBLIC_ACCESS` на уровне
-    firewall (контроллер сам отдаёт чистый 401 гостю); остальной `/api` —
-    `ROLE_USER`.
+    - `access_control` (см. файл целиком для точного порядка): `/api/v1/formats` —
+    `PUBLIC_ACCESS`; `/api/v1/admin` — `ROLE_ADMIN`; `/api/v1/convert/\d+/retry`
+    и `DELETE /api/v1/convert/\d+` — `ROLE_USER` (ДО guest-правила);
+    `/api/v1/convert`, `/api/v1/quota` — `ROLE_GUEST`; `/api/v1/me` —
+    `PUBLIC_ACCESS` на уровне firewall (контроллер сам отдаёт чистый 401 гостю);
+    остальной `/api` — `ROLE_USER`.
   - Гейтинг `ai`/`video` для гостя (403 `auth_required`) — НЕ на firewall, а
     внутри `ConversionController::convert()`.
-- **Полный флоу логина через Telegram** (magic-link, nonce-cookie, webhook,
+- **Полный флоу логина через Telegram** (pairing+poll, nonce-cookie, webhook,
   merge истории гостя) — здесь НЕ дублируется, см. скилл
   `redesign-auth-access-contract`.
 
@@ -72,7 +73,7 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
 пока заглушка, 501).
 
 **`src/Controller/Api/TelegramLoginController.php`** (`/api/v1/auth/telegram`):
-`POST /start`, `GET /callback`.
+`POST /start`, `GET /poll`.
 
 **`src/Controller/Api/OauthController.php`** (`/api/v1/auth/oauth`, под firewall `auth`
 `security: false`, доп. явный `access_control` на `^/api/v1/auth/oauth` → `PUBLIC_ACCESS`;
@@ -87,8 +88,12 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
 `GET /me`.
 
 **`src/Controller/Api/ConversionController.php`** (`/api/v1`, `ROLE_GUEST` для
-`convert`/`quota`, гейт ai/video — в контроллере):
-`POST /convert`, `GET /convert/{id}/status`, `GET /convert/{id}/download`,
+`convert`/`quota`/`history`/status/download; гейт ai/video — в контроллере;
+`POST /convert/{id}/retry` и `DELETE /convert/{id}` — только `ROLE_USER`,
+firewall rules ДО guest-префикса + `#[IsGranted('ROLE_USER')]`):
+`POST /convert`, `POST /convert/{id}/retry` (CNV-8: новая строка + S3 copy
+исходника, 410 если gone), `DELETE /convert/{id}` (CNV-8: hard delete + S3),
+`GET /convert/{id}/status`, `GET /convert/{id}/download`,
 `GET /convert/{id}/source`, `GET /convert/{id}/preview`, `GET /convert/history`,
 `GET /formats` (`PUBLIC_ACCESS`), `GET /quota`.
 

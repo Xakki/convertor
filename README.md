@@ -91,10 +91,41 @@ make console CMD="app:user:make-admin <email|id>"
 Отдельные тест-таргеты требуют явного тест-окружения: `make TEST=1 test-php`,
 `make TEST=1 test-e2e`, `make TEST=1 test-api-integration`, `make TEST=1 test-gateway`.
 
+### CI (GitHub Actions)
+
+Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Запускается на каждый PR и вручную (`workflow_dispatch`).
+
+**Блокирующий job `Quality gates`** (должен быть required в branch protection, иначе merge не блокируется — только настройки репозитория Settings → Branches, YAML этого не делает):
+
+- `make TEST=1 phpstan`
+- `make TEST=1 cs-check`
+- `make TEST=1 test-php`
+- `make TEST=1 test-python`
+- `make TEST=1 test-drift`
+
+Стенд — тот же изолированный `xakki-convertor-test`, что и локально (`make test-up` / `make test-down`).
+
+**Warn-only job `E2E / integration (warn-only)`** (`continue-on-error: true`, параллельно с gates):
+
+- `make TEST=1 test-e2e`
+- `make TEST=1 test-api-integration`
+
+Без `S3_SECRET` e2e/integration пропускаются с предупреждением (job не падает).
+
+**Secrets (Settings → Secrets and variables → Actions):**
+
+| Secret | Назначение |
+|--------|------------|
+| `DOCKER_USER` | Логин Harbor (`harbor.xakki.ru`) — обязателен для gates |
+| `DOCKER_PASS` | Пароль Harbor — обязателен для gates |
+| `S3_SECRET` | S3 для warn-only e2e/integration; gates используют плейсхолдеры из `.env` + `.env.test` |
+
+**Особенности CI:** без fluent-логирования (`COMPOSE_FILE=docker-compose.yml:docker/limits.yml`, без `fluent-logging.yml`); `PUID`/`PGID` берутся с runner'а. Полный прогон GHA с этого хоста не проверяется — локально: `make docker-check`, при наличии — `actionlint` / `yamllint` на workflow.
+
 ## Аутентификация и доступ
 
 - **Анонимная конвертация без логина** — гость по подписанной httpOnly-cookie `guest_id` (`ROLE_GUEST`). Исключения: AI-конвертации и Видео требуют логина (`403 auth_required`). При логине история гостя перепривязывается к пользователю.
-- **Telegram-логин через бота** — magic-link на своём устройстве (same-device, не Login Widget): `POST /api/v1/auth/telegram/start` → deep-link `t.me/<bot>?start=<code>` → тап в боте (webhook) → magic-ссылка в чат → открытие на том же устройстве проверяет два секрета (nonce-cookie + linkSecret) → JWT + refresh.
+- **Telegram-логин через бота** — pairing + poll (same-device, same-tab, не Login Widget): `POST /api/v1/auth/telegram/start` → deep-link `t.me/<bot>?start=<code>` → тап «Войти» в боте (webhook) → исходная вкладка поллит `GET /api/v1/auth/telegram/poll?code=` с nonce-cookie → JWT + refresh.
 - **JWT** — TTL 1h (LexikJWT), **refresh-token** — 30 дней (httpOnly cookie, ротация в Redis).
 - **SMS OTP** — резервный, пока заглушка (501).
 

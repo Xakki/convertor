@@ -101,21 +101,24 @@
             <div class="h-px flex-1 bg-slate-200"></div>
         </div>
 
-        {# Кнопка Telegram — тот же magic-link флоу (POST /api/v1/auth/telegram/
-           start → открыть deep-link в новой вкладке, без поллинга), что и
-           коллбэк-редирект TelegramLoginController::callback() (после успеха
-           всегда ведёт на `/`). Начиная с home-01-header-nav это ЕДИНСТВЕННОЕ
-           место инлайн-Telegram-кнопки — на `/` её больше нет (см.
-           conversion/index.html.twig, гейт ai/video теперь просто ссылка
-           на /login). Логика — свой маленький Alpine-компонент ниже, тащить
-           ради одной кнопки весь converterApp() не нужно. #}
+        {# Кнопка Telegram — pairing + poll: POST /start → открыть deep-link →
+           исходная вкладка поллит /poll до апрува в боте. Начиная с
+           home-01-header-nav это ЕДИНСТВЕННОЕ место инлайн-Telegram-кнопки —
+           на `/` её больше нет (см. conversion/index.html.twig). #}
         <button
             @click="startLogin()"
-            :disabled="loggingIn"
+            :disabled="loggingIn || waitingApprove"
             class="flex w-full items-center justify-center gap-2 rounded bg-sky-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-sky-600 disabled:bg-slate-300"
         >
-            <span x-show="!loggingIn">{{ 'common.login_telegram'|trans }}</span>
+            <span x-show="!loggingIn && !waitingApprove">{{ 'common.login_telegram'|trans }}</span>
             <span x-show="loggingIn" x-cloak>{{ 'common.login_telegram_opening'|trans }}</span>
+            <span x-show="waitingApprove && !loggingIn" x-cloak class="inline-flex items-center gap-2">
+                <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                </svg>
+                {{ 'common.login_telegram_waiting'|trans }}
+            </span>
         </button>
 
         <template x-if="loginHint">
@@ -134,21 +137,29 @@
         errors: {
             telegramStartFailed: '{{ 'home.error.telegram_start_failed'|trans|e('js') }}',
             telegramNetwork: '{{ 'home.error.telegram_network'|trans|e('js') }}',
+            telegramExpired: '{{ 'home.error.telegram_expired'|trans|e('js') }}',
         },
     };
 
     function loginPage() {
         return {
-            loggingIn: false,   // идёт открытие deep-link
-            loginHint: false,   // показать инструкцию «завершите в Telegram»
+            loggingIn: false,       // идёт открытие deep-link
+            waitingApprove: false,  // ждём апрув в боте (poll-цикл)
+            loginHint: false,       // показать инструкцию «завершите в Telegram»
             authError: '',
+            _pollGen: 0,
+            _pollTries: 0,
+            _pollTimer: null,
+            _pollCode: null,
 
-            // Magic-link флоу без поллинга: пользователь завершает вход в
-            // Telegram и открывает пришедшую ссылку на этом же устройстве.
+            // Pairing + poll: открыть бота, исходная вкладка опрашивает /poll
+            // каждые 2с (cap 150 / TTL 300с), на 200 — /auth/refresh и / .
             async startLogin() {
-                if (this.loggingIn) return;
+                if (this.loggingIn || this.waitingApprove) return;
+                this.stopPoll();
                 this.loggingIn = true;
                 this.authError = '';
+                this.loginHint = false;
                 try {
                     const res = await fetch('/api/v1/auth/telegram/start', {
                         method: 'POST',
@@ -161,11 +172,64 @@
                     const d = await res.json();
                     if (d.deep_link) window.open(d.deep_link, '_blank', 'noopener');
                     this.loginHint = true;
+                    this.waitingApprove = true;
+                    this._pollCode = d.code;
+                    this._pollTries = 0;
+                    this._pollGen++;
+                    this.pollLogin(this._pollGen);
                 } catch (e) {
                     this.authError = I18N.errors.telegramNetwork;
                 } finally {
                     this.loggingIn = false;
                 }
+            },
+
+            stopPoll() {
+                if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
+                this._pollGen++;
+                this.waitingApprove = false;
+                this._pollCode = null;
+            },
+
+            async pollLogin(gen) {
+                if (gen !== this._pollGen || !this._pollCode) return;
+                this._pollTries++;
+                if (this._pollTries > 150) {
+                    this.waitingApprove = false;
+                    this.loginHint = false;
+                    this.authError = I18N.errors.telegramExpired;
+                    return;
+                }
+                try {
+                    const res = await fetch(
+                        '/api/v1/auth/telegram/poll?code=' + encodeURIComponent(this._pollCode),
+                        { credentials: 'include' },
+                    );
+                    if (gen !== this._pollGen) return;
+                    if (res.status === 204) {
+                        this._pollTimer = setTimeout(() => this.pollLogin(gen), 2000);
+                        return;
+                    }
+                    if (res.status === 200) {
+                        await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' });
+                        window.location.href = '/';
+                        return;
+                    }
+                    if (res.status === 410) {
+                        this.waitingApprove = false;
+                        this.loginHint = false;
+                        this.authError = I18N.errors.telegramExpired;
+                        return;
+                    }
+                    // 403/прочее — продолжаем до TTL (mismatch без гашения кода;
+                    // пользователь мог открыть бота в параллельной вкладке).
+                    if (res.status === 403) {
+                        this._pollTimer = setTimeout(() => this.pollLogin(gen), 2000);
+                        return;
+                    }
+                } catch (e) { /* сеть моргнула — повторим */ }
+                if (gen !== this._pollGen) return;
+                this._pollTimer = setTimeout(() => this.pollLogin(gen), 2000);
             },
         };
     }

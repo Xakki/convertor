@@ -24,6 +24,7 @@ use Symfony\Component\HttpFoundation\HeaderUtils;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\GoneHttpException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
@@ -31,6 +32,7 @@ use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Security\Http\Attribute\CurrentUser;
+use Symfony\Component\Security\Http\Attribute\IsGranted;
 
 #[Route('/api/v1')]
 class ConversionController extends AbstractController
@@ -466,6 +468,87 @@ class ConversionController extends AbstractController
         return $this->json([
             'items' => array_map(self::serializeHistoryItem(...), $conversions),
         ]);
+    }
+
+    /**
+     * Повтор конверсии (CNV-8): новая строка + копия исходника в S3 + квота.
+     * Только ROLE_USER (firewall + IsGranted); гость → 403.
+     */
+    #[Route('/convert/{id}/retry', methods: ['POST'])]
+    #[IsGranted('ROLE_USER')]
+    #[OA\Tag(name: 'Conversion')]
+    #[OA\Post(summary: 'Повторить конверсию (новая задача из того же исходника)')]
+    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID исходной задачи', schema: new OA\Schema(type: 'integer'))]
+    #[OA\Response(
+        response: 202,
+        description: 'Новая задача принята',
+        content: new OA\JsonContent(properties: [
+            new OA\Property(property: 'conversion_id', type: 'integer', example: 456),
+            new OA\Property(property: 'status', type: 'string', example: 'pending'),
+        ]),
+    )]
+    #[OA\Response(response: 401, description: 'Требуется аутентификация')]
+    #[OA\Response(response: 403, description: 'Только ROLE_USER (гость недопущен)')]
+    #[OA\Response(response: 404, description: 'Задача не найдена / чужая')]
+    #[OA\Response(response: 409, description: 'Конвертация отключена админом')]
+    #[OA\Response(response: 410, description: 'Исходник истёк в S3')]
+    #[OA\Response(response: 429, description: 'Превышена квота')]
+    public function retry(int $id, #[CurrentUser] ?User $user): JsonResponse
+    {
+        if ($user === null) {
+            return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
+        }
+
+        try {
+            $conversion = $this->conversionManager->retryConversion($id, $user);
+
+            return $this->json([
+                'conversion_id' => $conversion->getId(),
+                'status'        => $conversion->getStatus()->value,
+            ], Response::HTTP_ACCEPTED);
+        } catch (ConversionDisabledException $e) {
+            return $this->json(
+                ['error' => 'conversion_disabled', 'message' => $e->getMessage()],
+                Response::HTTP_CONFLICT,
+            );
+        } catch (GoneHttpException $e) {
+            return $this->json(
+                ['error' => 'gone', 'message' => $e->getMessage()],
+                Response::HTTP_GONE,
+            );
+        } catch (TooManyRequestsHttpException $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_TOO_MANY_REQUESTS);
+        } catch (\RuntimeException) {
+            return $this->json(['error' => 'Conversion not found'], Response::HTTP_NOT_FOUND);
+        }
+    }
+
+    /**
+     * Hard-delete конверсии (CNV-8): строка БД + объекты S3 (inputs/results).
+     * Только ROLE_USER; гость → 403.
+     */
+    #[Route('/convert/{id}', methods: ['DELETE'])]
+    #[IsGranted('ROLE_USER')]
+    #[OA\Tag(name: 'Conversion')]
+    #[OA\Delete(summary: 'Удалить конверсию (hard delete + S3)')]
+    #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID задачи', schema: new OA\Schema(type: 'integer'))]
+    #[OA\Response(response: 204, description: 'Удалено')]
+    #[OA\Response(response: 401, description: 'Требуется аутентификация')]
+    #[OA\Response(response: 403, description: 'Только ROLE_USER (гость недопущен)')]
+    #[OA\Response(response: 404, description: 'Задача не найдена / чужая')]
+    public function delete(int $id, #[CurrentUser] ?User $user): JsonResponse
+    {
+        if ($user === null) {
+            return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
+        }
+
+        try {
+            $this->conversionManager->deleteConversion($id, $user);
+
+            return $this->json(null, Response::HTTP_NO_CONTENT);
+        } catch (\RuntimeException) {
+            return $this->json(['error' => 'Conversion not found'], Response::HTTP_NOT_FOUND);
+        }
     }
 
     /**

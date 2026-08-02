@@ -1,6 +1,7 @@
 ### PHPStan не анализирует миграции и bin (стиковая лакуна в toolchain)
 
 **Criticality:** Medium
+**Epic:** [[CNV-48]]
 
 **TAGS:**
 - tech-debt
@@ -32,17 +33,25 @@ paths:
 **Контекст:** обнаружено при реализации карточки `[[registry-03-seed-migration]]` (2026-07-22) и `[[registry-04-matrix-tooling-tests]]` (2026-07-22). Связано с `[[CNV-25-migrate-diff-schema-drift]]` — обе касаются toolchain для миграций и служебных инструментов.
 
 **Acceptance Criteria:**
-- [ ] `bin/` добавлен в PHPStan paths на level 8; `make phpstan` зелёный
-- [ ] `bin/` добавлен в Finder php-cs-fixer; cs-check/cs покрывают `bin/`
-- [ ] `migrations/` под PHPStan: level 5 **или** baseline для pre-existing findings
-- [ ] Документировано в phpstan.neon / комментарии, почему migrations не на level 8
+- [x] `bin/` добавлен в PHPStan paths на level 8; `make phpstan` зелёный
+- [x] `bin/` добавлен в Finder php-cs-fixer; cs-check/cs покрывают `bin/`
+- [x] `migrations/` под PHPStan: level 5 **или** baseline для pre-existing findings
+- [x] Документировано в phpstan.neon / комментарии, почему migrations не на level 8
 
 **Decisions:**
 - `bin/` — PHPStan level 8 + cs (обязательно в этой карточке).
 - `migrations/` — PHPStan level 5 **или** baseline (на выбор при реализации; цель — включить без шума от старых миграций).
 - cs для `migrations/` — опционально, follow-up (не блокер этой карточки).
+- **Реализовано:** migrations = **отдельный `phpstan-migrations.neon` на level 5** (не baseline). Probe показал 0 ошибок даже на L8; L5 выбран как потолок на будущее (автоген/boilerplate), без ослабления src/bin@8. `make phpstan` гоняет оба конфига.
 
 **Work notes:**
 Groomed 2026-08-01: bin@8+cs mandatory; migrations@5-or-baseline; cs migrations later.
 
-**Status:** todo.
+**Status:** ready.
+
+## Execution Log
+
+- 2026-08-02: ветка `epic/CNV-48` подтверждена; карточка todo→progress.
+- 2026-08-02: probe — migrations 0 ошибок даже на L8; bin/ — 1 ошибка (`$argv` в dump-matrix.php). Стратегия: migrations **level 5** (отдельный `phpstan-migrations.neon`), не baseline.
+- 2026-08-02: правки — `phpstan.neon` (+bin@8 + комментарий), `phpstan-migrations.neon` (L5), Finder cs (+bin), `Makefile` phpstan двойной прогон, fix `$argv`→`$cliArgv` в dump-matrix.php. Probe → `backup_phpstan.cnv29-probe.neon` (не в коммите).
+- 2026-08-02: `make phpstan` OK; `make cs` OK (формат dump-matrix); `make cs-check` OK. AC выполнены → test→ready.

@@ -1,6 +1,7 @@
 ### Telegram-логин: подтверждение прямо в боте, poll вместо magic-link
 
 **Criticality:** Medium
+**Epic:** [[CNV-48]]
 
 **TAGS:**
 - feature
@@ -102,4 +103,9 @@ Rate-limit: добавить limiter `anon_telegram_poll` соседней за�
   реальным → карточка `auth-docs-drift-pairing-poll` удалена как поглощённая;
   правка skill `redesign-auth-access-contract` входит в AC этой задачи.
 
-**Status:** todo.
+**Status:** ready.
+
+## Execution Log
+
+- (2026-08-02) Skill `redesign-auth-access-contract` и OpenAPI-docs (skill `api-design`, README) обновлены под модель pairing+poll; CNV-14 уже ретаргетнута на poll-флоу.
+- (2026-08-02) Backend: `TelegramLoginCodeStore` (authorize→bool, redeem(code,nonce)), `GET /poll` (+ `anon_telegram_poll`), webhook текст «Авторизация успешна…», удалён `/callback`+linkSecret. Frontend: poll-цикл 2s/cap150. Тесты Telegram зелёные (25); `make phpstan` 0; `make cs-check` OK. Commits: docs `cfa0221`, api `5ef65fe`, ui `df76a06`.

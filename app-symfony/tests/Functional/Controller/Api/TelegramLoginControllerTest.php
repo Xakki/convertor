@@ -13,7 +13,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 /**
- * Функциональные тесты POST /start и GET /callback (магик-линк модель).
+ * Функциональные тесты POST /start и GET /poll (pairing + poll модель).
  * TelegramLoginCodeStore и зависимости мокируются в контейнере — тесты не
  * трогают живой KeyDB/БД (кроме merge-seam теста, см. отдельный DB-тест).
  */
@@ -45,65 +45,62 @@ final class TelegramLoginControllerTest extends WebTestCase
         self::assertTrue($nonceCookie->isHttpOnly());
     }
 
-    public function testCallbackPendingReturnsBadRequestPage(): void
+    public function testPollPendingReturns204(): void
     {
         $client    = static::createClient();
         $container = static::getContainer();
 
         $store = $this->createMock(TelegramLoginCodeStore::class);
-        $store->expects(self::once())->method('redeem')->with('CODE123', 'NONCE123', 'LINKSECRET')
+        $store->expects(self::once())->method('redeem')->with('CODE123', 'NONCE123')
             ->willReturn(['status' => TelegramLoginCodeStore::STATUS_PENDING, 'userId' => null]);
         $container->set(TelegramLoginCodeStore::class, $store);
 
         $this->setNonceCookie($client, 'NONCE123');
-        $client->request('GET', '/api/v1/auth/telegram/callback?code=CODE123&s=LINKSECRET');
+        $client->request('GET', '/api/v1/auth/telegram/poll?code=CODE123');
 
-        self::assertSame(400, $client->getResponse()->getStatusCode());
-        self::assertStringContainsString('недействительна', (string) $client->getResponse()->getContent());
+        self::assertSame(204, $client->getResponse()->getStatusCode());
     }
 
-    public function testCallbackMismatchReturns403(): void
+    public function testPollMismatchReturns403(): void
     {
         $client    = static::createClient();
         $container = static::getContainer();
 
-        // mismatch = не тот браузер (nonce) ИЛИ нет linkSecret из TG-чата → 403.
-        // Оба варианта (fixation/takeover) store возвращает как STATUS_MISMATCH.
-        // Код НЕ гасится (проверяется в unit/integration-тестах store).
+        // mismatch = не тот браузер (nonce) → 403. Код НЕ гасится.
         $store = $this->createMock(TelegramLoginCodeStore::class);
-        $store->expects(self::once())->method('redeem')->with('CODE123', 'ATTACKER-NONCE', 'WRONG-SECRET')
+        $store->expects(self::once())->method('redeem')->with('CODE123', 'ATTACKER-NONCE')
             ->willReturn(['status' => TelegramLoginCodeStore::STATUS_MISMATCH, 'userId' => null]);
         $container->set(TelegramLoginCodeStore::class, $store);
 
         $this->setNonceCookie($client, 'ATTACKER-NONCE');
-        $client->request('GET', '/api/v1/auth/telegram/callback?code=CODE123&s=WRONG-SECRET');
+        $client->request('GET', '/api/v1/auth/telegram/poll?code=CODE123');
 
         self::assertSame(403, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame('mismatch', $body['error']);
     }
 
-    public function testCallbackWithoutNonceCookieReturnsBadRequest(): void
+    public function testPollWithoutNonceCookieReturnsBadRequest(): void
     {
         $client = static::createClient();
 
         // Нет nonce-cookie вообще → нельзя завершить вход (не тот браузер).
-        $client->request('GET', '/api/v1/auth/telegram/callback?code=CODE123&s=LINKSECRET');
+        $client->request('GET', '/api/v1/auth/telegram/poll?code=CODE123');
 
         self::assertSame(400, $client->getResponse()->getStatusCode());
     }
 
-    public function testCallbackWithoutLinkSecretReturnsBadRequest(): void
+    public function testPollWithoutCodeReturnsBadRequest(): void
     {
         $client = static::createClient();
 
-        // Есть nonce-cookie, но нет `s` (linkSecret из TG-чата) → ссылка неполная.
-        // redeem даже не вызывается — контроллер режет на входе.
         $this->setNonceCookie($client, 'NONCE123');
-        $client->request('GET', '/api/v1/auth/telegram/callback?code=CODE123');
+        $client->request('GET', '/api/v1/auth/telegram/poll');
 
         self::assertSame(400, $client->getResponse()->getStatusCode());
     }
 
-    public function testCallbackAuthorizedRedirectsAndSetsRefreshCookieAndClearsNonce(): void
+    public function testPollAuthorizedSetsRefreshCookieAndClearsNonce(): void
     {
         $client    = static::createClient();
         $container = static::getContainer();
@@ -111,7 +108,7 @@ final class TelegramLoginControllerTest extends WebTestCase
         $user = $this->makeUser(555);
 
         $store = $this->createMock(TelegramLoginCodeStore::class);
-        $store->expects(self::once())->method('redeem')->with('CODE123', 'NONCE123', 'LINKSECRET')
+        $store->expects(self::once())->method('redeem')->with('CODE123', 'NONCE123')
             ->willReturn(['status' => TelegramLoginCodeStore::STATUS_AUTHORIZED, 'userId' => 555]);
         $container->set(TelegramLoginCodeStore::class, $store);
 
@@ -120,15 +117,14 @@ final class TelegramLoginControllerTest extends WebTestCase
         $container->set(UserRepository::class, $users);
 
         // RefreshTokenService — final, не мокается; настоящий пишет семейство в
-        // KeyDB (test db). Нам важно лишь, что refresh-cookie выставлена, а JWT
-        // в URL НЕ уходит (SPA возьмёт access-token через /auth/refresh).
+        // KeyDB (test db). Нам важно лишь, что refresh-cookie выставлена.
 
         $this->setNonceCookie($client, 'NONCE123');
-        $client->request('GET', '/api/v1/auth/telegram/callback?code=CODE123&s=LINKSECRET');
+        $client->request('GET', '/api/v1/auth/telegram/poll?code=CODE123');
 
-        // Редирект на приложение залогиненным.
-        self::assertSame(302, $client->getResponse()->getStatusCode());
-        self::assertSame('/', $client->getResponse()->headers->get('Location'));
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame('authorized', $body['status']);
 
         $names = array_map(static fn ($c) => $c->getName(), $client->getResponse()->headers->getCookies());
         self::assertContains('refresh_token', $names);
@@ -152,7 +148,7 @@ final class TelegramLoginControllerTest extends WebTestCase
     }
 
     #[DataProvider('nonMergingGuestCookieProvider')]
-    public function testCallbackAuthorizedWithoutValidGuestCookieDoesNotClearGuestCookie(?string $rawCookie): void
+    public function testPollAuthorizedWithoutValidGuestCookieDoesNotClearGuestCookie(?string $rawCookie): void
     {
         $client    = static::createClient();
         $container = static::getContainer();
@@ -172,14 +168,14 @@ final class TelegramLoginControllerTest extends WebTestCase
         if ($rawCookie !== null) {
             $client->getCookieJar()->set(new \Symfony\Component\BrowserKit\Cookie(GuestCookieFactory::NAME, $rawCookie));
         }
-        $client->request('GET', '/api/v1/auth/telegram/callback?code=CODE888&s=LINKSECRET');
+        $client->request('GET', '/api/v1/auth/telegram/poll?code=CODE888');
 
-        self::assertSame(302, $client->getResponse()->getStatusCode());
+        self::assertSame(200, $client->getResponse()->getStatusCode());
         $names = array_map(static fn ($c) => $c->getName(), $client->getResponse()->headers->getCookies());
         self::assertNotContains(GuestCookieFactory::NAME, $names, 'no guest-cookie clear without a valid inbound guest_id');
     }
 
-    public function testCallbackExpiredReturnsBadRequest(): void
+    public function testPollExpiredReturns410(): void
     {
         $client    = static::createClient();
         $container = static::getContainer();
@@ -190,9 +186,11 @@ final class TelegramLoginControllerTest extends WebTestCase
         $container->set(TelegramLoginCodeStore::class, $store);
 
         $this->setNonceCookie($client, 'whatever');
-        $client->request('GET', '/api/v1/auth/telegram/callback?code=whatever&s=whatever');
+        $client->request('GET', '/api/v1/auth/telegram/poll?code=whatever');
 
-        self::assertSame(400, $client->getResponse()->getStatusCode());
+        self::assertSame(410, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame('expired', $body['error']);
     }
 
     private function setNonceCookie(object $client, string $value): void
