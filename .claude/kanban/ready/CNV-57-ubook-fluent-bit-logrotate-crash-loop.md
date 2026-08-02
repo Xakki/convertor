@@ -41,3 +41,7 @@ root-owned каталоги `fluent-bit/` и `logrotate/logrotate.conf/` (Docker
 - Push FluentLog + convertor; uBook `git pull && git submodule update`.
 - Удалить root-owned мусор `fluent-bit/`, `logrotate/` в корне uBook (`sudo rm -rf`).
 - `EXT_FLUENT_PORT=0.0.0.0` на uBook — отдельно от CNV-17 (rebind на loopback).
+
+## Execution Log
+
+- (2026-08-03, Agent: chore) returned to ready pending user approval; Graylog smoke unchecked.
