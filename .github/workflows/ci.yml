@@ -72,7 +72,12 @@ jobs:
       - name: Python worker tests
         run: make TEST=1 test-python
 
+      # Prefer docker-exec dump-matrix (test-stand PHP ≥8.4). Host php on
+      # ubuntu-latest is often too old for Composer platform_check; the test
+      # falls back either way, but skipping the doomed native attempt is faster.
       - name: Drift guards
+        env:
+          DRIFT_FORCE_DOCKER: "1"
         run: make TEST=1 test-drift
 
       - name: Tear down test stand

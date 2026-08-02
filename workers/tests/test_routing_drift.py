@@ -154,15 +154,21 @@ def _parse_registry_json(stdout: str, *, source: str) -> dict[str, Any]:
 def _load_registry() -> dict[str, Any]:
     """Run `dump-matrix.php --json` and return the parsed live registry snapshot.
 
-    NEVER skips (see module docstring). Tries native `php` first (portable to
-    an environment where it happens to be installed, e.g. a future CI image),
-    then falls back to `docker exec` into the running php container — this
-    host has no native `php`, so in practice every real run today takes the
-    docker path. Any failure along either path is a hard test failure with
-    the tool's own STDERR surfaced, not a skip.
+    NEVER skips (see module docstring). Tries native `php` first (portable
+    when a compatible host PHP is installed), then falls back to `docker exec`
+    into the running php container. Native failure alone is NOT fatal — host
+    `php` may exist but be too old for Composer platform_check (GHA
+    ubuntu-latest ships 8.3 while this project needs ≥8.4); only fail hard
+    when BOTH paths fail. Set `DRIFT_FORCE_DOCKER=1` to skip the native attempt
+    (CI prefers the test-stand container).
     """
     script_path = REPO_ROOT / "app-symfony" / PHP_SCRIPT
-    if shutil.which("php"):
+    force_docker = os.environ.get("DRIFT_FORCE_DOCKER", "").strip().lower() in (
+        "1", "true", "yes",
+    )
+    native_diag: str | None = None
+
+    if not force_docker and shutil.which("php"):
         env = {**os.environ, "APP_ENV": "test"}
         res = subprocess.run(
             ["php", str(script_path), "--json"],
@@ -172,20 +178,21 @@ def _load_registry() -> dict[str, Any]:
         )
         if res.returncode == 0:
             return _parse_registry_json(res.stdout, source="native php")
-        pytest.fail(
-            f"{PHP_SCRIPT} --json failed via native php (exit {res.returncode}) — "
-            "this is a genuine drift-test failure (DB unreachable/empty or a tool "
-            f"bug), not a missing-tool skip:\n{res.stderr.strip()[:2000]}"
+        # Wrong host PHP / platform_check / missing extensions → try docker.
+        # Real tool/DB failures will surface again on the docker path (or both).
+        native_diag = (
+            f"native php exit {res.returncode}: {res.stderr.strip()[:1500]}"
         )
 
     docker = shutil.which("docker")
     if docker is None:
+        detail = f"\nNative path already failed:\n{native_diag}" if native_diag else ""
         pytest.fail(
-            "Neither native `php` nor `docker` is available to run "
+            "Neither a working native `php` nor `docker` is available to run "
             f"{PHP_SCRIPT} --json — cannot execute the register-round-trip drift "
             "test in this environment. Install one of them; do NOT skip this "
             "test to work around it (see module docstring — that is exactly the "
-            "regression that hid a real drift for ~12 days)."
+            f"regression that hid a real drift for ~12 days).{detail}"
         )
     container = _container_name()
     try:
@@ -194,13 +201,17 @@ def _load_registry() -> dict[str, Any]:
             capture_output=True, text=True,
         )
     except OSError as exc:
-        pytest.fail(f"Failed to `docker exec` into container {container!r}: {exc}")
+        detail = f"\nNative path already failed:\n{native_diag}" if native_diag else ""
+        pytest.fail(
+            f"Failed to `docker exec` into container {container!r}: {exc}{detail}"
+        )
     if res.returncode != 0:
+        detail = f"\nNative path already failed:\n{native_diag}" if native_diag else ""
         pytest.fail(
             f"{PHP_SCRIPT} --json failed inside container {container!r} "
             f"(exit {res.returncode}) — this is a genuine drift-test failure "
             f"(DB unreachable/empty, missing tool, or a tool bug), not a "
-            f"missing-tool skip:\n{res.stderr.strip()[:2000]}"
+            f"missing-tool skip:\n{res.stderr.strip()[:2000]}{detail}"
         )
     return _parse_registry_json(res.stdout, source=f"docker exec {container}")
 

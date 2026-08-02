@@ -155,10 +155,19 @@ final class SocialIdentityResolverDbTest extends KernelTestCase
                     $this->armed = false;
 
                     $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s');
+                    // Raw INSERT must list every NOT NULL column without a DB
+                    // default (Version20260801214439 dropped column defaults;
+                    // Doctrine still sends PHP defaults, this race stub does not).
                     $this->rawConn->insert('users', [
-                        'email'          => $this->email,
-                        'quota_reset_at' => $now,
-                        'created_at'     => $now,
+                        'email'                 => $this->email,
+                        'plan'                  => 'free',
+                        'daily_conversions'     => 0,
+                        'daily_ai_conversions'  => 0,
+                        'quota_reset_at'        => $now,
+                        'created_at'            => $now,
+                        'is_active'             => 1,
+                        'is_guest'              => 0,
+                        'is_admin'              => 0,
                     ]);
                     $this->winnerUserId = (int) $this->rawConn->lastInsertId();
 
