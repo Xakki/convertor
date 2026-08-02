@@ -26,11 +26,11 @@ root-owned каталоги `fluent-bit/` и `logrotate/logrotate.conf/` (Docker
 **Fix:**
 - Submodule FluentLog `528f4b0`: env `FLUENT_BIT_CONF_DIR` / `FLUENT_LOGROTATE_CONF`.
 - Convertor `e67598a`: Makefile экспортирует абсолютные пути в `docker/fluent-log/…`.
-- uBook ops: патч + `make --eval='recreate-fluent: ; $(DC_FLUENT) up -d --force-recreate fluent-bit logrotate' recreate-fluent`.
+- uBook ops: `make fluent-recreate` (force-recreate обоих сайдкаров после смены bind paths).
 
 **Acceptance Criteria:**
-- [x] `make ps` на uBook: fluent-bit и logrotate `Up`, не Restarting
-- [x] В логах fluent нет `could not open configuration file`
+- [x] `make ps` на uBook: fluent-bit и logrotate `Up`, не Restarting (verified 2026-08-03 ~01:06 MSK)
+- [x] В логах fluent нет `could not open configuration file` (Fluent Bit v5.0.9 стартует нормально)
 - [ ] Smoke: запись из worker-контейнера появляется в Graylog (не проверялось)
 
 **Decisions:**
@@ -38,10 +38,11 @@ root-owned каталоги `fluent-bit/` и `logrotate/logrotate.conf/` (Docker
 - `restart` недостаточен; нужен `--force-recreate` для новых volume paths.
 
 **Residual:**
-- Push FluentLog + convertor; uBook `git pull && git submodule update`.
-- Удалить root-owned мусор `fluent-bit/`, `logrotate/` в корне uBook (`sudo rm -rf`).
+- uBook git behind saFin (`e67598a`/`528f4b0` не подтянуты; Makefile paths уже локально, mounts OK).
+- Root-owned мусор `fluent-bit/`, `logrotate/` в корне uBook — не мешает binds, удалить: `sudo rm -rf fluent-bit logrotate`.
 - `EXT_FLUENT_PORT=0.0.0.0` на uBook — отдельно от CNV-17 (rebind на loopback).
 
 ## Execution Log
 
 - (2026-08-03, Agent: chore) returned to ready pending user approval; Graylog smoke unchecked.
+- (2026-08-03, Agent: composer) uBook verify: оба сайдкара Up, binds → `docker/fluent-log/fluent-bit` и `…/logrotate/logrotate.conf`; добавлен `make fluent-recreate`, `fluent-up` поднимает logrotate тоже.
