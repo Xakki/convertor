@@ -42,8 +42,12 @@
 - Registry/матрица рекламирует ровно то, что воркер умеет.
 - Tests/QA green per project gates.
 
-**Status:** todo (Stage 7 — do not start early).
+**Status:** progress (Stage 7 — python-worker zone done; PHP seed pending).
 
 ## Execution Log
 
 - (2026-08-03, Agent: chore) started; branch task/CNV-41.
+- (2026-08-03, Agent: python-worker) Dockerfile: +libreoffice-calc, +libreoffice-impress; build-time libetonyek probe → **present** (`libetonyek-0.1-1` in Debian trixie) → **pages KEPT** (`pages` → office targets, runtime probe `_libetonyek_available()`).
+- (2026-08-03, Agent: python-worker) worker `_MATRIX` Stage-7: epub-input pandoc pairs (no epub→pdf); Calc xls/xlsx/ods/csv→office; Impress ppt/pptx/odp→pptx/odp/pdf; pdf→jpg; markup rst/latex/tex/wiki→md-family.
+- (2026-08-03, Agent: python-worker) pdf→jpg: pdftoppm; 1 page → `.jpg`; 2+ pages → `.zip` (`page-001.jpg`, …); delivery ext `jpg`/`zip`.
+- (2026-08-03, Agent: python-worker) `make test-python-libreoffice` → 37 passed, 1 skipped (pages test skipped in container — libetonyek present).

@@ -1,6 +1,6 @@
 """Tests for LibreOfficeWorker.convert() — Phase 1 stream-based document worker.
 
-soffice/pandoc/pdftotext are mocked (no binaries in the unit-test env): each mock
+soffice/pandoc/pdftotext/pdftoppm are mocked (no binaries in the unit-test env): each mock
 writes a dummy output so the worker's post-conversion checks pass. This exercises
 the (source,target) routing, format validation, output placement, MIME selection,
 and the conv.document streams subscription — without real LibreOffice.
@@ -8,6 +8,7 @@ and the conv.document streams subscription — without real LibreOffice.
 
 from pathlib import Path
 from unittest.mock import patch
+from zipfile import ZipFile
 
 import pytest
 
@@ -15,6 +16,7 @@ from workers.libreoffice.worker import (
     LibreOfficeWorker,
     _MATRIX,
     _MIME,
+    _PAGES_IMPORT_OK,
 )
 
 
@@ -81,10 +83,16 @@ class _Engines:
         async def fake_pdftotext(src, out_path):
             Path(out_path).write_bytes(b"pdf-text")
 
+        async def fake_pdftoppm(src, out_dir, prefix):
+            page = Path(out_dir) / f"{prefix}-1.jpg"
+            page.write_bytes(b"jpeg-bytes")
+            return [page]
+
         self._patches = [
             patch("workers.libreoffice.worker.run_soffice", side_effect=fake_soffice),
             patch("workers.libreoffice.worker.run_pandoc", side_effect=fake_pandoc),
             patch("workers.libreoffice.worker.run_pdftotext", side_effect=fake_pdftotext),
+            patch("workers.libreoffice.worker.run_pdftoppm", side_effect=fake_pdftoppm),
         ]
         for p in self._patches:
             p.start()
@@ -134,7 +142,6 @@ class TestLibreOfficeConvert:
         assert Path(out_path).exists()
 
     def test_doc_to_md_chains_soffice_then_pandoc(self, tmp_path):
-        # .doc is not a pandoc reader → soffice→docx then pandoc→md.
         _, _, ext = self._run(tmp_path, 7, "in.doc", "doc", "md")
         assert ext == "md"
 
@@ -163,16 +170,63 @@ class TestLibreOfficeConvert:
         assert ext == "docx"
         assert mime == _MIME["docx"]
 
+    def test_pdf_to_jpg_single_page(self, tmp_path):
+        out_path, mime, ext = self._run(tmp_path, 13, "in.pdf", "pdf", "jpg")
+        assert ext == "jpg"
+        assert mime == "image/jpeg"
+        assert Path(out_path).exists()
+
+    def test_pdf_to_jpg_multipage_zip(self, tmp_path):
+        src = _src(tmp_path, "in.pdf")
+        worker = _worker(tmp_path)
+
+        async def fake_multipage(src_, out_dir, prefix):
+            pages = []
+            for i in (1, 2):
+                p = Path(out_dir) / f"{prefix}-{i}.jpg"
+                p.write_bytes(f"page{i}".encode())
+                pages.append(p)
+            return pages
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker.run_pdftoppm", side_effect=fake_multipage):
+            out_path, mime, ext = worker.convert(_make_job(14, src, "pdf", "jpg"))
+
+        assert ext == "zip"
+        assert mime == "application/zip"
+        with ZipFile(out_path) as zf:
+            names = sorted(zf.namelist())
+        assert names == ["page-001.jpg", "page-002.jpg"]
+
     def test_html_to_pdf_via_soffice(self, tmp_path):
-        _, _, ext = self._run(tmp_path, 13, "in.html", "html", "pdf")
+        _, _, ext = self._run(tmp_path, 15, "in.html", "html", "pdf")
         assert ext == "pdf"
 
     def test_epub_to_md_via_pandoc(self, tmp_path):
-        # epub source supports ONLY →md (pandoc reads epub; soffice can't import).
-        out_path, mime, ext = self._run(tmp_path, 14, "in.epub", "epub", "md")
+        out_path, mime, ext = self._run(tmp_path, 16, "in.epub", "epub", "md")
         assert ext == "md"
         assert mime == "text/markdown"
         assert Path(out_path).exists()
+
+    def test_epub_to_docx_via_pandoc(self, tmp_path):
+        _, mime, ext = self._run(tmp_path, 17, "in.epub", "epub", "docx")
+        assert ext == "docx"
+        assert mime == _MIME["docx"]
+
+    def test_xlsx_to_pdf_via_soffice(self, tmp_path):
+        _, mime, ext = self._run(tmp_path, 18, "in.xlsx", "xlsx", "pdf")
+        assert ext == "pdf"
+        assert mime == "application/pdf"
+
+    def test_pptx_to_pdf_via_soffice(self, tmp_path):
+        _, mime, ext = self._run(tmp_path, 19, "in.pptx", "pptx", "pdf")
+        assert ext == "pdf"
+        assert mime == "application/pdf"
+
+    def test_rst_to_html_via_pandoc_soffice(self, tmp_path):
+        _, mime, ext = self._run(tmp_path, 20, "in.rst", "rst", "html")
+        assert ext == "html"
+        assert mime == _MIME["html"]
 
     def test_output_in_work_dir_with_conv_id(self, tmp_path):
         out_path, _, ext = self._run(tmp_path, 99, "in.docx", "docx", "pdf")
@@ -182,7 +236,6 @@ class TestLibreOfficeConvert:
         assert name.endswith(f".{ext}")
 
     def test_job_dir_cleaned_up(self, tmp_path):
-        # The per-job staging dir must not leak in WORK_DIR after convert().
         self._run(tmp_path, 100, "in.docx", "docx", "pdf")
         assert not list(tmp_path.glob("lo-*")), "job_dir leaked"
 
@@ -193,38 +246,42 @@ class TestLibreOfficeConvert:
 
 class TestLibreOfficeConvertErrors:
     def test_unsupported_source_raises(self, tmp_path):
-        src = _src(tmp_path, "in.xls")
+        src = _src(tmp_path, "in.dwg")
         worker = _worker(tmp_path)
         with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
             with pytest.raises(ValueError, match="unsupported source format"):
-                worker.convert(_make_job(20, src, "xls", "pdf"))
+                worker.convert(_make_job(20, src, "dwg", "pdf"))
 
     def test_unsupported_conversion_raises(self, tmp_path):
-        # pptx → pdf is Stage-7 (presentations) → not in matrix.
         src = _src(tmp_path, "in.docx")
         worker = _worker(tmp_path)
         with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
             with pytest.raises(ValueError, match="unsupported conversion"):
                 worker.convert(_make_job(21, src, "docx", "jpg"))
 
-    def test_pdf_to_jpg_rejected_stage7(self, tmp_path):
-        # PDF→jpg-per-page is Stage-7 → must not be advertised.
-        assert "jpg" not in _MATRIX["pdf"]
+    def test_pdf_to_jpg_in_matrix(self, tmp_path):
+        assert "jpg" in _MATRIX["pdf"]
 
-    def test_epub_source_only_md(self, tmp_path):
-        # epub SOURCE supports only →md; everything else is unsupported.
-        assert _MATRIX["epub"] == {"md"}
+    def test_epub_source_pandoc_targets(self, tmp_path):
+        assert _MATRIX["epub"] == {"docx", "html", "md", "odt", "rtf", "txt"}
 
     def test_epub_to_pdf_rejected(self, tmp_path):
-        # soffice can't import epub → epub→pdf must be rejected (not advertised).
         src = _src(tmp_path, "in.epub")
         worker = _worker(tmp_path)
         with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
             with pytest.raises(ValueError, match="unsupported conversion"):
                 worker.convert(_make_job(24, src, "epub", "pdf"))
 
-    def test_pages_source_rejected(self, tmp_path):
-        # `pages` source deferred → rejected as unsupported source format.
+    def test_pptx_to_docx_rejected(self, tmp_path):
+        src = _src(tmp_path, "in.pptx")
+        worker = _worker(tmp_path)
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="unsupported conversion"):
+                worker.convert(_make_job(26, src, "pptx", "docx"))
+
+    @pytest.mark.skipif(_PAGES_IMPORT_OK, reason="pages supported when libetonyek present")
+    def test_pages_source_rejected_without_libetonyek(self, tmp_path):
+        assert "pages" not in _MATRIX
         src = _src(tmp_path, "in.pages")
         worker = _worker(tmp_path)
         with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
@@ -242,7 +299,7 @@ class TestLibreOfficeConvertErrors:
         worker = _worker(tmp_path)
 
         async def fake_noop(src_, out_dir, convert_to):
-            pass  # produce nothing
+            pass
 
         with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
              patch("workers.libreoffice.worker.run_soffice", side_effect=fake_noop):
