@@ -166,6 +166,14 @@ and turns every release into a ~3 GB push.
 - `make rebuild` (`--no-cache`) intentionally bypasses all of this — it's the
   escape hatch, not the default.
 
+## Harbor disk (CNV-20, saFin)
+
+Harbor host = **saFin** (`/home/soft/harbor/data`, ~9.3G after GC 2026-08-02). Project
+`convertor`: retention **keep 3** (Daily), GC **Daily** + **Delete Untagged**. GC frees
+disk only after untagged deletion + GC — tagged layers stay. **SAVE Delete Untagged before
+GC NOW** (without SAVE, GC runs with `delete_untagged=false` and frees ~KiB). Verified:
+untagged=0, GC id=19815 freed ~14 GiB. Check `/api/v2.0/system/gc`.
+
 ## See also
 
 - `worker-ai-image` — the two-layer AI image build/deploy detail.
