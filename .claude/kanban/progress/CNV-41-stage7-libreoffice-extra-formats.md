@@ -42,7 +42,7 @@
 - Registry/матрица рекламирует ровно то, что воркер умеет.
 - Tests/QA green per project gates.
 
-**Status:** progress (Stage 7 — python-worker zone done; PHP seed pending).
+**Status:** progress (Stage 7 — python-worker zone done; PHP seed synced).
 
 ## Execution Log
 
@@ -51,3 +51,4 @@
 - (2026-08-03, Agent: python-worker) worker `_MATRIX` Stage-7: epub-input pandoc pairs (no epub→pdf); Calc xls/xlsx/ods/csv→office; Impress ppt/pptx/odp→pptx/odp/pdf; pdf→jpg; markup rst/latex/tex/wiki→md-family.
 - (2026-08-03, Agent: python-worker) pdf→jpg: pdftoppm; 1 page → `.jpg`; 2+ pages → `.zip` (`page-001.jpg`, …); delivery ext `jpg`/`zip`.
 - (2026-08-03, Agent: python-worker) `make test-python-libreoffice` → 37 passed, 1 skipped (pages test skipped in container — libetonyek present).
+- (2026-08-03, Agent: php-registry) seed sync: обновлены `Version20260722150301` documentMatrix + `ConversionRegistrySeedFixture`; новая миграция `Version20260803120000` (UPDATE seed document для уже засеянных БД). 22 source × 155 пар document; golden 394 entries; `ConversionRegistrySeedFixtureSyncTest` + `ConversionRegistryGoldenTest` + `test-drift` green; phpstan migrations OK.

@@ -46,7 +46,7 @@ final class Version20260722150301 extends AbstractMigration
 
     public function getDescription(): string
     {
-        return 'worker_capabilities: seed статичным снапшотом реальных Python CAPABILITIES (без Stage-7 пар)';
+        return 'worker_capabilities: seed статичным снапшотом реальных Python CAPABILITIES (Stage-7 document — CNV-41)';
     }
 
     public function up(Schema $schema): void
@@ -82,17 +82,31 @@ final class Version20260722150301 extends AbstractMigration
     private function seedRows(): array
     {
         $officeTargets  = ['docx', 'epub', 'html', 'md', 'odt', 'pdf', 'rtf', 'txt'];
+        $epubTargets    = ['docx', 'html', 'md', 'odt', 'rtf', 'txt'];
+        $impressTargets = ['odp', 'pdf', 'pptx'];
         $documentMatrix = [
-            'doc'  => $officeTargets,
-            'docx' => $officeTargets,
-            'odt'  => $officeTargets,
-            'rtf'  => $officeTargets,
-            'txt'  => $officeTargets,
-            'html' => $officeTargets,
-            'htm'  => $officeTargets,
-            'epub' => ['md'],
-            'pdf'  => ['docx', 'md', 'txt'],
-            'md'   => ['docx', 'epub', 'html', 'md', 'odt', 'pdf', 'rtf', 'txt'],
+            'doc'   => $officeTargets,
+            'docx'  => $officeTargets,
+            'odt'   => $officeTargets,
+            'rtf'   => $officeTargets,
+            'txt'   => $officeTargets,
+            'html'  => $officeTargets,
+            'htm'   => $officeTargets,
+            'epub'  => $epubTargets,
+            'pdf'   => ['docx', 'jpg', 'md', 'txt'],
+            'md'    => $officeTargets,
+            'rst'   => $officeTargets,
+            'latex' => $officeTargets,
+            'tex'   => $officeTargets,
+            'wiki'  => $officeTargets,
+            'xls'   => $officeTargets,
+            'xlsx'  => $officeTargets,
+            'ods'   => $officeTargets,
+            'csv'   => $officeTargets,
+            'ppt'   => $impressTargets,
+            'pptx'  => $impressTargets,
+            'odp'   => $impressTargets,
+            'pages' => $officeTargets,
         ];
 
         $imageMatrix = [
