@@ -27,6 +27,7 @@ use AsyncAws\S3\Result\HeadObjectOutput;
 use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpKernel\Exception\GoneHttpException;
 use Symfony\Component\Messenger\Envelope;
 use Symfony\Component\Messenger\MessageBusInterface;
@@ -325,6 +326,63 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         $manager->deleteConversion(42, $owner);
     }
 
+    public function testDeleteLogsWarningAndRemovesDbWhenS3Fails(): void
+    {
+        $owner = $this->userWithId(10);
+        $input = (new FileStorage())
+            ->setOriginalName('in.jpg')
+            ->setStoragePath('inputs/2026/08/01/aabbccddeeff0011.jpg')
+            ->setMimeType('image/jpeg')
+            ->setSizeBytes(100);
+        $conv = (new Conversion())
+            ->setUser($owner)
+            ->setInputFile($input)
+            ->setFromFormat('jpg')
+            ->setToFormat('png')
+            ->setCategory(FileCategory::Image)
+            ->setStatus(ConversionStatus::Completed);
+        (new \ReflectionProperty(Conversion::class, 'id'))->setValue($conv, 42);
+
+        $s3Client = $this->createMock(S3Client::class);
+        $s3Client->expects($this->once())->method('deleteObject')->willThrowException(
+            new \RuntimeException('S3 down'),
+        );
+
+        $removed = [];
+        $em      = $this->createMock(EntityManagerInterface::class);
+        $em->expects($this->exactly(2))->method('remove')->willReturnCallback(
+            static function (object $entity) use (&$removed): void {
+                $removed[] = $entity::class;
+            },
+        );
+        $em->expects($this->once())->method('flush');
+
+        $repo = $this->createMock(ConversionRepository::class);
+        $repo->expects($this->once())->method('find')->with(42)->willReturn($conv);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())->method('warning')->with(
+            'Не удалось удалить S3-объект при hard-delete конверсии; строка БД будет удалена',
+            self::callback(static function (array $ctx): bool {
+                return $ctx['bucket']       === 'convertor-inputs'
+                    && $ctx['key']          === 'inputs/2026/08/01/aabbccddeeff0011.jpg'
+                    && $ctx['conversionId'] === 42
+                    && $ctx['error']        === 'S3 down';
+            }),
+        );
+
+        $manager = $this->buildManager(
+            $this->createStub(QuotaService::class),
+            $s3Client,
+            $em,
+            $repo,
+            logger: $logger,
+        );
+        $manager->deleteConversion(42, $owner);
+
+        self::assertSame([Conversion::class, FileStorage::class], $removed);
+    }
+
     private function userWithId(int $id): User
     {
         $user = new User();
@@ -362,6 +420,7 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         ConversionRepository $repo,
         ?MessageBusInterface $bus = null,
         ?ConversionToggleService $toggle = null,
+        ?LoggerInterface $logger = null,
     ): ConversionManager {
         $bus ??= $this->createStub(MessageBusInterface::class);
         $bus->method('dispatch')->willReturnCallback(
@@ -377,6 +436,7 @@ final class ConversionManagerRetryDeleteTest extends TestCase
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
             $toggle,
+            $logger,
         );
     }
 }

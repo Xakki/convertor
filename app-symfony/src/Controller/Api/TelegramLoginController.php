@@ -118,17 +118,27 @@ class TelegramLoginController extends AbstractController
 
         if ($result['status'] === TelegramLoginCodeStore::STATUS_MISMATCH) {
             // nonce mismatch → не тот браузер (fixation отбита). Код НЕ сожжён.
-            return $this->json(['error' => 'mismatch'], Response::HTTP_FORBIDDEN);
+            // Гасим cookie: терминальный fail-path (как success / старый failPage).
+            $response = $this->json(['error' => 'mismatch'], Response::HTTP_FORBIDDEN);
+            $response->headers->setCookie($this->nonceCookie->clear());
+
+            return $response;
         }
 
         if ($result['status'] !== TelegramLoginCodeStore::STATUS_AUTHORIZED) {
-            // expired / unknown → начать вход заново.
-            return $this->json(['error' => 'expired'], Response::HTTP_GONE);
+            // expired / unknown → начать вход заново. Гасим устаревший nonce.
+            $response = $this->json(['error' => 'expired'], Response::HTTP_GONE);
+            $response->headers->setCookie($this->nonceCookie->clear());
+
+            return $response;
         }
 
         $user = $result['userId'] !== null ? $this->users->find($result['userId']) : null;
         if ($user === null || ! $user->isActive()) {
-            return $this->json(['error' => 'expired'], Response::HTTP_GONE);
+            $response = $this->json(['error' => 'expired'], Response::HTTP_GONE);
+            $response->headers->setCookie($this->nonceCookie->clear());
+
+            return $response;
         }
 
         // Merge guest-истории (у poll есть и nonce-, и guest-cookie).

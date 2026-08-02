@@ -582,38 +582,66 @@ class WsGateway:
             await self._ack_and_release(session, credits, job_id, "result")
             return
 
+        processing_ms = frame.get("processingMs")
+
+        # Permanent pre-relay (CNV-37): malformed / oversize / decode → DLQ сразу
+        # через общий `_to_dlq_and_release` (симметрия с post-relay 4xx). Иначе
+        # `_release_no_ack` оставлял запись в PEL и idle-reclaim крутил её вечно.
         if inline is None:
-            await self._release_no_ack(
-                credits, job_id, "result frame has neither inline nor resultKey"
+            logger.warning(
+                "result frame has neither inline nor resultKey → DLQ",
+                extra={"jobId": job_id},
+            )
+            await self._to_dlq_and_release(
+                session, credits, job_id,
+                "result frame has neither inline nor resultKey",
+                processing_ms,
             )
             return
 
         if not isinstance(inline, str):
-            await self._release_no_ack(
-                credits, job_id, "result inline is not a string"
+            logger.warning(
+                "result inline is not a string → DLQ",
+                extra={"jobId": job_id},
+            )
+            await self._to_dlq_and_release(
+                session, credits, job_id,
+                "result inline is not a string",
+                processing_ms,
             )
             return
 
-        # Порог: меряем ДЕКОДИРОВАННЫЕ байты. Свыше порога / не-base64 → отклонить
-        # без ack (воркер обязан был идти большим путём).
+        # Порог: меряем ДЕКОДИРОВАННЫЕ байты. Свыше порога / не-base64 → DLQ
+        # (воркер обязан был идти большим путём; повтор не поможет).
         decoded_len = self._inline_decoded_len(inline)
         if decoded_len is None:
-            await self._release_no_ack(
-                credits, job_id, "result inline is not valid base64 — rejected"
+            logger.warning(
+                "result inline is not valid base64 → DLQ",
+                extra={"jobId": job_id},
+            )
+            await self._to_dlq_and_release(
+                session, credits, job_id,
+                "result inline is not valid base64 — rejected",
+                processing_ms,
             )
             return
         if decoded_len > self._cfg.ws_result_inline_max:
-            await self._release_no_ack(
-                credits, job_id, "inline result exceeds WS_RESULT_INLINE_MAX — rejected",
-                bytes=decoded_len, max=self._cfg.ws_result_inline_max,
+            logger.warning(
+                "inline result exceeds WS_RESULT_INLINE_MAX → DLQ",
+                extra={"jobId": job_id, "bytes": decoded_len,
+                       "max": self._cfg.ws_result_inline_max},
+            )
+            await self._to_dlq_and_release(
+                session, credits, job_id,
+                "inline result exceeds WS_RESULT_INLINE_MAX — rejected",
+                processing_ms,
             )
             return
 
         # relay inline → Symfony; ack ТОЛЬКО при 2xx (persist подтверждён).
         ok, status = await self._get_relay().post_result(
-            job_id, inline, frame.get("mime"), frame.get("processingMs")
+            job_id, inline, frame.get("mime"), processing_ms
         )
-        processing_ms = frame.get("processingMs")
         if ok:
             await self._ack_and_release(session, credits, job_id, "result")
             return

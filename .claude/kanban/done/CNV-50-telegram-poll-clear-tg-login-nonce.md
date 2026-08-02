@@ -1,7 +1,7 @@
 ### Telegram poll: clear tg_login_nonce cookie on 403/410 responses
 
 **Criticality:** Nit
-**Epic:** [[CNV-48]]
+**Epic:** [[CNV-52]]
 
 **TAGS:**
 - tech-debt
@@ -34,9 +34,15 @@
 - Функциональные тесты покрывают clear на 403/410; success-path без регрессии.
 - Tests/QA green: `make phpstan`, `make cs-check`, релевантные PHPUnit для auth.
 
-**Open questions:**
-- Гасить nonce только на `410` (терминальный fail) или также на `403 mismatch`?
-
 **Decisions:**
+- (2026-08-02) Вариант A (@user): гасить nonce на **403 mismatch** и **410
+  expired/gone** — оба терминальных fail-path poll.
 
-**Status:** grooming
+**Execution Log:**
+- (2026-08-02) Implement: `TelegramLoginController::poll()` — `nonceCookie->clear()`
+  на 403 mismatch, 410 expired/unknown и 410 inactive-user; тесты 403/410 + success
+  через `assertNonceCookieCleared` (path/sameSite/httpOnly/secure как у фабрики).
+- (2026-08-02) QA: `make cs-check` OK; PHPStan OK (retry после OOM 137);
+  PHPUnit `TelegramLoginControllerTest` + `TelegramLoginPollMergeTest` — 9 OK.
+
+**Status:** ready

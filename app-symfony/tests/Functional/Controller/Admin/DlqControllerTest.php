@@ -118,6 +118,10 @@ final class DlqControllerTest extends WebTestCase
         self::assertSame('not_failed', $body['error']);
     }
 
+    /**
+     * CNV-49: S3 objectExists — до FOR UPDATE; отсутствие объекта → 409
+     * `input_gone`, статус остаётся Failed (gate до flip / без lock hold).
+     */
     public function testRequeueReturns409WhenInputObjectGone(): void
     {
         $client    = static::createClient();

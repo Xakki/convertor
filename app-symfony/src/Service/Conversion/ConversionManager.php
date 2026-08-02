@@ -19,6 +19,7 @@ use App\Service\Queue\ConversionStatusReader;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
 use Doctrine\ORM\EntityManagerInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpKernel\Exception\GoneHttpException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
@@ -40,6 +41,9 @@ class ConversionManager
         // autowiring инжектит сервис, unit-тесты без БД получают null →
         // toggle-проверка пропускается (поведение по умолчанию = всё включено).
         private readonly ?ConversionToggleService $toggleService = null,
+        // В проде Symfony инжектит monolog; unit-тесты без логгера → null,
+        // warning при сбое S3 просто не пишется (поведение delete не меняется).
+        private readonly ?LoggerInterface $logger = null,
     ) {
     }
 
@@ -239,14 +243,15 @@ class ConversionManager
         $inputFile  = $conversion->getInputFile();
         $outputFile = $conversion->getOutputFile();
 
-        $inputKey = $inputFile->getStoragePath();
+        $conversionId = $conversion->getId();
+        $inputKey     = $inputFile->getStoragePath();
         $this->assertSafeObjectKey($inputKey, 'inputs/');
-        $this->deleteObjectQuietly($this->s3->inputsBucket(), $inputKey);
+        $this->deleteObjectQuietly($this->s3->inputsBucket(), $inputKey, $conversionId);
 
         if ($outputFile !== null) {
             $outputKey = $outputFile->getStoragePath();
             $this->assertSafeObjectKey($outputKey, 'results/');
-            $this->deleteObjectQuietly($this->s3->resultsBucket(), $outputKey);
+            $this->deleteObjectQuietly($this->s3->resultsBucket(), $outputKey, $conversionId);
         }
 
         // Conversion — первым (FK на FileStorage), затем сами FileStorage.
@@ -295,14 +300,20 @@ class ConversionManager
 
     /**
      * Идемпотентное удаление S3-объекта: любой сбой глотаем — строка БД всё
-     * равно вычищается (см. FileCleanupService::deleteObject).
+     * равно вычищается (см. FileCleanupService::deleteObject). Сбой логируем
+     * warning с bucket/key/conversionId, чтобы orphan-объекты были видны.
      */
-    private function deleteObjectQuietly(string $bucket, string $key): void
+    private function deleteObjectQuietly(string $bucket, string $key, int $conversionId): void
     {
         try {
             $this->s3->deleteObject($bucket, $key);
-        } catch (\Throwable) {
-            // объект уже удалён / транзиентный сбой — не блокируем hard-delete БД
+        } catch (\Throwable $e) {
+            $this->logger?->warning('Не удалось удалить S3-объект при hard-delete конверсии; строка БД будет удалена', [
+                'bucket'       => $bucket,
+                'key'          => $key,
+                'conversionId' => $conversionId,
+                'error'        => $e->getMessage(),
+            ]);
         }
     }
 

@@ -551,11 +551,12 @@ async def test_post_dlq_fail_network_error_is_retryable_false():
 
 
 # --------------------------------------------------------------------------
-# inline свыше порога → rejected, no ack, no relay
+# pre-relay permanent (CNV-37): malformed / oversize / decode → DLQ сразу
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_oversized_inline_rejected_no_ack_credit_released():
+async def test_oversized_inline_goes_to_dlq():
+    """Свыше порога → немедленный DLQ (permanent), без relay и без бесконечного reclaim."""
     over = _b64(101)  # декодированных 101 байт > порога 100
     job1 = {"conversionId": 1, "targetFormat": "txt"}
     job2 = {"conversionId": 2, "targetFormat": "txt"}
@@ -567,12 +568,81 @@ async def test_oversized_inline_rejected_no_ack_credit_released():
             first = await _recv_job(c)
             assert first["jobId"] == "1-0"
             await c.send(json.dumps({"type": "result", "jobId": "1-0", "inline": over}))
-            # отклонено без ack, НО кредит освобождён → job2 диспетчеризуется (nit#1)
+            # DLQ + кредит освобождён → job2 диспетчеризуется
             second = await _recv_job(c)
             assert second["jobId"] == "2-0"
 
     assert rec.requests == []  # relay НЕ вызывался (отклонено до relay)
-    assert fake.acks == []     # НЕ ack'нули — воркер обязан был идти большим путём
+    assert fake.acks == []
+    assert len(fake.dlq_writes) == 1
+    assert "WS_RESULT_INLINE_MAX" in fake.dlq_writes[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_base64_inline_goes_to_dlq():
+    """Невалидный base64 → немедленный DLQ (decode error, permanent)."""
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({
+                "type": "result", "jobId": "1-0", "inline": "!!!not-base64!!!",
+            }))
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    assert rec.requests == []
+    assert fake.acks == []
+    assert len(fake.dlq_writes) == 1
+    assert "not valid base64" in fake.dlq_writes[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_result_neither_field_goes_to_dlq():
+    """result без inline и без resultKey → немедленный DLQ (malformed, permanent)."""
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({"type": "result", "jobId": "1-0"}))
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    assert rec.requests == []
+    assert fake.acks == []
+    assert len(fake.dlq_writes) == 1
+    assert "neither inline nor resultKey" in fake.dlq_writes[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_result_inline_not_string_goes_to_dlq():
+    """inline не строка → немедленный DLQ (malformed, permanent)."""
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({
+                "type": "result", "jobId": "1-0", "inline": 12345,
+            }))
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    assert rec.requests == []
+    assert fake.acks == []
+    assert len(fake.dlq_writes) == 1
+    assert "not a string" in fake.dlq_writes[0]["reason"]
 
 
 @pytest.mark.asyncio

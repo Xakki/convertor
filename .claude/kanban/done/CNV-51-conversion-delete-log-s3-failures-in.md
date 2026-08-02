@@ -1,7 +1,7 @@
 ### Conversion delete: log S3 failures in deleteObjectQuietly
 
 **Criticality:** Nit
-**Epic:** [[CNV-48]]
+**Epic:** [[CNV-52]]
 **Discovery:** review CNV-8 (реализация `ConversionManager::deleteConversion`)
 
 **TAGS:**
@@ -36,8 +36,18 @@
 - Tests/QA green: `make phpstan`, `make cs-check`, релевантные PHPUnit для
   delete/retry (CNV-8 suite).
 
-**Open questions:**
-- Нет блокеров — рекомендация однозначна; карточка в grooming для batch epic
-  CNV-48.
-
 **Decisions:**
+- (2026-08-02) Рекомендация принята: логировать `warning` как в
+  `FileCleanupService`; delete строки БД при сбое S3 по-прежнему не блокировать.
+- (2026-08-02) `LoggerInterface` — optional trailing ctor-arg (`?LoggerInterface $logger = null`):
+  Symfony autowiring инжектит в проде; unit-тесты без логгера не ломаются.
+
+**Status:** ready
+
+## Execution Log
+- (2026-08-02) start: на `epic/CNV-52`, card todo→progress.
+- (2026-08-02) backend: `ConversionManager::deleteObjectQuietly` → `warning` с
+  bucket/key/conversionId/error (зеркало FileCleanupService); Throwable по-прежнему
+  глотается. Тест `testDeleteLogsWarningAndRemovesDbWhenS3Fails`.
+- (2026-08-02) QA: `make phpstan` OK; `make cs-check` OK; PHPUnit
+  `ConversionManagerRetryDeleteTest` 8/8 OK → progress→test→ready.

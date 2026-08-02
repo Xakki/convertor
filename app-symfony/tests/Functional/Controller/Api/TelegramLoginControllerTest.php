@@ -78,6 +78,7 @@ final class TelegramLoginControllerTest extends WebTestCase
         self::assertSame(403, $client->getResponse()->getStatusCode());
         $body = json_decode((string) $client->getResponse()->getContent(), true);
         self::assertSame('mismatch', $body['error']);
+        $this->assertNonceCookieCleared($client);
     }
 
     public function testPollWithoutNonceCookieReturnsBadRequest(): void
@@ -130,9 +131,7 @@ final class TelegramLoginControllerTest extends WebTestCase
         self::assertContains('refresh_token', $names);
 
         // Nonce-cookie погашена (одноразовая).
-        $nonceClear = $this->findCookie($client, TelegramLoginNonceCookieFactory::NAME);
-        self::assertNotNull($nonceClear);
-        self::assertLessThan(time(), $nonceClear->getExpiresTime());
+        $this->assertNonceCookieCleared($client);
     }
 
     /**
@@ -191,6 +190,7 @@ final class TelegramLoginControllerTest extends WebTestCase
         self::assertSame(410, $client->getResponse()->getStatusCode());
         $body = json_decode((string) $client->getResponse()->getContent(), true);
         self::assertSame('expired', $body['error']);
+        $this->assertNonceCookieCleared($client);
     }
 
     private function setNonceCookie(object $client, string $value): void
@@ -209,6 +209,20 @@ final class TelegramLoginControllerTest extends WebTestCase
         }
 
         return null;
+    }
+
+    /** Гашение tg_login_nonce: expires в прошлом, path/sameSite как у create. */
+    private function assertNonceCookieCleared(object $client): void
+    {
+        $nonceClear = $this->findCookie($client, TelegramLoginNonceCookieFactory::NAME);
+        self::assertNotNull($nonceClear, 'tg_login_nonce clear Set-Cookie expected');
+        self::assertLessThan(time(), $nonceClear->getExpiresTime());
+        self::assertSame(TelegramLoginNonceCookieFactory::PATH, $nonceClear->getPath());
+        self::assertSame(\Symfony\Component\HttpFoundation\Cookie::SAMESITE_LAX, $nonceClear->getSameSite());
+        self::assertTrue($nonceClear->isHttpOnly());
+        // Secure берётся из REFRESH_COOKIE_SECURE (false в .env.test) — сверяем с фабрикой.
+        $expected = static::getContainer()->get(TelegramLoginNonceCookieFactory::class)->clear();
+        self::assertSame($expected->isSecure(), $nonceClear->isSecure());
     }
 
     private function makeUser(int $id): User

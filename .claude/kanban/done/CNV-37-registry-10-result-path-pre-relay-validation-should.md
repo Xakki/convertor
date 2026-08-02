@@ -1,6 +1,7 @@
 ### Result-path: pre-relay валидация — DLQ или cap (malformed/oversize inline всё ещё eligible для бесконечного reclaim)
 
 **Criticality:** Medium
+**Epic:** [[CNV-52]]
 
 **TAGS:**
 - tech-debt
@@ -30,10 +31,18 @@ retry → DLQ. Покрыть тестами.
 - Idle-reclaim не крутит такие записи бесконечно.
 - `make TEST=1 test-gateway` зелёный.
 
-**Open questions:**
-- Какие pre-relay кейсы считать permanent vs retryable?
-- Нужен ли единый helper для cap/DLQ на всех result-path отказах?
-
 **Decisions:**
+- (2026-08-02) Подход по рекомендации (@user, включён в epic CNV-52):
+  - permanent pre-relay → DLQ сразу: malformed inline, oversize, decode error;
+  - transient → capped retry, затем DLQ (зеркалить fail-path);
+  - shared helper — если уже есть общий result-path rejection path; иначе локальная
+    симметрия с post-relay.
 
-**Status:** grooming
+**Status:** ready
+
+## Execution Log
+
+- (2026-08-02) Permanent pre-relay (malformed / oversize / decode) → `_to_dlq_and_release`
+  (shared with post-relay 4xx). Transient path unchanged (post-relay 5xx/network → capped
+  retry → DLQ). Tests: oversized/base64/neither/not-string → DLQ.
+- (2026-08-02) `make TEST=1 test-gateway` — 194 passed, 1 skipped.
