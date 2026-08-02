@@ -43,3 +43,7 @@
 - Tests/QA green per project gates.
 
 **Status:** todo (Stage 7 — do not start early).
+
+## Execution Log
+
+- (2026-08-03, Agent: chore) started; branch task/CNV-41.
