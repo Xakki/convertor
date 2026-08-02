@@ -291,12 +291,11 @@ test-python-metrics: build-metrics-test ## Unit тесты metrics-exporter (pro
 test-python-ai: build-ffmpeg-test ## Unit тесты AI-воркера + dev-server (в образе worker-ffmpeg:test, без Harbor-пулла)
 	$(call RUN_PYTEST_TEST,$(IMG)/worker-ffmpeg:test,workers/tests/test_ai_worker.py workers/tests/test_ai_devserver.py)
 
-# test-drift гоняется на хосте (docker exec в php-контейнер стенда), не только
-# src+stdlib: нужен docker + поднятый php + непустая БД (register-round-trip:
-# dump-matrix.php --json vs Python CAPABILITIES).
-# test_worker_type_drift.py — второй, независимый guard в том же таргете: чистый
-# text-parse, сверяет PHP-enum WorkerType с 3 статическими зеркалами
-# (ws_client.py, keydb.py, messenger.yaml).
+# test-drift гоняется на хосте: PHP-сторона — docker exec dump-matrix.php
+# (нужен поднятый php + непустая БД); Python CAPABILITIES — AST/static extract
+# из workers/*/worker.py (stdlib only, без httpx/Pillow — CI .venv-ci = pytest).
+# test_worker_type_drift.py — второй guard: text-parse PHP-enum WorkerType vs
+# 3 статических зеркала (ws_client.py, keydb.py, messenger.yaml).
 .PHONY: test-drift
 test-drift: ## Drift guards: routing (dump-matrix.php vs CAPABILITIES) + worker-type (enum vs 3 зеркала)
 	$(REQUIRE_TEST)

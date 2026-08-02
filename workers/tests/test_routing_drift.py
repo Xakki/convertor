@@ -65,11 +65,11 @@ grooming card and fix the underlying mismatch.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -217,41 +217,159 @@ def _load_registry() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Python worker loader
-# Runs each worker.py in a subprocess to isolate heavy imports (redis, boto3…).
+# Python worker loader — AST/static CAPABILITIES extract (no worker imports)
+#
+# WHY NOT exec_module / subprocess import: every workers/*/worker.py pulls
+# `workers.common.ws_client` (httpx/websockets) and some pull Pillow/pdf2image/
+# pytesseract. CI's host `.venv-ci` only has pytest — importing worker.py fails
+# with ImportError while the actual CAPABILITIES dict is a pure literal (or
+# references same-file module-level literal matrices). Static extract keeps
+# `make TEST=1 test-drift` green on a bare host venv without weakening coverage
+# or installing worker runtime deps just for this guard.
 # ---------------------------------------------------------------------------
 
-_EXTRACT_CAPS = """\
-import sys, json, importlib.util
-spec = importlib.util.spec_from_file_location('worker', sys.argv[1])
-mod  = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-# CAPABILITIES may be a module-level constant OR a class attribute (most workers).
-caps = getattr(mod, 'CAPABILITIES', None)
-if caps is None:
-    for _name in dir(mod):
-        _obj = getattr(mod, _name, None)
-        if isinstance(_obj, type) and hasattr(_obj, 'CAPABILITIES'):
-            caps = _obj.CAPABILITIES
-            break
-if caps is None:
-    print('null')
-    sys.exit(0)
-# 'routing_keys'/'matrix' silently defaulting to []/{} on a typo'd/missing key would
-# make that worker quietly vanish from the drift comparison's input (registry-04
-# review: same failure shape as the ~12-day skip regression this test suite exists
-# to prevent) — REQUIRE both keys explicitly rather than defaulting past their absence.
-missing_keys = [k for k in ('routing_keys', 'matrix') if k not in caps]
-if missing_keys:
-    print(f'CAPABILITIES missing required key(s): {missing_keys}', file=sys.stderr)
-    sys.exit(1)
-def ser(v):
-    return sorted(v) if isinstance(v, (set, frozenset, list)) else sorted(str(x) for x in v)
-print(json.dumps({
-    'routing_keys': caps['routing_keys'],
-    'matrix':       {k: ser(v) for k, v in caps['matrix'].items()},
-}))
-"""
+def _eval_caps_node(node: ast.AST, env: dict[str, Any]) -> Any:
+    """Evaluate a narrow subset of AST nodes used by CAPABILITIES / matrices.
+
+    Supported: constants, Names resolved from *env*, list/tuple/set/dict
+    literals, and set-union via `|` (BitOr) — enough for every current
+    workers/*/worker.py CAPABILITIES graph. Anything else raises ValueError
+    so callers can skip non-capability assignments (e.g. `**imported_dict`).
+    """
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id not in env:
+            raise ValueError(f"unresolved name {node.id!r}")
+        return env[node.id]
+    if isinstance(node, ast.Set):
+        return {_eval_caps_node(elt, env) for elt in node.elts}
+    if isinstance(node, ast.List):
+        return [_eval_caps_node(elt, env) for elt in node.elts]
+    if isinstance(node, ast.Tuple):
+        return tuple(_eval_caps_node(elt, env) for elt in node.elts)
+    if isinstance(node, ast.Dict):
+        out: dict[Any, Any] = {}
+        for key_node, val_node in zip(node.keys, node.values, strict=True):
+            if key_node is None:
+                raise ValueError("dict **unpack not supported in CAPABILITIES graph")
+            out[_eval_caps_node(key_node, env)] = _eval_caps_node(val_node, env)
+        return out
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _eval_caps_node(node.left, env) | _eval_caps_node(node.right, env)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
+        return +_eval_caps_node(node.operand, env)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return -_eval_caps_node(node.operand, env)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "set"
+    ):
+        if not node.args:
+            return set()
+        if len(node.args) == 1:
+            return set(_eval_caps_node(node.args[0], env))
+    raise ValueError(f"unsupported AST node {type(node).__name__}")
+
+
+def _try_store_name(target: ast.AST, value: ast.AST, env: dict[str, Any]) -> None:
+    if not isinstance(target, ast.Name):
+        return
+    try:
+        env[target.id] = _eval_caps_node(value, env)
+    except ValueError:
+        # Non-literal / unresolved (imports, **unpack, calls) — irrelevant for
+        # CAPABILITIES as long as the capability graph itself stays evaluable.
+        pass
+
+
+def _extract_capabilities_ast(worker_file: Path) -> dict[str, Any] | None:
+    """Return CAPABILITIES dict from worker.py via AST, or None if absent.
+
+    Prefers a module-level CAPABILITIES (ai worker) over a class attribute
+    (data/ffmpeg/image/libreoffice) — same precedence as the old exec path.
+    """
+    try:
+        source = worker_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(worker_file))
+    except (OSError, SyntaxError) as exc:
+        pytest.fail(
+            f"Could not parse CAPABILITIES from {worker_file.relative_to(REPO_ROOT)}:\n"
+            f"{exc}"
+        )
+
+    env: dict[str, Any] = {}
+    module_caps: dict[str, Any] | None = None
+    class_caps: dict[str, Any] | None = None
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                _try_store_name(target, node.value, env)
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id == "CAPABILITIES"
+                    and "CAPABILITIES" in env
+                    and isinstance(env["CAPABILITIES"], dict)
+                ):
+                    module_caps = env["CAPABILITIES"]
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            _try_store_name(node.target, node.value, env)
+            if (
+                isinstance(node.target, ast.Name)
+                and node.target.id == "CAPABILITIES"
+                and "CAPABILITIES" in env
+                and isinstance(env["CAPABILITIES"], dict)
+            ):
+                module_caps = env["CAPABILITIES"]
+        elif isinstance(node, ast.ClassDef):
+            for item in node.body:
+                caps_value: ast.AST | None = None
+                if isinstance(item, ast.Assign):
+                    for target in item.targets:
+                        if isinstance(target, ast.Name) and target.id == "CAPABILITIES":
+                            caps_value = item.value
+                            break
+                elif (
+                    isinstance(item, ast.AnnAssign)
+                    and item.value is not None
+                    and isinstance(item.target, ast.Name)
+                    and item.target.id == "CAPABILITIES"
+                ):
+                    caps_value = item.value
+                if caps_value is None:
+                    continue
+                try:
+                    evaluated = _eval_caps_node(caps_value, env)
+                except ValueError as exc:
+                    pytest.fail(
+                        f"Could not statically evaluate class CAPABILITIES in "
+                        f"{worker_file.relative_to(REPO_ROOT)}:\n{exc}"
+                    )
+                if isinstance(evaluated, dict):
+                    class_caps = evaluated
+
+    return module_caps if module_caps is not None else class_caps
+
+
+def _serialize_capabilities(caps: dict[str, Any]) -> dict[str, Any]:
+    """Normalize CAPABILITIES for JSON-stable comparison (sets → sorted lists)."""
+    missing_keys = [k for k in ("routing_keys", "matrix") if k not in caps]
+    if missing_keys:
+        pytest.fail(
+            f"CAPABILITIES missing required key(s): {missing_keys}"
+        )
+
+    def ser(v: Any) -> list[Any]:
+        if isinstance(v, (set, frozenset, list)):
+            return sorted(v)
+        return sorted(str(x) for x in v)
+
+    return {
+        "routing_keys": list(caps["routing_keys"]),
+        "matrix": {k: ser(v) for k, v in caps["matrix"].items()},
+    }
 
 
 def _load_workers() -> list[tuple[str, dict[str, Any]]]:
@@ -266,7 +384,6 @@ def _load_workers() -> list[tuple[str, dict[str, Any]]]:
         and both drift assertions below would have passed vacuously against nothing.
     """
     results: list[tuple[str, dict[str, Any]]] = []
-    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT)}
     found_any_worker_file = False
     for worker_dir in sorted(WORKERS_DIR.iterdir()):
         if not worker_dir.is_dir():
@@ -278,17 +395,8 @@ def _load_workers() -> list[tuple[str, dict[str, Any]]]:
             # structural skip, not an input-completeness risk.
             continue
         found_any_worker_file = True
-        proc = subprocess.run(
-            [sys.executable, "-c", _EXTRACT_CAPS, str(worker_file)],
-            capture_output=True, text=True, env=env,
-        )
-        if proc.returncode != 0 or not proc.stdout.strip():
-            pytest.fail(
-                f"Could not load CAPABILITIES from workers/{worker_dir.name}/worker.py:\n"
-                f"{proc.stderr[:400]}"
-            )
-        parsed = json.loads(proc.stdout.strip())
-        if parsed is None:
+        raw = _extract_capabilities_ast(worker_file)
+        if raw is None:
             pytest.fail(
                 f"workers/{worker_dir.name}/worker.py has no CAPABILITIES (neither a "
                 "module-level constant nor a class attribute) — silently dropping this "
@@ -297,7 +405,7 @@ def _load_workers() -> list[tuple[str, dict[str, Any]]]:
                 "must not declare capabilities, exclude it here explicitly with a comment "
                 "explaining why — do not let it vanish via a silent `None`."
             )
-        results.append((worker_dir.name, parsed))
+        results.append((worker_dir.name, _serialize_capabilities(raw)))
     if not found_any_worker_file:
         pytest.fail(
             f"Found ZERO workers/*/worker.py files under {WORKERS_DIR} — the worker scan "
