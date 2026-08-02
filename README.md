@@ -93,7 +93,7 @@ make console CMD="app:user:make-admin <email|id>"
 
 ### CI (GitHub Actions)
 
-Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Запускается на каждый PR и вручную (`workflow_dispatch`).
+Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Запускается на `push` в `main`, на каждый PR и вручную (`workflow_dispatch`).
 
 **Блокирующий job `Quality gates`** (должен быть required в branch protection, иначе merge не блокируется — только настройки репозитория Settings → Branches, YAML этого не делает):
 
