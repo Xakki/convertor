@@ -42,7 +42,7 @@
 - Registry/матрица рекламирует ровно то, что воркер умеет.
 - Tests/QA green per project gates.
 
-**Status:** test
+**Status:** ready
 
 ## Execution Log
 
@@ -56,3 +56,4 @@
 - (2026-08-03, Agent: qa) test→ready; AC met, CNV-41-scope gates green.
 - (2026-08-03, Agent: reviewer) REQUEST_CHANGES: pages seed↔worker drift (Dockerfile soft probe); pdf→jpg DoS без лимита страниц.
 - (2026-08-03, Agent: python-worker) review fixes: Dockerfile явно ставит `libetonyek-0.1-1`, build падает без .so; `PDFTOPPM_MAX_PAGES=50` + pdfinfo pre-check; убран dup `_IMPRESS_TARGETS`; комментарий seed-миграции актуализирован; +tests page cap / pages→pdf.
+- (2026-08-03, Agent: qa) re-verify post-89686e8: `test-python-libreoffice` 39 passed/1 skipped, `TEST=1 test-drift` 5/5; AC spot-check OK (no epub→pdf, libetonyek fail-build, PDFTOPPM_MAX_PAGES=50); test→ready.
