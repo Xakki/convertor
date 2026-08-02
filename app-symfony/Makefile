@@ -31,7 +31,7 @@ tg-set-webhook: ## Register Telegram bot webhook (URL from API_URL + TELEGRAM_WE
 	$(CONSOLE) app:telegram:set-webhook $(API_URL)
 
 .PHONY: tg-set-commands
-tg-set-commands: ## Register Telegram bot command menu (/start, /help, /convert)
+tg-set-commands: ## Register Telegram bot command menu (/start, /help, /convert, /balance, /topup)
 	$(CONSOLE) app:telegram:set-commands
 
 .PHONY: seed-examples

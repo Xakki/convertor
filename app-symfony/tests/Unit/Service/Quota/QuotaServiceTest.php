@@ -6,8 +6,11 @@ namespace App\Tests\Unit\Service\Quota;
 
 use App\Entity\Plan;
 use App\Entity\User;
+use App\Enum\BillingMode;
 use App\Enum\FileCategory;
+use App\Exception\InsufficientBalanceException;
 use App\Repository\PlanRepository;
+use App\Service\Billing\BalanceService;
 use App\Service\Quota\QuotaService;
 use Doctrine\DBAL\Connection;
 use Doctrine\ORM\EntityManagerInterface;
@@ -25,13 +28,27 @@ final class QuotaServiceTest extends TestCase
         PlanRepository $planRepo,
         string $appEnv = 'test',
         ?LoggerInterface $logger = null,
+        ?BalanceService $balanceService = null,
+        ?EntityManagerInterface $em = null,
     ): QuotaService {
         return new QuotaService(
-            $this->createStub(EntityManagerInterface::class),
+            $em ?? $this->createStub(EntityManagerInterface::class),
             $planRepo,
-            $logger ?? new NullLogger(),
+            $balanceService ?? $this->stubBalanceService(),
+            $logger         ?? new NullLogger(),
             $appEnv,
         );
+    }
+
+    private function stubBalanceService(int $balanceCents = 0): BalanceService
+    {
+        $balance = $this->createStub(BalanceService::class);
+        $balance->method('getBalanceCents')->willReturn($balanceCents);
+        $balance->method('getPayPerUseCostCents')->willReturnCallback(
+            static fn (bool $isAi): int => $isAi ? 15 : 5,
+        );
+
+        return $balance;
     }
 
     private function stubPlanRepo(?Plan $forName, ?Plan $forFree = null): PlanRepository
@@ -66,9 +83,20 @@ final class QuotaServiceTest extends TestCase
             ->setMaxFileSizeMb(500);
     }
 
-    private function prodService(Plan $plan, EntityManagerInterface $em): QuotaService
+    private function prodService(Plan $plan, EntityManagerInterface $em, int $balanceCents = 0): QuotaService
     {
-        return new QuotaService($em, $this->stubPlanRepo($plan, $plan), new NullLogger(), 'prod');
+        return new QuotaService(
+            $em,
+            $this->stubPlanRepo($plan, $plan),
+            $this->stubBalanceService($balanceCents),
+            new NullLogger(),
+            'prod',
+        );
+    }
+
+    private function guestUser(): User
+    {
+        return $this->freeUser()->setIsGuest(true)->setGuestId('guest-test-' . bin2hex(random_bytes(4)));
     }
 
     private function freeUser(): User
@@ -119,6 +147,9 @@ final class QuotaServiceTest extends TestCase
         self::assertSame(2, $remaining['tiers']['medium']['daily']['remaining']);
         self::assertSame(3, $remaining['tiers']['light']['daily']['limit']);
         self::assertSame(0, $remaining['tiers']['ai']['daily']['limit']);
+        self::assertSame(0, $remaining['balance_cents']);
+        self::assertSame(5, $remaining['pay_per_use_cents']);
+        self::assertSame(15, $remaining['pay_per_use_ai_cents']);
     }
 
     public function testProdDowngradeLogsWarningWithoutThrowViaMaxUpload(): void
@@ -261,14 +292,73 @@ final class QuotaServiceTest extends TestCase
         );
     }
 
+    public function testCheckReturnsPlanQuotaWhenWithinLimits(): void
+    {
+        $user = $this->freeUser()->setLightDailyConversions(1);
+        $em   = $this->createMock(EntityManagerInterface::class);
+        $em->expects(self::never())->method('flush');
+
+        $mode = $this->prodService($this->freePlanStub(), $em)->check($user, FileCategory::Document, false);
+
+        self::assertSame(BillingMode::PlanQuota, $mode);
+    }
+
+    public function testCheckReturnsPrepaidWhenOverQuotaWithBalance(): void
+    {
+        $user = $this->freeUser()->setLightDailyConversions(3);
+        $em   = $this->createMock(EntityManagerInterface::class);
+        $em->expects(self::never())->method('flush');
+
+        $mode = $this->prodService($this->freePlanStub(), $em, balanceCents: 100)
+            ->check($user, FileCategory::Document, false);
+
+        self::assertSame(BillingMode::PrepaidBalance, $mode);
+    }
+
+    public function testCheckThrowsInsufficientBalanceWhenOverQuotaWithoutFunds(): void
+    {
+        $user = $this->freeUser()->setLightDailyConversions(3);
+        $em   = $this->createMock(EntityManagerInterface::class);
+        $em->expects(self::never())->method('flush');
+
+        $this->expectException(InsufficientBalanceException::class);
+
+        $this->prodService($this->freePlanStub(), $em)->check($user, FileCategory::Document, false);
+    }
+
+    public function testCheckThrows429WhenGuestOverDailyCeiling(): void
+    {
+        $user = $this->guestUser()->setLightDailyConversions(3);
+        $em   = $this->createMock(EntityManagerInterface::class);
+        $em->expects(self::never())->method('flush');
+
+        $this->expectException(TooManyRequestsHttpException::class);
+        $this->expectExceptionMessageMatches('/Daily light conversion limit of 3 reached/');
+
+        $this->prodService($this->freePlanStub(), $em)->check($user, FileCategory::Document, false);
+    }
+
+    public function testCheckThrows429WhenGuestOverMonthlyCeiling(): void
+    {
+        $user = $this->guestUser()
+            ->setLightDailyConversions(0)
+            ->setLightMonthlyConversions(30);
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->expects(self::never())->method('flush');
+
+        $this->expectException(TooManyRequestsHttpException::class);
+        $this->expectExceptionMessageMatches('/Monthly light conversion limit of 30 reached/');
+
+        $this->prodService($this->freePlanStub(), $em)->check($user, FileCategory::Document, false);
+    }
+
     public function testCheckThrows429WhenDailyCeilingReached(): void
     {
         $user = $this->freeUser()->setLightDailyConversions(3);
         $em   = $this->createMock(EntityManagerInterface::class);
         $em->expects(self::never())->method('flush');
 
-        $this->expectException(TooManyRequestsHttpException::class);
-        $this->expectExceptionMessageMatches('/Daily light conversion limit of 3 reached/');
+        $this->expectException(InsufficientBalanceException::class);
 
         $this->prodService($this->freePlanStub(), $em)->check($user, FileCategory::Document, false);
     }
@@ -281,8 +371,7 @@ final class QuotaServiceTest extends TestCase
         $em = $this->createMock(EntityManagerInterface::class);
         $em->expects(self::never())->method('flush');
 
-        $this->expectException(TooManyRequestsHttpException::class);
-        $this->expectExceptionMessageMatches('/Monthly light conversion limit of 30 reached/');
+        $this->expectException(InsufficientBalanceException::class);
 
         $this->prodService($this->freePlanStub(), $em)->check($user, FileCategory::Document, false);
     }
@@ -292,19 +381,17 @@ final class QuotaServiceTest extends TestCase
         $em      = $this->createMock(EntityManagerInterface::class);
         $service = $this->prodService($this->freePlanStub(), $em);
 
-        try {
-            $service->check($this->freeUser(), FileCategory::Video, false);
-            self::fail('expected 429 for free heavy tier');
-        } catch (TooManyRequestsHttpException $e) {
-            self::assertStringContainsString('Daily heavy conversion limit of 0 reached', $e->getMessage());
-        }
+        $this->expectException(InsufficientBalanceException::class);
+        $service->check($this->freeUser(), FileCategory::Video, false);
+    }
 
-        try {
-            $service->check($this->freeUser(), FileCategory::Audio, true);
-            self::fail('expected 429 for free ai tier');
-        } catch (TooManyRequestsHttpException $e) {
-            self::assertStringContainsString('Daily ai conversion limit of 0 reached', $e->getMessage());
-        }
+    public function testFreeTierAiZeroFailsWithInsufficientBalance(): void
+    {
+        $em      = $this->createMock(EntityManagerInterface::class);
+        $service = $this->prodService($this->freePlanStub(), $em);
+
+        $this->expectException(InsufficientBalanceException::class);
+        $service->check($this->freeUser(), FileCategory::Audio, true);
     }
 
     public function testProUnlimitedLightTierNever429(): void
@@ -315,7 +402,8 @@ final class QuotaServiceTest extends TestCase
         $em = $this->createMock(EntityManagerInterface::class);
         $em->expects(self::never())->method('flush');
 
-        $this->prodService($this->proPlanStub(), $em)->check($user, FileCategory::Document, false);
+        $mode = $this->prodService($this->proPlanStub(), $em)->check($user, FileCategory::Document, false);
+        self::assertSame(BillingMode::PlanQuota, $mode);
 
         $remaining = $this->prodService($this->proPlanStub(), $em)->getRemainingQuota($user);
         self::assertSame(-1, $remaining['tiers']['light']['daily']['remaining']);
@@ -382,10 +470,10 @@ final class QuotaServiceTest extends TestCase
         $em->method('getConnection')->willReturn($conn);
         $em->expects(self::once())->method('refresh')->with(self::identicalTo($user));
 
-        $service = new QuotaService($em, $this->createStub(PlanRepository::class), new NullLogger(), 'prod');
+        $service = new QuotaService($em, $this->createStub(PlanRepository::class), $this->stubBalanceService(), new NullLogger(), 'prod');
 
         $charge
-            ? $service->charge($user, $category, $isAi)
-            : $service->refund($user, $category, $isAi);
+            ? $service->charge($user, $category, $isAi, BillingMode::PlanQuota)
+            : $service->refund($user, $category, $isAi, BillingMode::PlanQuota);
     }
 }

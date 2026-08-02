@@ -6,9 +6,13 @@ namespace App\Service\Quota;
 
 use App\Entity\Plan;
 use App\Entity\User;
+use App\Enum\BalanceTransactionSource;
+use App\Enum\BillingMode;
 use App\Enum\FileCategory;
 use App\Enum\QuotaTier;
+use App\Exception\InsufficientBalanceException;
 use App\Repository\PlanRepository;
+use App\Service\Billing\BalanceService;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
@@ -53,6 +57,7 @@ class QuotaService
     public function __construct(
         private readonly EntityManagerInterface $em,
         private readonly PlanRepository $planRepository,
+        private readonly BalanceService $balanceService,
         private readonly LoggerInterface $logger,
         private readonly string $appEnv,
     ) {
@@ -60,9 +65,10 @@ class QuotaService
 
     /**
      * Up-front limit check: reject an over-limit request BEFORE any work is done.
-     * Проверяет оба окна (суточное и скользящее 30-дневное) для тира конверсии.
+     * В квоте → plan_quota; сверх квоты у ROLE_USER с балансом → prepaid_balance;
+     * гость сверх квоты → 429; залогиненный без баланса → InsufficientBalanceException.
      */
-    public function check(User $user, FileCategory $category, bool $isAi): void
+    public function check(User $user, FileCategory $category, bool $isAi): BillingMode
     {
         $this->resetIfNeeded($user);
 
@@ -70,42 +76,80 @@ class QuotaService
         $limits = $this->limitsForTier($this->resolvePlan($user), $tier);
         $used   = $this->usedForTier($user, $tier);
 
-        if ($limits['daily'] !== -1 && $used['daily'] >= $limits['daily']) {
-            throw new TooManyRequestsHttpException(
-                null,
-                sprintf('Daily %s conversion limit of %d reached. Upgrade your plan.', $tier->value, $limits['daily']),
-            );
+        if (! $this->isOverQuota($limits, $used)) {
+            return BillingMode::PlanQuota;
         }
 
-        if ($limits['monthly'] !== -1 && $used['monthly'] >= $limits['monthly']) {
-            throw new TooManyRequestsHttpException(
-                null,
-                sprintf('Monthly %s conversion limit of %d reached. Upgrade your plan.', $tier->value, $limits['monthly']),
-            );
+        if ($user->isGuest()) {
+            $this->throwQuotaExceeded($tier, $limits, $used);
         }
+
+        $cost = $this->balanceService->getPayPerUseCostCents($isAi);
+        if ($this->balanceService->getBalanceCents($user) >= $cost) {
+            return BillingMode::PrepaidBalance;
+        }
+
+        throw new InsufficientBalanceException('insufficient_balance');
     }
 
     /**
-     * Commit one conversion charge (daily + monthly counters). Call only AFTER
-     * the submit succeeded.
+     * Commit one conversion charge. plan_quota → tier counters; prepaid_balance →
+     * atomic debit (без инкремента счётчиков). Call only AFTER submit succeeded
+     * (plan_quota) or BEFORE dispatch (prepaid — debit до постановки в очередь).
      */
-    public function charge(User $user, FileCategory $category, bool $isAi): void
-    {
+    public function charge(
+        User $user,
+        FileCategory $category,
+        bool $isAi,
+        BillingMode $billingMode,
+        ?int $conversionId = null,
+    ): void {
+        if ($billingMode === BillingMode::PrepaidBalance) {
+            $cost  = $this->balanceService->getPayPerUseCostCents($isAi);
+            $refId = $conversionId !== null ? (string) $conversionId : null;
+            $this->balanceService->debit(
+                $user,
+                $cost,
+                BalanceTransactionSource::Conversion,
+                $refId,
+            );
+
+            return;
+        }
+
         $this->resetIfNeeded($user);
         $this->applyDelta($user, QuotaTier::resolve($category, $isAi), +1);
     }
 
     /**
-     * Refund one conversion (atomic decrement with clamp at 0 on both windows).
+     * Refund one conversion: prepaid → credit баланса; plan_quota → decrement counters.
      */
-    public function refund(User $user, FileCategory $category, bool $isAi): void
-    {
+    public function refund(
+        User $user,
+        FileCategory $category,
+        bool $isAi,
+        BillingMode $billingMode,
+        ?int $conversionId = null,
+    ): void {
+        if ($billingMode === BillingMode::PrepaidBalance) {
+            $cost  = $this->balanceService->getPayPerUseCostCents($isAi);
+            $refId = $conversionId !== null ? (string) $conversionId : null;
+            $this->balanceService->refund(
+                $user,
+                $cost,
+                BalanceTransactionSource::Conversion,
+                $refId,
+            );
+
+            return;
+        }
+
         $this->resetIfNeeded($user);
         $this->applyDelta($user, QuotaTier::resolve($category, $isAi), -1);
     }
 
     /**
-     * Остаток + лимиты плана по всем 4 тирам × 2 окна (CNV-30).
+     * Остаток + лимиты плана по всем 4 тирам × 2 окна (CNV-30) + prepaid-баланс.
      *
      * @return array<string, mixed>
      */
@@ -135,8 +179,11 @@ class QuotaService
         }
 
         return [
-            'plan'  => $user->getPlan(),
-            'tiers' => $tiers,
+            'plan'                 => $user->getPlan(),
+            'tiers'                => $tiers,
+            'balance_cents'        => $this->balanceService->getBalanceCents($user),
+            'pay_per_use_cents'    => $this->balanceService->getPayPerUseCostCents(false),
+            'pay_per_use_ai_cents' => $this->balanceService->getPayPerUseCostCents(true),
         ];
     }
 
@@ -188,6 +235,38 @@ class QuotaService
         }
 
         return $mb * 1024 * 1024;
+    }
+
+    /**
+     * @param array{daily: int, monthly: int} $limits
+     * @param array{daily: int, monthly: int} $used
+     */
+    private function isOverQuota(array $limits, array $used): bool
+    {
+        if ($limits['daily'] !== -1 && $used['daily'] >= $limits['daily']) {
+            return true;
+        }
+
+        return $limits['monthly'] !== -1 && $used['monthly'] >= $limits['monthly'];
+    }
+
+    /**
+     * @param array{daily: int, monthly: int} $limits
+     * @param array{daily: int, monthly: int} $used
+     */
+    private function throwQuotaExceeded(QuotaTier $tier, array $limits, array $used): never
+    {
+        if ($limits['daily'] !== -1 && $used['daily'] >= $limits['daily']) {
+            throw new TooManyRequestsHttpException(
+                null,
+                sprintf('Daily %s conversion limit of %d reached. Upgrade your plan.', $tier->value, $limits['daily']),
+            );
+        }
+
+        throw new TooManyRequestsHttpException(
+            null,
+            sprintf('Monthly %s conversion limit of %d reached. Upgrade your plan.', $tier->value, $limits['monthly']),
+        );
     }
 
     /**

@@ -84,6 +84,7 @@ final class MeControllerTest extends TestCase
         self::assertSame('https://t.me/ivan', $data['profile_url']);
         self::assertSame('data:image/jpeg;base64,' . base64_encode('IMG'), $data['avatar_url']);
         self::assertSame('free', $data['plan']);
+        self::assertSame(0, $data['balance_cents']);
         self::assertTrue($data['is_admin']);
     }
 

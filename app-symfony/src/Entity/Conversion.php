@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Repository\ConversionRepository;
@@ -71,6 +72,12 @@ class Conversion
      */
     #[ORM\Column(type: 'integer', options: ['default' => 0])]
     private int $attempt = 0;
+
+    /**
+     * Режим биллинга конверсии (CNV-28). null у legacy-строк → трактуется как plan_quota.
+     */
+    #[ORM\Column(type: 'string', length: 20, enumType: BillingMode::class, nullable: true)]
+    private ?BillingMode $billingMode = null;
 
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
@@ -246,6 +253,26 @@ class Conversion
     public function incrementAttempt(): self
     {
         ++$this->attempt;
+
+        return $this;
+    }
+
+    public function getBillingMode(): ?BillingMode
+    {
+        return $this->billingMode;
+    }
+
+    /**
+     * Эффективный режим биллинга: null → plan_quota для старых строк.
+     */
+    public function getEffectiveBillingMode(): BillingMode
+    {
+        return $this->billingMode ?? BillingMode::PlanQuota;
+    }
+
+    public function setBillingMode(?BillingMode $billingMode): self
+    {
+        $this->billingMode = $billingMode;
 
         return $this;
     }

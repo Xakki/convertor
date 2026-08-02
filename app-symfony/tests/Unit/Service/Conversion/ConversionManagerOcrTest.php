@@ -7,7 +7,10 @@ namespace App\Tests\Unit\Service\Conversion;
 use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\User;
+use App\Enum\BillingMode;
+use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
+use App\Exception\InsufficientBalanceException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
@@ -51,10 +54,11 @@ final class ConversionManagerOcrTest extends TestCase
         // Both the up-front check and the post-submit charge carry the same isAi.
         $quota->expects($this->once())
             ->method('check')
-            ->with($this->isInstanceOf(User::class), $this->isInstanceOf(FileCategory::class), $expectAi);
+            ->with($this->isInstanceOf(User::class), $this->isInstanceOf(FileCategory::class), $expectAi)
+            ->willReturn(BillingMode::PlanQuota);
         $quota->expects($this->once())
             ->method('charge')
-            ->with($this->isInstanceOf(User::class), $this->isInstanceOf(FileCategory::class), $expectAi);
+            ->with($this->isInstanceOf(User::class), $this->isInstanceOf(FileCategory::class), $expectAi, BillingMode::PlanQuota);
 
         // createConversion now enqueues internally; with no DB the auto-generated
         // id is never assigned, so simulate persist() stamping the Conversion id
@@ -233,7 +237,8 @@ final class ConversionManagerOcrTest extends TestCase
     {
         $quota = $this->createMock(QuotaService::class);
         $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
-        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Image, false);
+        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Image, false)
+            ->willReturn(BillingMode::PlanQuota);
         $quota->expects($this->never())->method('charge');
 
         // persist() stamps the id so dispatch() reaches bus->dispatch (which throws)
@@ -266,6 +271,107 @@ final class ConversionManagerOcrTest extends TestCase
     }
 
     /**
+     * Prepaid: debit до dispatch; при сбое enqueue — refund + Failed (симметрия DlqController).
+     */
+    public function testPrepaidDispatchFailureRefundsDebitAndMarksFailed(): void
+    {
+        $user = $this->makeUser();
+
+        $quota = $this->createMock(QuotaService::class);
+        $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
+        $quota->expects($this->once())->method('check')->willReturn(BillingMode::PrepaidBalance);
+        $quota->expects($this->once())
+            ->method('charge')
+            ->with($user, FileCategory::Image, false, BillingMode::PrepaidBalance, 7);
+        $quota->expects($this->once())
+            ->method('refund')
+            ->with($user, FileCategory::Image, false, BillingMode::PrepaidBalance, 7);
+
+        $conversion = null;
+        $em         = $this->createMock(EntityManagerInterface::class);
+        $em->method('persist')->willReturnCallback(static function (object $entity) use (&$conversion): void {
+            if ($entity instanceof Conversion) {
+                (new \ReflectionProperty(Conversion::class, 'id'))->setValue($entity, 7);
+                $conversion = $entity;
+            }
+        });
+        $em->expects($this->once())->method('flush');
+        $em->expects($this->once())->method('wrapInTransaction')
+            ->willReturnCallback(static function (callable $func): mixed {
+                return $func();
+            });
+
+        $s3Client = $this->createStub(S3Client::class);
+        $s3Client->method('putObject')->willReturn(ResultMockFactory::create(PutObjectOutput::class));
+
+        $bus = $this->createStub(MessageBusInterface::class);
+        $bus->method('dispatch')->willThrowException(new \RuntimeException('transport down'));
+
+        $manager = new ConversionManager(
+            $this->newSeedRegistry(),
+            $this->createStub(ConversionRepository::class),
+            $quota,
+            $em,
+            $bus,
+            new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
+            new S3Storage($s3Client, 'convertor'),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $manager->createConversion(new ConversionRequestDTO($user, $this->makeUpload('jpg'), 'txt', false));
+
+        self::assertInstanceOf(Conversion::class, $conversion);
+        self::assertSame(ConversionStatus::Failed, $conversion->getStatus());
+    }
+
+    /**
+     * Prepaid: race между check() и charge() — orphan Pending не остаётся.
+     */
+    public function testPrepaidChargeFailureMarksConversionFailed(): void
+    {
+        $quota = $this->createMock(QuotaService::class);
+        $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
+        $quota->expects($this->once())->method('check')->willReturn(BillingMode::PrepaidBalance);
+        $quota->expects($this->once())
+            ->method('charge')
+            ->willThrowException(new InsufficientBalanceException('insufficient_balance'));
+        $quota->expects($this->never())->method('refund');
+
+        $conversion = null;
+        $em         = $this->createMock(EntityManagerInterface::class);
+        $em->method('persist')->willReturnCallback(static function (object $entity) use (&$conversion): void {
+            if ($entity instanceof Conversion) {
+                (new \ReflectionProperty(Conversion::class, 'id'))->setValue($entity, 9);
+                $conversion = $entity;
+            }
+        });
+        $em->expects($this->exactly(2))->method('flush');
+
+        $s3Client = $this->createStub(S3Client::class);
+        $s3Client->method('putObject')->willReturn(ResultMockFactory::create(PutObjectOutput::class));
+
+        $bus = $this->createMock(MessageBusInterface::class);
+        $bus->expects($this->never())->method('dispatch');
+
+        $manager = new ConversionManager(
+            $this->newSeedRegistry(),
+            $this->createStub(ConversionRepository::class),
+            $quota,
+            $em,
+            $bus,
+            new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
+            new S3Storage($s3Client, 'convertor'),
+        );
+
+        $this->expectException(InsufficientBalanceException::class);
+        $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $this->makeUpload('jpg'), 'txt', false));
+
+        self::assertInstanceOf(Conversion::class, $conversion);
+        self::assertSame(ConversionStatus::Failed, $conversion->getStatus());
+        self::assertSame('insufficient_balance', $conversion->getErrorMessage());
+    }
+
+    /**
      * Same guarantee at the earliest post-check failure point: an S3 upload error
      * must leave the quota uncharged.
      */
@@ -273,7 +379,7 @@ final class ConversionManagerOcrTest extends TestCase
     {
         $quota = $this->createMock(QuotaService::class);
         $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
-        $quota->expects($this->once())->method('check');
+        $quota->expects($this->once())->method('check')->willReturn(BillingMode::PlanQuota);
         $quota->expects($this->never())->method('charge');
 
         $s3Client = $this->createStub(S3Client::class);
@@ -407,8 +513,9 @@ final class ConversionManagerOcrTest extends TestCase
     {
         $quota = $this->createMock(QuotaService::class);
         $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
-        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Image, false);
-        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), FileCategory::Image, false);
+        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Image, false)
+            ->willReturn(BillingMode::PlanQuota);
+        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), FileCategory::Image, false, BillingMode::PlanQuota);
 
         $s3Client = $this->createMock(S3Client::class);
         $s3Client->expects($this->once())

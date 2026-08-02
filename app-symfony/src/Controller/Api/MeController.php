@@ -43,6 +43,7 @@ class MeController extends AbstractController
             new OA\Property(property: 'profile_url', type: 'string', nullable: true, example: 'https://t.me/ivan'),
             new OA\Property(property: 'avatar_url', type: 'string', nullable: true, example: 'data:image/jpeg;base64,...'),
             new OA\Property(property: 'plan', type: 'string', example: 'free'),
+            new OA\Property(property: 'balance_cents', type: 'integer', example: 0),
             new OA\Property(property: 'is_admin', type: 'boolean', example: false),
         ]),
     )]
@@ -58,13 +59,14 @@ class MeController extends AbstractController
         $userId   = $user->getId();
 
         return $this->json([
-            'id'          => $userId,
-            'name'        => $user->getFirstName() ?? $username ?? ('User ' . $userId),
-            'username'    => $username,
-            'profile_url' => $username !== null && $username !== '' ? 'https://t.me/' . $username : null,
-            'avatar_url'  => $this->avatarDataUri($user->getPhotoUrl()),
-            'plan'        => $user->getPlan(),
-            'is_admin'    => $user->isAdmin(),
+            'id'            => $userId,
+            'name'          => $user->getFirstName() ?? $username ?? ('User ' . $userId),
+            'username'      => $username,
+            'profile_url'   => $username !== null && $username !== '' ? 'https://t.me/' . $username : null,
+            'avatar_url'    => $this->avatarDataUri($user->getPhotoUrl()),
+            'plan'          => $user->getPlan(),
+            'balance_cents' => $user->getBalanceCents(),
+            'is_admin'      => $user->isAdmin(),
         ]);
     }
 

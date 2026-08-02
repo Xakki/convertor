@@ -6,10 +6,14 @@ namespace App\Entity;
 
 use App\Enum\PaymentGateway;
 use App\Enum\PaymentStatus;
+use App\Repository\PaymentRepository;
 use Doctrine\ORM\Mapping as ORM;
 
-#[ORM\Entity]
-#[ORM\Table(name: 'payments')]
+#[ORM\Entity(repositoryClass: PaymentRepository::class)]
+#[ORM\Table(
+    name: 'payments',
+    uniqueConstraints: [new ORM\UniqueConstraint(name: 'UNIQ_PAYMENTS_EXTERNAL_ID', columns: ['external_id'])],
+)]
 #[ORM\Index(name: 'IDX_PAYMENTS_USER_ID', columns: ['user_id'])]
 #[ORM\Index(name: 'IDX_PAYMENTS_STATUS', columns: ['status'])]
 class Payment

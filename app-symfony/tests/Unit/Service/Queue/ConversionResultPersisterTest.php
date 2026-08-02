@@ -6,6 +6,7 @@ namespace App\Tests\Unit\Service\Queue;
 
 use App\Entity\Conversion;
 use App\Entity\User;
+use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Service\Queue\ConversionResultPersister;
@@ -156,6 +157,8 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion->method('getUser')->willReturn($user);
         $conversion->method('getCategory')->willReturn(FileCategory::Document);
         $conversion->method('isAi')->willReturn(false);
+        $conversion->method('getEffectiveBillingMode')->willReturn(BillingMode::PlanQuota);
+        $conversion->method('getId')->willReturn(1);
 
         $em = $this->createMock(EntityManagerInterface::class);
         $em->method('find')->willReturn($conversion);
@@ -163,7 +166,7 @@ final class ConversionResultPersisterTest extends TestCase
         $em->expects($this->once())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);
-        $quota->expects($this->once())->method('refund')->with($user, FileCategory::Document, false);
+        $quota->expects($this->once())->method('refund')->with($user, FileCategory::Document, false, BillingMode::PlanQuota, 1);
 
         $persister = $this->makePersister($this->makeRegistry($em), $quota);
         $persister->persist(['conversionId' => 1, 'state' => 'failed', 'error' => 'boom', 'attempt' => 1]);
@@ -185,6 +188,8 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion->method('getUser')->willReturn($user);
         $conversion->method('getCategory')->willReturn(FileCategory::Document);
         $conversion->method('isAi')->willReturn(false);
+        $conversion->method('getEffectiveBillingMode')->willReturn(BillingMode::PlanQuota);
+        $conversion->method('getId')->willReturn(1);
 
         $em = $this->createMock(EntityManagerInterface::class);
         $em->method('find')->willReturn($conversion);
@@ -192,7 +197,7 @@ final class ConversionResultPersisterTest extends TestCase
         $em->expects($this->once())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);
-        $quota->expects($this->once())->method('refund')->with($user, FileCategory::Document, false);
+        $quota->expects($this->once())->method('refund')->with($user, FileCategory::Document, false, BillingMode::PlanQuota, 1);
 
         $persister = $this->makePersister($this->makeRegistry($em), $quota);
         // No 'attempt' key at all — mirrors fail()/result() (jobId-keyed path).
@@ -208,6 +213,8 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion->method('getUser')->willReturn($user);
         $conversion->method('getCategory')->willReturn(FileCategory::Document);
         $conversion->method('isAi')->willReturn(false);
+        $conversion->method('getEffectiveBillingMode')->willReturn(BillingMode::PlanQuota);
+        $conversion->method('getId')->willReturn(1);
 
         $em = $this->createMock(EntityManagerInterface::class);
         $em->method('find')->willReturn($conversion);
@@ -218,7 +225,7 @@ final class ConversionResultPersisterTest extends TestCase
         $em->expects($this->once())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);
-        $quota->expects($this->once())->method('refund')->with($user, FileCategory::Document, false);
+        $quota->expects($this->once())->method('refund')->with($user, FileCategory::Document, false, BillingMode::PlanQuota, 1);
 
         $persister = $this->makePersister($this->makeRegistry($em), $quota);
         $persister->persist(['conversionId' => 1, 'state' => 'failed', 'error' => 'boom']);

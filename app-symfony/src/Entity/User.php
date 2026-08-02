@@ -59,6 +59,10 @@ class User implements UserInterface
     #[ORM\Column(type: 'string', length: 50)]
     private string $plan = 'free';
 
+    /** Prepaid-баланс pay-per-use в USD cents (CNV-28). */
+    #[ORM\Column(type: 'integer', options: ['default' => 0])]
+    private int $balanceCents = 0;
+
     #[ORM\Column(type: 'integer')]
     private int $lightDailyConversions = 0;
 
@@ -212,6 +216,18 @@ class User implements UserInterface
     public function setPlan(string $plan): self
     {
         $this->plan = $plan;
+
+        return $this;
+    }
+
+    public function getBalanceCents(): int
+    {
+        return $this->balanceCents;
+    }
+
+    public function setBalanceCents(int $balanceCents): self
+    {
+        $this->balanceCents = $balanceCents;
 
         return $this;
     }

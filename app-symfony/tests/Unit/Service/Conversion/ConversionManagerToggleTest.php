@@ -7,6 +7,7 @@ namespace App\Tests\Unit\Service\Conversion;
 use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\User;
+use App\Enum\BillingMode;
 use App\Enum\FileCategory;
 use App\Exception\ConversionDisabledException;
 use App\Repository\ConversionRepository;
@@ -69,8 +70,9 @@ final class ConversionManagerToggleTest extends TestCase
 
         $quota = $this->createMock(QuotaService::class);
         $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
-        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Image, false);
-        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), FileCategory::Image, false);
+        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Image, false)
+            ->willReturn(BillingMode::PlanQuota);
+        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), FileCategory::Image, false, BillingMode::PlanQuota);
 
         $manager = $this->buildManager($quota, $this->okS3Client(), $this->stampingEm(), $toggle);
 

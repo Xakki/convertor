@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace App\Tests\Integration\Service\Quota;
 
 use App\Entity\User;
+use App\Enum\BillingMode;
 use App\Enum\FileCategory;
+use App\Exception\InsufficientBalanceException;
 use App\Repository\PlanRepository;
+use App\Service\Billing\BalanceService;
 use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\Attributes\Group;
@@ -15,13 +18,14 @@ use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 
 /**
- * charge()/refund() против реальной БД: raw-UPDATE + refresh().
+ * charge()/refund() против реальной БД: raw-UPDATE + refresh() и prepaid debit/refund.
  */
 #[Group('integration')]
 final class QuotaServiceDbTest extends KernelTestCase
 {
     private EntityManagerInterface $em;
     private QuotaService $service;
+    private BalanceService $balanceService;
 
     protected function setUp(): void
     {
@@ -31,9 +35,14 @@ final class QuotaServiceDbTest extends KernelTestCase
         $em       = $container->get(EntityManagerInterface::class);
         $this->em = $em;
 
+        /** @var BalanceService $balanceService */
+        $balanceService       = $container->get(BalanceService::class);
+        $this->balanceService = $balanceService;
+
         $this->service = new QuotaService(
             $em,
             $this->createStub(PlanRepository::class),
+            $balanceService,
             new NullLogger(),
             'prod',
         );
@@ -43,7 +52,7 @@ final class QuotaServiceDbTest extends KernelTestCase
     {
         $user = $this->persistUser();
 
-        $this->service->charge($user, FileCategory::Document, false);
+        $this->service->charge($user, FileCategory::Document, false, BillingMode::PlanQuota);
 
         self::assertSame(1, $user->getLightDailyConversions());
         self::assertSame(1, $user->getLightMonthlyConversions());
@@ -56,7 +65,7 @@ final class QuotaServiceDbTest extends KernelTestCase
     {
         $user = $this->persistUser();
 
-        $this->service->charge($user, FileCategory::Audio, true);
+        $this->service->charge($user, FileCategory::Audio, true, BillingMode::PlanQuota);
 
         self::assertSame(1, $user->getAiDailyConversions());
         self::assertSame(1, $user->getAiMonthlyConversions());
@@ -71,7 +80,7 @@ final class QuotaServiceDbTest extends KernelTestCase
         $user->setMediumDailyConversions(3)->setMediumMonthlyConversions(2);
         $this->em->flush();
 
-        $this->service->refund($user, FileCategory::Audio, false);
+        $this->service->refund($user, FileCategory::Audio, false, BillingMode::PlanQuota);
 
         self::assertSame(2, $user->getMediumDailyConversions());
         self::assertSame(1, $user->getMediumMonthlyConversions());
@@ -83,7 +92,7 @@ final class QuotaServiceDbTest extends KernelTestCase
     {
         $user = $this->persistUser();
 
-        $this->service->refund($user, FileCategory::Document, false);
+        $this->service->refund($user, FileCategory::Document, false, BillingMode::PlanQuota);
 
         self::assertSame(0, $user->getLightDailyConversions());
         self::assertSame(0, $user->getLightMonthlyConversions());
@@ -91,9 +100,25 @@ final class QuotaServiceDbTest extends KernelTestCase
         $this->removeUser($user);
     }
 
-    public function testCheckThrows429AtDailyLimitAgainstDb(): void
+    public function testCheckThrowsInsufficientBalanceAtDailyLimitForRegisteredUser(): void
     {
         $user = $this->persistUser();
+        $user->setLightDailyConversions(3);
+        $this->em->flush();
+
+        try {
+            $this->service->check($user, FileCategory::Document, false);
+            self::fail('expected insufficient balance');
+        } catch (InsufficientBalanceException) {
+            // expected
+        }
+
+        $this->removeUser($user);
+    }
+
+    public function testCheckThrows429AtDailyLimitForGuest(): void
+    {
+        $user = $this->persistGuest();
         $user->setLightDailyConversions(3);
         $this->em->flush();
 
@@ -107,18 +132,42 @@ final class QuotaServiceDbTest extends KernelTestCase
         $this->removeUser($user);
     }
 
-    public function testCheckThrows429AtMonthlyLimitWhenDailyHasHeadroom(): void
+    public function testCheckReturnsPrepaidWhenOverQuotaWithBalance(): void
     {
         $user = $this->persistUser();
-        $user->setLightDailyConversions(0)->setLightMonthlyConversions(30);
+        $user->setLightDailyConversions(3)->setBalanceCents(100);
         $this->em->flush();
 
-        try {
-            $this->service->check($user, FileCategory::Document, false);
-            self::fail('expected monthly quota 429');
-        } catch (TooManyRequestsHttpException $e) {
-            self::assertStringContainsString('Monthly light', $e->getMessage());
-        }
+        $mode = $this->service->check($user, FileCategory::Document, false);
+
+        self::assertSame(BillingMode::PrepaidBalance, $mode);
+
+        $this->removeUser($user);
+    }
+
+    public function testPrepaidChargeDebitsBalanceWithoutTierCounters(): void
+    {
+        $user = $this->persistUser();
+        $user->setLightDailyConversions(3)->setBalanceCents(100);
+        $this->em->flush();
+
+        $this->service->charge($user, FileCategory::Document, false, BillingMode::PrepaidBalance, 42);
+
+        self::assertSame(95, $user->getBalanceCents());
+        self::assertSame([3, 0], $this->dbLightCounters($user->getId()));
+
+        $this->removeUser($user);
+    }
+
+    public function testPrepaidRefundCreditsBalance(): void
+    {
+        $user = $this->persistUser();
+        $user->setBalanceCents(90);
+        $this->em->flush();
+
+        $this->service->refund($user, FileCategory::Document, false, BillingMode::PrepaidBalance, 42);
+
+        self::assertSame(95, $user->getBalanceCents());
 
         $this->removeUser($user);
     }
@@ -127,7 +176,7 @@ final class QuotaServiceDbTest extends KernelTestCase
     {
         $user = $this->persistUser();
 
-        $this->service->charge($user, FileCategory::Image, false);
+        $this->service->charge($user, FileCategory::Image, false, BillingMode::PlanQuota);
 
         self::assertSame([1, 1], $this->dbMediumCounters($user->getId()));
 
@@ -152,6 +201,17 @@ final class QuotaServiceDbTest extends KernelTestCase
     {
         $user = (new User())
             ->setGuestId('itest-quota-' . bin2hex(random_bytes(8)))
+            ->setIsGuest(false);
+        $this->em->persist($user);
+        $this->em->flush();
+
+        return $user;
+    }
+
+    private function persistGuest(): User
+    {
+        $user = (new User())
+            ->setGuestId('itest-guest-quota-' . bin2hex(random_bytes(8)))
             ->setIsGuest(true);
         $this->em->persist($user);
         $this->em->flush();

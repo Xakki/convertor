@@ -9,10 +9,12 @@ use App\DTO\ConversionResultDTO;
 use App\Entity\Conversion;
 use App\Entity\FileStorage;
 use App\Entity\User;
+use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
+use App\Exception\InsufficientBalanceException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Queue\ConversionStatusReader;
@@ -108,7 +110,7 @@ class ConversionManager
         $this->assertWithinSizeLimit($user, $sizeBytes);
         $this->assertMimeAllowed($mimeType, $category, $ocr);
 
-        $this->quotaService->check($user, $category, $isAi);
+        $billingMode = $this->quotaService->check($user, $category, $isAi);
 
         $storagePath = $this->storeInput($file, $fromFormat, $mimeType);
 
@@ -139,19 +141,17 @@ class ConversionManager
         $conversion->setCategory($category);
         $conversion->setIsAi($isAi);
         $conversion->setIsOcr($ocr);
+        $conversion->setBillingMode($billingMode);
 
         $this->em->persist($conversion);
         $this->em->flush();
 
-        // Enqueue + charge LAST. check() above already rejected over-limit requests;
-        // the quota increment happens only after a successful submit, so a failure
-        // in S3 upload / persist / dispatch can never leave a charge without a
-        // worker job (closes the submit-path quota leak). The worker-failure refund
-        // (ConversionResultPersister) is the complementary, mutually-exclusive path:
-        // it only ever fires for a job that was successfully enqueued here, so the
-        // two can never double-count.
-        $this->dispatch($conversion);
-        $this->quotaService->charge($user, $category, $isAi);
+        $this->chargePrepaidOrFail($conversion, $user, $category, $isAi, $billingMode);
+        $this->dispatchOrRollbackPrepaid($conversion, $user, $category, $isAi, $billingMode);
+
+        if ($billingMode === BillingMode::PlanQuota) {
+            $this->quotaService->charge($user, $category, $isAi, $billingMode);
+        }
 
         return $conversion;
     }
@@ -190,7 +190,7 @@ class ConversionManager
             throw new ConversionDisabledException('Конвертация временно отключена');
         }
 
-        $this->quotaService->check($user, $category, $isAi);
+        $billingMode = $this->quotaService->check($user, $category, $isAi);
 
         // Серверная копия в новый ключ — delete одной строки не затронет другую.
         $dstKey = 'inputs/' . date('Y/m/d') . '/' . bin2hex(random_bytes(16)) . '.' . $fromFormat;
@@ -218,15 +218,77 @@ class ConversionManager
         $conversion->setCategory($category);
         $conversion->setIsAi($isAi);
         $conversion->setIsOcr($ocr);
+        $conversion->setBillingMode($billingMode);
 
         $this->em->persist($inputFile);
         $this->em->persist($conversion);
         $this->em->flush();
 
-        $this->dispatch($conversion);
-        $this->quotaService->charge($user, $category, $isAi);
+        $this->chargePrepaidOrFail($conversion, $user, $category, $isAi, $billingMode);
+        $this->dispatchOrRollbackPrepaid($conversion, $user, $category, $isAi, $billingMode);
+
+        if ($billingMode === BillingMode::PlanQuota) {
+            $this->quotaService->charge($user, $category, $isAi, $billingMode);
+        }
 
         return $conversion;
+    }
+
+    /**
+     * Prepaid debit ДО dispatch — иначе race на charge после enqueue оставит
+     * принятую задачу без оплаты. При InsufficientBalanceException после flush
+     * строка помечается Failed (не orphan Pending без dispatch).
+     */
+    private function chargePrepaidOrFail(
+        Conversion $conversion,
+        User $user,
+        FileCategory $category,
+        bool $isAi,
+        BillingMode $billingMode,
+    ): void {
+        if ($billingMode !== BillingMode::PrepaidBalance) {
+            return;
+        }
+
+        try {
+            $this->quotaService->charge($user, $category, $isAi, $billingMode, $conversion->getId());
+        } catch (InsufficientBalanceException $e) {
+            $conversion->setStatus(ConversionStatus::Failed);
+            $conversion->setErrorMessage('insufficient_balance');
+            $this->em->flush();
+            throw $e;
+        }
+    }
+
+    /**
+     * Plan-quota: charge ПОСЛЕ dispatch (increment только после enqueue).
+     * Prepaid: при сбое dispatch — Failed + refund (симметрия DlqController::requeue).
+     */
+    private function dispatchOrRollbackPrepaid(
+        Conversion $conversion,
+        User $user,
+        FileCategory $category,
+        bool $isAi,
+        BillingMode $billingMode,
+    ): void {
+        try {
+            $this->dispatch($conversion);
+        } catch (\Throwable $e) {
+            if ($billingMode === BillingMode::PrepaidBalance) {
+                $this->em->wrapInTransaction(function () use ($conversion, $user, $category, $isAi, $billingMode): void {
+                    $conversion->setStatus(ConversionStatus::Failed);
+                    $this->quotaService->refund(
+                        $user,
+                        $category,
+                        $isAi,
+                        $billingMode,
+                        $conversion->getId(),
+                    );
+                });
+            }
+
+            throw $e;
+        }
     }
 
     /**

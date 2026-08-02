@@ -6,6 +6,7 @@ namespace App\Controller\Admin\Api;
 
 use App\Entity\Conversion;
 use App\Enum\ConversionStatus;
+use App\Exception\InsufficientBalanceException;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Quota\QuotaService;
@@ -129,23 +130,28 @@ final class DlqController extends AbstractController
             }
 
             try {
-                $this->quotaService->check(
+                $billingMode = $this->quotaService->check(
                     $conversion->getUser(),
                     $conversion->getCategory(),
                     $conversion->isAi(),
                 );
             } catch (TooManyRequestsHttpException $e) {
                 return $this->json(['error' => $e->getMessage()], Response::HTTP_TOO_MANY_REQUESTS);
+            } catch (InsufficientBalanceException) {
+                return $this->json(['error' => 'insufficient_balance'], Response::HTTP_TOO_MANY_REQUESTS);
             }
 
             $conversion->setStatus(ConversionStatus::Pending);
             $conversion->setErrorMessage(null);
             $conversion->setProcessingMs(null);
             $conversion->incrementAttempt();
+            $conversion->setBillingMode($billingMode);
             $this->quotaService->charge(
                 $conversion->getUser(),
                 $conversion->getCategory(),
                 $conversion->isAi(),
+                $billingMode,
+                $conversion->getId(),
             );
 
             return $conversion;
@@ -171,6 +177,8 @@ final class DlqController extends AbstractController
                     $conversion->getUser(),
                     $conversion->getCategory(),
                     $conversion->isAi(),
+                    $conversion->getEffectiveBillingMode(),
+                    $conversion->getId(),
                 );
             });
 

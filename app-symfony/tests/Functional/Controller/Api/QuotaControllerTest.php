@@ -43,6 +43,12 @@ final class QuotaControllerTest extends WebTestCase
         self::assertSame(0, $data['tiers']['heavy']['daily']['limit']);
         self::assertSame(0, $data['tiers']['ai']['daily']['limit']);
         self::assertSame(50 * 1024 * 1024, $data['max_upload_bytes']);
+        self::assertArrayHasKey('balance_cents', $data);
+        self::assertArrayHasKey('pay_per_use_cents', $data);
+        self::assertArrayHasKey('pay_per_use_ai_cents', $data);
+        self::assertSame(0, $data['balance_cents']);
+        self::assertSame(5, $data['pay_per_use_cents']);
+        self::assertSame(15, $data['pay_per_use_ai_cents']);
 
         foreach (['light', 'medium', 'heavy', 'ai'] as $tier) {
             self::assertArrayHasKey($tier, $data['tiers']);

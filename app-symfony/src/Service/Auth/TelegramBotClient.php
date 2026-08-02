@@ -125,6 +125,68 @@ class TelegramBotClient
     }
 
     /**
+     * sendInvoice — Telegram Payments (Stars: currency XTR, provider_token пустой).
+     *
+     * @return array<string, mixed>
+     */
+    public function sendInvoice(
+        int|string $chatId,
+        string $title,
+        string $description,
+        string $payload,
+        int $amountStars,
+    ): array {
+        return $this->call('sendInvoice', [
+            'chat_id'        => $chatId,
+            'title'          => $title,
+            'description'    => $description,
+            'payload'        => $payload,
+            'provider_token' => '',
+            'currency'       => 'XTR',
+            'prices'         => [['label' => $title, 'amount' => $amountStars]],
+        ]);
+    }
+
+    /**
+     * createInvoiceLink — ссылка на оплату без отправки сообщения в чат.
+     *
+     * @return array<string, mixed>
+     */
+    public function createInvoiceLink(
+        string $title,
+        string $description,
+        string $payload,
+        int $amountStars,
+    ): array {
+        return $this->call('createInvoiceLink', [
+            'title'          => $title,
+            'description'    => $description,
+            'payload'        => $payload,
+            'provider_token' => '',
+            'currency'       => 'XTR',
+            'prices'         => [['label' => $title, 'amount' => $amountStars]],
+        ]);
+    }
+
+    /**
+     * answerPreCheckoutQuery — ответ на pre_checkout_query (обязателен до оплаты).
+     *
+     * @return array<string, mixed>
+     */
+    public function answerPreCheckoutQuery(string $preCheckoutQueryId, bool $ok, ?string $errorMessage = null): array
+    {
+        $payload = [
+            'pre_checkout_query_id' => $preCheckoutQueryId,
+            'ok'                    => $ok,
+        ];
+        if (! $ok && $errorMessage !== null) {
+            $payload['error_message'] = $errorMessage;
+        }
+
+        return $this->call('answerPreCheckoutQuery', $payload);
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function setWebhook(string $url, string $secretToken): array
@@ -132,7 +194,7 @@ class TelegramBotClient
         return $this->call('setWebhook', [
             'url'                  => $url,
             'secret_token'         => $secretToken,
-            'allowed_updates'      => ['message', 'callback_query'],
+            'allowed_updates'      => ['message', 'callback_query', 'pre_checkout_query'],
             'drop_pending_updates' => true,
         ]);
     }

@@ -26,7 +26,10 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
   нет — каждый контроллер сам ловит доменные исключения и решает HTTP-код
   (см. `ConversionController::convert()`, строки ~139-158). Новый эндпоинт должен
   следовать этому же паттерну: `{"error": ...}` + осмысленный HTTP-статус
-  (400/401/403/404/409/422/429/500), не голый 500 с трассой.
+  (400/401/403/404/409/422/429/500), не голый 500 с трассой. Коды CNV-28
+  (pay-per-use / top-up): `insufficient_balance` (429 — квота исчерпана, баланса
+  не хватает), `unknown_pack` (404 — неизвестный pack в top-up),
+  `telegram_link_required` (403 — нет привязки Telegram для invoice).
 - **Роутинг** — PHP-атрибуты `#[Route(...)]` на классе (базовый префикс) и на
   методе (суффикс + `methods:`), не YAML/XML роуты.
 - **Rate limit (CNV-34)** — счётчики в `cache.app` (KeyDB DB0), конфиг
@@ -92,7 +95,7 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
 
 **`src/Controller/Api/MeController.php`** (`/api/v1`, `ROLE_GUEST`/`PUBLIC_ACCESS`
 на firewall, 401 в контроллере для чистого гостя):
-`GET /me`.
+`GET /me` (CNV-28: поле `balance_cents` — prepaid-баланс в USD cents).
 
 **`src/Controller/Api/ConversionController.php`** (`/api/v1`, `ROLE_GUEST` для
 `convert`/`quota`/`history`/status/download; гейт ai/video — в контроллере;
@@ -102,7 +105,14 @@ firewall rules ДО guest-префикса + `#[IsGranted('ROLE_USER')]`):
 исходника, 410 если gone), `DELETE /convert/{id}` (CNV-8: hard delete + S3),
 `GET /convert/{id}/status`, `GET /convert/{id}/download`,
 `GET /convert/{id}/source`, `GET /convert/{id}/preview`, `GET /convert/history`,
-`GET /formats` (`PUBLIC_ACCESS`), `GET /quota`.
+`GET /formats` (`PUBLIC_ACCESS`), `GET /quota` (CNV-28: доп. поля
+`balance_cents`, `pay_per_use_cents`, `pay_per_use_ai_cents` — баланс и
+стоимость pay-per-use за конверсию).
+
+**`src/Controller/Api/PaymentController.php`** (`/api/v1/payment`, `ROLE_USER`
+— гость → 403; prepaid top-up через Telegram Stars, CNV-28):
+`GET /packs`, `POST /topup` (алиас `POST /telegram-stars`),
+`GET /history` (`limit`/`offset`, default 50, max 100).
 
 **`src/Controller/Api/WorkerController.php`** (`/api/v1/worker`, firewall
 `WorkerAuthenticator`, статичный bearer воркера, НЕ выставляется в Nelmio):

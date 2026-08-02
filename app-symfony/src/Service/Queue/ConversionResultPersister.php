@@ -99,6 +99,8 @@ final class ConversionResultPersister
                     $conversion->getUser(),
                     $conversion->getCategory(),
                     $conversion->isAi(),
+                    $conversion->getEffectiveBillingMode(),
+                    $conversion->getId(),
                 );
                 $em->flush();
             });

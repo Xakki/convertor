@@ -65,6 +65,13 @@ parameters:
     # docker-сети. В проде можно сузить до конкретного адреса фронта.
     env(TRUSTED_PROXIES): 'private_ranges'
 
+    # Pay-per-use стоимость конверсии сверх квоты (CNV-28), USD cents. Не секрет.
+    env(PAY_PER_USE_CENTS): '5'
+    env(PAY_PER_USE_AI_CENTS): '15'
+
+    # Пакеты пополнения prepaid-баланса через Telegram Stars (CNV-28 slice 5).
+    env(TOPUP_PACKS_JSON): '{"pack_100":{"usd_cents":100,"stars":100},"pack_500":{"usd_cents":500,"stars":450},"pack_2000":{"usd_cents":2000,"stars":1700}}'
+
     # Username Telegram-бота (без @) для deep-link `t.me/<username>` в хедере
     # (home-01-header-nav). Не секрет; используется и TelegramLoginController.
     app.telegram_bot_username: '%env(TELEGRAM_BOT_USERNAME)%'

@@ -75,6 +75,44 @@ final class TelegramBotClientTest extends TestCase
         $body = json_decode((string) $captured['body'], true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('https://example.test/api/v1/telegram/webhook', $body['url']);
         self::assertSame('s3cr3t', $body['secret_token']);
+        self::assertSame(['message', 'callback_query', 'pre_checkout_query'], $body['allowed_updates']);
+    }
+
+    public function testSendInvoiceUsesXtrCurrencyAndEmptyProviderToken(): void
+    {
+        $captured = null;
+        $http     = new MockHttpClient(function (string $method, string $url, array $options) use (&$captured): MockResponse {
+            $captured = ['url' => $url, 'body' => $options['body'] ?? ''];
+
+            return new MockResponse((string) json_encode(['ok' => true, 'result' => ['message_id' => 1]]));
+        });
+
+        $client = new TelegramBotClient($http, self::TOKEN, new NullLogger());
+        $client->sendInvoice(42, 'Title', 'Desc', 'topup:1', 100);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode((string) $captured['body'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('', $body['provider_token']);
+        self::assertSame('XTR', $body['currency']);
+        self::assertSame(100, $body['prices'][0]['amount']);
+        self::assertSame('topup:1', $body['payload']);
+    }
+
+    public function testAnswerPreCheckoutQuerySendsOkFlag(): void
+    {
+        $captured = null;
+        $http     = new MockHttpClient(function (string $method, string $url, array $options) use (&$captured): MockResponse {
+            $captured = json_decode((string) ($options['body'] ?? ''), true, 512, JSON_THROW_ON_ERROR);
+
+            return new MockResponse((string) json_encode(['ok' => true]));
+        });
+
+        $client = new TelegramBotClient($http, self::TOKEN, new NullLogger());
+        $client->answerPreCheckoutQuery('pcq-1', false, 'nope');
+
+        self::assertSame('pcq-1', $captured['pre_checkout_query_id']);
+        self::assertFalse($captured['ok']);
+        self::assertSame('nope', $captured['error_message']);
     }
 
     public function testSetMyCommandsSendsCommandList(): void

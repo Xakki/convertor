@@ -27,6 +27,8 @@ final class TelegramSetCommandsCommand extends Command
         ['command' => 'start', 'description' => 'Начать / войти'],
         ['command' => 'help', 'description' => 'Помощь'],
         ['command' => 'convert', 'description' => 'Конвертировать файл'],
+        ['command' => 'balance', 'description' => 'Баланс и ставки pay-per-use'],
+        ['command' => 'topup', 'description' => 'Пополнить баланс'],
     ];
 
     public function __construct(

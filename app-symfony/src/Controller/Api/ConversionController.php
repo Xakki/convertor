@@ -11,6 +11,7 @@ use App\Entity\User;
 use App\Enum\ConversionStatus;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
+use App\Exception\InsufficientBalanceException;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionRegistry;
@@ -199,6 +200,8 @@ class ConversionController extends AbstractController
             return $this->json(['error' => $e->getMessage()], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (TooManyRequestsHttpException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_TOO_MANY_REQUESTS);
+        } catch (InsufficientBalanceException) {
+            return $this->json(['error' => 'insufficient_balance'], Response::HTTP_TOO_MANY_REQUESTS);
         } catch (HttpException $e) {
             // Size (413) + content-type (415) gates from ConversionManager. The
             // specific catches above already handled 422/429; this maps the
@@ -509,6 +512,8 @@ class ConversionController extends AbstractController
             );
         } catch (TooManyRequestsHttpException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_TOO_MANY_REQUESTS);
+        } catch (InsufficientBalanceException) {
+            return $this->json(['error' => 'insufficient_balance'], Response::HTTP_TOO_MANY_REQUESTS);
         } catch (\RuntimeException) {
             return $this->json(['error' => 'Conversion not found'], Response::HTTP_NOT_FOUND);
         }

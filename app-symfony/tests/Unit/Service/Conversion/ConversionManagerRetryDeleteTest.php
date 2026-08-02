@@ -7,6 +7,7 @@ namespace App\Tests\Unit\Service\Conversion;
 use App\Entity\Conversion;
 use App\Entity\FileStorage;
 use App\Entity\User;
+use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Exception\ConversionDisabledException;
@@ -46,8 +47,9 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         $source = $this->seedSource($owner, 'inputs/2026/08/01/aabbccddeeff0011.jpg');
 
         $quota = $this->createMock(QuotaService::class);
-        $quota->expects($this->once())->method('check')->with($owner, FileCategory::Image, false);
-        $quota->expects($this->once())->method('charge')->with($owner, FileCategory::Image, false);
+        $quota->expects($this->once())->method('check')->with($owner, FileCategory::Image, false)
+            ->willReturn(BillingMode::PlanQuota);
+        $quota->expects($this->once())->method('charge')->with($owner, FileCategory::Image, false, BillingMode::PlanQuota);
 
         $copied   = [];
         $s3Client = $this->createMock(S3Client::class);
