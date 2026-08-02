@@ -15,6 +15,7 @@ ENV PYTHONUNBUFFERED=1 \
 #   libreoffice-writer/-calc/-impress  document/spreadsheet/presentation conversions
 #   pandoc                    markdown reader/writer + .docx/.odt → md (GFM)
 #   poppler-utils             pdftotext (pdf→txt/md/docx), pdftoppm (pdf→jpg)
+#   libetonyek-0.1-1          Apple Pages import (soffice filter; seed↔worker sync)
 #
 # Fonts cover MS Office substitutes (liberation), broad Latin/Cyrillic/Greek
 # (dejavu/freefont), universal Unicode (noto-core + cjk + color-emoji), LaTeX
@@ -23,7 +24,7 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer libreoffice-calc libreoffice-impress \
         libreoffice-core libreoffice-l10n-ru libreoffice-l10n-de libreoffice-l10n-fr \
-        pandoc poppler-utils \
+        pandoc poppler-utils libetonyek-0.1-1 \
         fonts-liberation fonts-liberation2 \
         fonts-dejavu fonts-dejavu-extra \
         fonts-freefont-ttf fonts-opensymbol \
@@ -39,9 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd -m -u 1000 -d /home/app app \
     && mkdir -p /work /app \
     && chown -R app:app /work /app /home/app \
-    && (find /usr/lib -name 'libetonyek-*.so*' 2>/dev/null | head -1 | grep -q . \
-        && echo "libetonyek: present (Apple Pages import may work)" \
-        || echo "libetonyek: absent (Pages source dropped at runtime)") \
+    && find /usr/lib -name 'libetonyek-*.so*' 2>/dev/null | head -1 | grep -q . \
+        || (echo "FATAL: libetonyek .so missing after apt install libetonyek-0.1-1" >&2 && exit 1) \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 

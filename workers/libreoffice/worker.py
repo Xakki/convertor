@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 SOFFICE_TIMEOUT = int(os.getenv("SOFFICE_TIMEOUT", "180"))
 PDFTOPPM_DPI = int(os.getenv("PDFTOPPM_DPI", "150"))
+# Лимит страниц pdf→jpg: защита от DoS (pdftoppm рендерит каждую стр. в JPEG).
+PDFTOPPM_MAX_PAGES = int(os.getenv("PDFTOPPM_MAX_PAGES", "50"))
 
 
 def _libetonyek_available() -> bool:
@@ -122,7 +124,6 @@ _MARKUP_SOURCES: set[str] = {"md", "rst", "latex", "tex", "wiki"}
 # Calc / Impress — только soffice (фильтры в _SOFFICE_FILTER).
 _IMPRESS_SOURCES: set[str] = {"ppt", "pptx", "odp"}
 _IMPRESS_TARGETS: set[str] = {"pptx", "odp", "pdf"}
-_IMPRESS_TARGETS: set[str] = {"pptx", "odp", "pdf"}
 
 # Conversion matrix the worker advertises (CAPABILITIES) and validates against.
 # Stage-7: spreadsheets, presentations, markup (rst/latex/wiki), epub-input,
@@ -189,10 +190,25 @@ async def run_pdftotext(src: Path, out_path: Path) -> None:
     await _run(["pdftotext", "-layout", "-enc", "UTF-8", str(src), str(out_path)])
 
 
+async def _pdf_page_count(src: Path) -> int:
+    """Число страниц PDF через pdfinfo (poppler-utils)."""
+    out, _ = await run_capture(["pdfinfo", str(src)], SOFFICE_TIMEOUT)
+    for line in out.decode("utf-8", "replace").splitlines():
+        if line.startswith("Pages:"):
+            return int(line.split(":", 1)[1].strip())
+    raise RuntimeError("pdfinfo: поле Pages не найдено")
+
+
 async def run_pdftoppm(src: Path, out_dir: Path, prefix: str) -> list[Path]:
     """Рендер PDF в JPEG через poppler; возвращает отсортированный список .jpg."""
+    page_count = await _pdf_page_count(src)
+    if page_count > PDFTOPPM_MAX_PAGES:
+        raise ValueError(
+            f"pdf has {page_count} pages, exceeds PDFTOPPM_MAX_PAGES={PDFTOPPM_MAX_PAGES}"
+        )
     await _run([
         "pdftoppm", "-jpeg", "-r", str(PDFTOPPM_DPI),
+        "-f", "1", "-l", str(page_count),
         str(src), str(out_dir / prefix),
     ])
     pages = sorted(out_dir.glob(f"{prefix}-*.jpg"))

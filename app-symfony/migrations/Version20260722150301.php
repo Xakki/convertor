@@ -13,11 +13,10 @@ use Doctrine\Migrations\AbstractMigration;
  * Python-воркеры реально регистрируют: document/image/audio/video/data/ai),
  * а НЕ на полный PHP-хардкод ConversionRegistry::workerCapabilities() — там
  * есть 'markup' (несуществующий отдельный воркер, схлопывается в 'document'
- * только при роутинге) и Stage-7 «coming-soon» пары (xls/xlsx/ods/csv→pdf,
- * ppt/pptx/odp→pdf, dwg/dxf→pdf/svg/png, pdf→jpg), которых реальные Python
- * CAPABILITIES сознательно НЕ декларируют (workers/libreoffice/worker.py
- * `_MATRIX`, комментарий над ним) — по [USER DECISION 2026-07-01] эти пары
- * должны исчезнуть (честный 400), а не мигрировать в БД.
+ * только при роутинге). Stage-7 document-пары (CNV-41: Calc/Impress/markup/pdf→jpg,
+ * pages при libetonyek) включены в seed с 2026-08-03 — сверены с
+ * workers/libreoffice/worker.py `_MATRIX`. CAD (dwg/dxf) и прочие не-libreoffice
+ * пары по-прежнему вне seed document.
  *
  * Данные ниже — СТАТИЧНЫЙ снимок по состоянию на 2026-07-22, сверенный
  * построчно с workers/{libreoffice,image,ffmpeg,data,ai}/worker.py

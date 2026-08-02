@@ -198,6 +198,21 @@ class TestLibreOfficeConvert:
             names = sorted(zf.namelist())
         assert names == ["page-001.jpg", "page-002.jpg"]
 
+    def test_pdf_to_jpg_rejects_oversized_pdf(self, tmp_path):
+        import workers.libreoffice.worker as lo_mod
+
+        src = _src(tmp_path, "in.pdf")
+        worker = _worker(tmp_path)
+
+        async def fake_page_count(_src):
+            return 51
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch.object(lo_mod, "PDFTOPPM_MAX_PAGES", 50), \
+             patch("workers.libreoffice.worker._pdf_page_count", side_effect=fake_page_count):
+            with pytest.raises(ValueError, match="exceeds PDFTOPPM_MAX_PAGES"):
+                worker.convert(_make_job(27, src, "pdf", "jpg"))
+
     def test_html_to_pdf_via_soffice(self, tmp_path):
         _, _, ext = self._run(tmp_path, 15, "in.html", "html", "pdf")
         assert ext == "pdf"
@@ -287,6 +302,15 @@ class TestLibreOfficeConvertErrors:
         with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
             with pytest.raises(ValueError, match="unsupported source format"):
                 worker.convert(_make_job(25, src, "pages", "pdf"))
+
+    @pytest.mark.skipif(not _PAGES_IMPORT_OK, reason="pages requires libetonyek in image")
+    def test_pages_to_pdf_via_soffice(self, tmp_path):
+        out_path, mime, ext = TestLibreOfficeConvert()._run(
+            tmp_path, 28, "in.pages", "pages", "pdf"
+        )
+        assert ext == "pdf"
+        assert mime == "application/pdf"
+        assert Path(out_path).exists()
 
     def test_missing_input_raises(self, tmp_path):
         worker = _worker(tmp_path)
