@@ -155,7 +155,17 @@
             </div>
 
             <template x-if="error">
-                <div class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="error"></div>
+                <div class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <span x-text="error"></span>
+                    <template x-if="errorInsufficientBalance">
+                        <button
+                            type="button"
+                            @click="openTopUp()"
+                            class="ml-2 inline-flex rounded bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-700"
+                            x-text="BILLING_I18N.topupCta"
+                        ></button>
+                    </template>
+                </div>
             </template>
         </div>
 
@@ -183,9 +193,9 @@
        глобальном Alpine-скоупе и вьюер не открывается (баг home-05, найден
        2026-07-21). ── #}
     {% include 'partials/_converter_viewer_modal.html.twig' %}
+    {% include 'partials/_billing_topup_modal.html.twig' %}
 </div>
 
-{# ── converterApp() Alpine-компонент — тот же partial, что и на `/`, здесь
-   x-data выше передаёт lockedFrom/lockedTo/lockedCategory. ── #}
+{% include 'partials/_billing_topup_script.html.twig' %}
 {% include 'partials/_converter_app_script.html.twig' %}
 {% endblock %}

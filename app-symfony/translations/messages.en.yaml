@@ -204,6 +204,7 @@ nav:
     # группы — home.category.*, пары — /convert/{from}-to-{to}.
     conversions: 'Conversions'
     docs: 'Docs'
+    pricing: 'Pricing'
     bot: 'Bot'
     admin: 'Admin'
     # dashboard-page-01: link to the served /dashboard page, shown only for
@@ -301,3 +302,62 @@ pair:
     about_heading: 'About %from% to %to% conversion'
     about_body: 'This converter turns %from% files into %to% format through the same conversion pipeline as the rest of the service — no separate tool, no quality loss beyond what the format change itself requires. It works for guests too (AI-powered and video conversions are the only exception — those require signing in), so you can try it right away.'
     back_to_home: '← All conversions'
+
+# CNV-59: balance / top-up / Telegram link (modal + quota-bar).
+billing:
+    balance_label: 'Balance'
+    topup_cta: 'Top up'
+    topup_title: 'Top up balance'
+    topup_subtitle: 'Pay with Telegram Stars'
+    packs_loading: 'Loading packs…'
+    packs_empty: 'Top-up packs are temporarily unavailable.'
+    pack_stars: '%stars% ⭐'
+    paying: 'Opening payment…'
+    login_required: 'Sign in to top up your balance.'
+    login_cta: 'Log in'
+    link_required: 'Link Telegram to your account to pay with Stars.'
+    link_cta: 'Link Telegram'
+    link_opening: 'Opening Telegram…'
+    link_waiting: 'Waiting for confirmation in the bot…'
+    link_hint: 'In Telegram, tap the confirm button, then return to this tab.'
+    link_done: 'Telegram linked.'
+    link_failed: 'Could not start linking (%status%).'
+    link_expired: 'Linking timed out. Please try again.'
+    link_taken: 'This Telegram account is already linked to another user.'
+    topup_failed: 'Could not create a payment link. Please try again later.'
+    insufficient_balance: 'Insufficient balance for pay-per-use beyond quota.'
+    rates_note: 'Beyond quota: %regular% / conversion, %ai% / AI.'
+
+# CNV-59: /pricing page.
+pricing:
+    title: 'Pricing — File Converter'
+    heading: 'Pricing'
+    subheading: 'Start free. Subscriptions coming soon; top up your prepaid balance via Telegram now.'
+    plans_aria: 'Pricing plans'
+    per_month: '/mo'
+    popular: 'Popular'
+    cta_soon: 'Coming soon'
+    cta_current_or_free: 'Free plan'
+    free:
+        blurb: 'Try the service'
+        f1: 'Free daily quotas'
+        f2: 'AI and video after sign-in'
+        f3: 'Files up to plan limit'
+        f4: 'All available formats'
+    basic:
+        blurb: 'For regular use'
+        f1: 'More conversions per day'
+        f2: 'More AI conversions'
+        f3: 'Larger max file size'
+        f4: 'History and queue priority'
+    pro:
+        blurb: 'For professional work'
+        f1: 'Highest quotas'
+        f2: 'Extended AI limit'
+        f3: 'Large files'
+        f4: 'Highest queue priority'
+        f5: 'API access (soon)'
+    topup:
+        heading: 'Top up balance'
+        subheading: 'Pay-per-use beyond the daily quota — prepaid balance via Telegram Stars.'
+        telegram_only: 'Payment via Telegram only. Stripe and other providers are not connected.'

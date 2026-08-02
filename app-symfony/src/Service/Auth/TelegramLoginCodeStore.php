@@ -186,6 +186,11 @@ class TelegramLoginCodeStore
 
     private function newSecret(): string
     {
-        return rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        // Не пересекаться с deep-link префиксами webhook (`link_`, `pay_`).
+        do {
+            $secret = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        } while (str_starts_with($secret, 'link_') || str_starts_with($secret, 'pay_'));
+
+        return $secret;
     }
 }

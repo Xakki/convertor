@@ -11,6 +11,7 @@ use App\Exception\TopUpNotAllowedException;
 use App\Exception\UnknownTopUpPackException;
 use App\Repository\UserRepository;
 use App\Service\Auth\TelegramBotClient;
+use App\Service\Auth\TelegramLinkCodeStore;
 use App\Service\Auth\TelegramLoginCodeStore;
 use App\Service\Auth\TelegramUserProvisioner;
 use App\Service\Billing\BalanceService;
@@ -32,12 +33,14 @@ use Symfony\Component\Routing\Attribute\Route;
  *
  * Обработка:
  *  - message `/start <code>` → инлайн-кнопка «Войти» (callback_data несёт code).
+ *  - message `/start link_<code>` → инлайн-кнопка «Привязать» (CNV-59).
  *  - message `/help` → короткая справка о боте.
  *  - message `/convert` → ссылка на веб-приложение для конвертации файла.
  *  - message `/balance` → баланс prepaid + ставки pay-per-use (CNV-58).
  *  - message `/topup` / `/topup <pack_id|N>` → инлайн-пакеты / invoice / произвольные Stars (CNV-58).
  *  - message `/start pay_<pack>` → invoice пополнения prepaid-баланса (CNV-28).
  *  - callback_query «Войти» → findOrCreateUser + пометить code authorized.
+ *  - callback_query «Привязать» → attach telegram_id к UserId из link-nonce (без findOrCreateUser).
  *  - callback_query `topup:<pack_id>` → invoice выбранного пакета.
  *  - pre_checkout_query → подтверждение invoice перед оплатой Stars.
  *  - message с successful_payment → идемпотентное зачисление на баланс.
@@ -50,11 +53,13 @@ use Symfony\Component\Routing\Attribute\Route;
 class TelegramWebhookController extends AbstractController
 {
     private const CALLBACK_PREFIX_LOGIN = 'login:';
+    private const CALLBACK_PREFIX_LINK  = 'link:';
     private const CALLBACK_PREFIX_TOPUP = 'topup:';
 
     public function __construct(
         private readonly TelegramBotClient $botClient,
         private readonly TelegramLoginCodeStore $codeStore,
+        private readonly TelegramLinkCodeStore $linkCodeStore,
         private readonly TelegramUserProvisioner $provisioner,
         private readonly PaymentTopUpService $topUpService,
         private readonly TopUpPackRegistry $packRegistry,
@@ -117,6 +122,18 @@ class TelegramWebhookController extends AbstractController
         // Deep-link пополнения: /start pay_pack_100 → t.me/bot?start=pay_pack_100
         if (preg_match('/^\/start\s+pay_(\S+)$/', $text, $m) === 1) {
             $this->handlePayStart($message, $chatId, $m[1]);
+
+            return;
+        }
+
+        // Deep-link привязки Telegram (CNV-59): /start link_<code>
+        if (preg_match('/^\/start\s+link_(\S+)$/', $text, $m) === 1) {
+            $code = $m[1];
+            $this->botClient->sendMessage($chatId, 'Нажмите «Привязать», чтобы связать Telegram с аккаунтом на сайте:', [
+                'inline_keyboard' => [[
+                    ['text' => 'Привязать', 'callback_data' => self::CALLBACK_PREFIX_LINK . $code],
+                ]],
+            ]);
 
             return;
         }
@@ -446,6 +463,12 @@ class TelegramWebhookController extends AbstractController
             return;
         }
 
+        if (str_starts_with($data, self::CALLBACK_PREFIX_LINK)) {
+            $this->handleLinkCallback($callbackQuery, $callbackId, $data);
+
+            return;
+        }
+
         if (! str_starts_with($data, self::CALLBACK_PREFIX_LOGIN)) {
             return;
         }
@@ -484,6 +507,94 @@ class TelegramWebhookController extends AbstractController
         $chatId = $this->extractChatId(is_array($callbackQuery['message'] ?? null) ? $callbackQuery['message'] : []);
         if ($chatId !== null) {
             $this->botClient->sendMessage($chatId, 'Авторизация успешна. Вернитесь в браузер.');
+        }
+    }
+
+    /**
+     * Привязка Telegram к UserId из link-кода (CNV-59).
+     * Без findOrCreateUser и без смены сессии — только setTelegramId на bound user.
+     *
+     * @param array<string, mixed> $callbackQuery
+     */
+    private function handleLinkCallback(array $callbackQuery, string $callbackId, string $data): void
+    {
+        $code = substr($data, strlen(self::CALLBACK_PREFIX_LINK));
+        $from = is_array($callbackQuery['from'] ?? null) ? $callbackQuery['from'] : [];
+
+        $telegramId = isset($from['id']) ? (string) $from['id'] : '';
+        if ($telegramId === '') {
+            $this->botClient->answerCallbackQuery($callbackId, 'Не удалось определить аккаунт.');
+
+            return;
+        }
+
+        $boundUserId = $this->linkCodeStore->peekUserId($code);
+        if ($boundUserId === null) {
+            $this->botClient->answerCallbackQuery($callbackId, 'Код истёк или уже использован, начните привязку заново.');
+
+            return;
+        }
+
+        $user = $this->userRepository->find($boundUserId);
+        if ($user === null || ! $user->isActive() || $user->isGuest()) {
+            $this->botClient->answerCallbackQuery($callbackId, 'Аккаунт на сайте не найден. Начните привязку заново.');
+
+            return;
+        }
+
+        $existing = $this->userRepository->findByTelegramId($telegramId);
+        if ($existing !== null && $existing->getId() !== $user->getId()) {
+            $this->linkCodeStore->markCollision($code);
+            $this->botClient->answerCallbackQuery(
+                $callbackId,
+                'Этот Telegram уже привязан к другому аккаунту.',
+            );
+            $chatId = $this->extractChatId(is_array($callbackQuery['message'] ?? null) ? $callbackQuery['message'] : []);
+            if ($chatId !== null) {
+                $this->botClient->sendMessage(
+                    $chatId,
+                    'Этот Telegram уже привязан к другому аккаунту Convertor. '
+                    . 'Слияние аккаунтов не выполняется. Войдите в тот аккаунт или используйте другой Telegram.',
+                );
+            }
+
+            return;
+        }
+
+        $currentTg = $user->getTelegramId();
+        if ($currentTg !== null && $currentTg !== '' && $currentTg !== $telegramId) {
+            // Аккаунт уже связан с другим TG — не перезаписываем (без merge).
+            $this->botClient->answerCallbackQuery(
+                $callbackId,
+                'К аккаунту уже привязан другой Telegram.',
+            );
+
+            return;
+        }
+
+        if ($currentTg === null || $currentTg === '') {
+            $user->setTelegramId($telegramId);
+            if (is_string($from['username'] ?? null) && $from['username'] !== '') {
+                $user->setUsername($from['username']);
+            }
+            if (is_string($from['first_name'] ?? null) && $from['first_name'] !== '' && $user->getFirstName() === null) {
+                $user->setFirstName($from['first_name']);
+            }
+            $this->userRepository->save($user, true);
+        }
+
+        if (! $this->linkCodeStore->markAuthorized($code)) {
+            $this->botClient->answerCallbackQuery($callbackId, 'Код истёк или уже использован, начните привязку заново.');
+
+            return;
+        }
+
+        $this->logger->info('Telegram linked to user', ['userId' => $user->getId(), 'telegramId' => $telegramId]);
+        $this->botClient->answerCallbackQuery($callbackId, 'Готово! Вернитесь в браузер.');
+
+        $chatId = $this->extractChatId(is_array($callbackQuery['message'] ?? null) ? $callbackQuery['message'] : []);
+        if ($chatId !== null) {
+            $this->botClient->sendMessage($chatId, 'Telegram привязан. Вернитесь в браузер.');
         }
     }
 

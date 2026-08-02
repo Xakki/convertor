@@ -7,6 +7,7 @@ namespace App\Tests\Functional\Controller\Api;
 use App\Entity\User;
 use App\Repository\UserRepository;
 use App\Service\Auth\TelegramBotClient;
+use App\Service\Auth\TelegramLinkCodeStore;
 use App\Service\Auth\TelegramLoginCodeStore;
 use App\Service\Auth\TelegramUserProvisioner;
 use App\Service\Billing\BalanceService;
@@ -70,6 +71,118 @@ final class TelegramWebhookControllerTest extends WebTestCase
         $client->request('POST', self::URL, [], [], $this->headers(), (string) json_encode($update));
 
         self::assertSame(200, $client->getResponse()->getStatusCode());
+    }
+
+    public function testLinkStartCommandRendersBindButton(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $bot = $this->createMock(TelegramBotClient::class);
+        $bot->expects(self::once())
+            ->method('sendMessage')
+            ->with(
+                999,
+                self::anything(),
+                self::callback(static function (?array $markup): bool {
+                    $btn = $markup['inline_keyboard'][0][0] ?? [];
+
+                    return ($btn['text'] ?? null)          === 'Привязать'
+                        && ($btn['callback_data'] ?? null) === 'link:XYZ';
+                }),
+            );
+        $container->set(TelegramBotClient::class, $bot);
+
+        $update = ['message' => ['chat' => ['id' => 999], 'text' => '/start link_XYZ']];
+        $client->request('POST', self::URL, [], [], $this->headers(), (string) json_encode($update));
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+    }
+
+    public function testLinkCallbackAttachesTelegramWithoutFindOrCreate(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $user = $this->makeUser(77);
+
+        $users = $this->createMock(UserRepository::class);
+        $users->expects(self::once())->method('find')->with(77)->willReturn($user);
+        $users->expects(self::once())->method('findByTelegramId')->with('555')->willReturn(null);
+        $users->expects(self::once())->method('save')->with($user, true);
+        $container->set(UserRepository::class, $users);
+
+        $provisioner = $this->createMock(TelegramUserProvisioner::class);
+        $provisioner->expects(self::never())->method('findOrCreateUser');
+        $container->set(TelegramUserProvisioner::class, $provisioner);
+
+        $linkStore = $this->createMock(TelegramLinkCodeStore::class);
+        $linkStore->expects(self::once())->method('peekUserId')->with('XYZ')->willReturn(77);
+        $linkStore->expects(self::once())->method('markAuthorized')->with('XYZ')->willReturn(true);
+        $container->set(TelegramLinkCodeStore::class, $linkStore);
+
+        $bot = $this->createMock(TelegramBotClient::class);
+        $bot->expects(self::once())
+            ->method('answerCallbackQuery')
+            ->with('cbid-link', self::stringContains('Вернитесь'));
+        $bot->expects(self::once())
+            ->method('sendMessage')
+            ->with(777, 'Telegram привязан. Вернитесь в браузер.', null);
+        $container->set(TelegramBotClient::class, $bot);
+
+        $update = ['callback_query' => [
+            'id'      => 'cbid-link',
+            'data'    => 'link:XYZ',
+            'from'    => ['id' => 555, 'username' => 'tguser', 'first_name' => 'Tg'],
+            'message' => ['chat' => ['id' => 777]],
+        ]];
+        $client->request('POST', self::URL, [], [], $this->headers(), (string) json_encode($update));
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        self::assertSame('555', $user->getTelegramId());
+    }
+
+    public function testLinkCallbackCollisionRejectsOccupiedTelegram(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+
+        $bound   = $this->makeUser(10);
+        $other   = $this->makeUser(20);
+        $other->setTelegramId('555');
+
+        $users = $this->createMock(UserRepository::class);
+        $users->method('find')->with(10)->willReturn($bound);
+        $users->method('findByTelegramId')->with('555')->willReturn($other);
+        $users->expects(self::never())->method('save');
+        $container->set(UserRepository::class, $users);
+
+        $provisioner = $this->createMock(TelegramUserProvisioner::class);
+        $provisioner->expects(self::never())->method('findOrCreateUser');
+        $container->set(TelegramUserProvisioner::class, $provisioner);
+
+        $linkStore = $this->createMock(TelegramLinkCodeStore::class);
+        $linkStore->method('peekUserId')->willReturn(10);
+        $linkStore->expects(self::once())->method('markCollision')->with('XYZ')->willReturn(true);
+        $linkStore->expects(self::never())->method('markAuthorized');
+        $container->set(TelegramLinkCodeStore::class, $linkStore);
+
+        $bot = $this->createMock(TelegramBotClient::class);
+        $bot->expects(self::once())
+            ->method('answerCallbackQuery')
+            ->with('cbid-col', self::stringContains('другому аккаунту'));
+        $container->set(TelegramBotClient::class, $bot);
+
+        $update = ['callback_query' => [
+            'id'      => 'cbid-col',
+            'data'    => 'link:XYZ',
+            'from'    => ['id' => 555],
+            'message' => ['chat' => ['id' => 777]],
+        ]];
+        $client->request('POST', self::URL, [], [], $this->headers(), (string) json_encode($update));
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        self::assertNull($bound->getTelegramId());
     }
 
     public function testHelpCommandSendsShortInstructions(): void

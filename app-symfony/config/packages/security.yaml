@@ -13,6 +13,15 @@ security:
             pattern: ^/(_(profiler|wdt)|css|images|js)/
             security: false
 
+        # Привязка Telegram (CNV-59): JWT + ROLE_USER. ДОЛЖЕН стоять ДО
+        # публичного `auth` (^/api/v1/auth, security:false), иначе link-роуты
+        # попадут под security:false и не увидят CurrentUser.
+        auth_telegram_link:
+            pattern: ^/api/v1/auth/telegram/link
+            stateless: true
+            provider: app_user_provider
+            jwt: ~
+
         auth:
             pattern: ^/api/v1/auth
             stateless: true
@@ -63,6 +72,8 @@ security:
         # ^/api/v1/auth; функционально её уже покрывает префикс ^/api/v1/auth ниже
         # (и firewall `auth` тем же префиксом), но фиксируем контракт эпика явно.
         - { path: ^/api/v1/auth/oauth, roles: PUBLIC_ACCESS }
+        # Link Telegram — только ROLE_USER (гость → 403). До общего PUBLIC auth.
+        - { path: ^/api/v1/auth/telegram/link, roles: ROLE_USER }
         - { path: ^/api/v1/auth, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/telegram/webhook, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/formats, roles: PUBLIC_ACCESS }

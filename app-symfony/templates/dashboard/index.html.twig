@@ -18,7 +18,17 @@
         <h1 class="mb-6 text-2xl font-semibold text-slate-800">{{ 'dashboard.heading'|trans }}</h1>
 
         <template x-if="error">
-            <div class="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="error"></div>
+            <div class="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <span x-text="error"></span>
+                <template x-if="errorInsufficientBalance">
+                    <button
+                        type="button"
+                        @click="openTopUp()"
+                        class="ml-2 inline-flex rounded bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-700"
+                        x-text="BILLING_I18N.topupCta"
+                    ></button>
+                </template>
+            </div>
         </template>
 
         {# ── Приглашение войти — гость и аноним (authResolved гейтит появление
@@ -79,10 +89,25 @@
                         <dt class="text-xs text-slate-400">{{ 'home.quota.plan_label'|trans }}</dt>
                         <dd class="font-medium text-slate-700" x-text="quotaPlanLabel"></dd>
                     </div>
-                    <div class="sm:col-span-3">
+                    <div class="sm:col-span-2">
                         <dt class="text-xs text-slate-400">{{ 'home.quota.max_file_label'|trans }}</dt>
                         <dd class="font-medium text-slate-700" x-text="maxFileLabel(quota.maxUploadBytes)"></dd>
                     </div>
+                    {# CNV-59: баланс + CTA пополнения (не в хедере). #}
+                    <template x-if="loggedIn">
+                        <div>
+                            <dt class="text-xs text-slate-400" x-text="BILLING_I18N.balanceLabel"></dt>
+                            <dd class="flex flex-wrap items-center gap-2">
+                                <span class="font-medium tabular-nums text-slate-700" x-text="balanceLabel()"></span>
+                                <button
+                                    type="button"
+                                    @click="openTopUp()"
+                                    class="rounded bg-indigo-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-indigo-700"
+                                    x-text="BILLING_I18N.topupCta"
+                                ></button>
+                            </dd>
+                        </div>
+                    </template>
                 </dl>
                 <div class="overflow-x-auto">
                     <table class="w-full min-w-[20rem] text-sm">
@@ -256,7 +281,9 @@
        audio/video-плеер НЕ подключены — previewable из истории по построению
        текстовый (см. комментарий в _dashboard_app_script.html.twig). ── #}
     {% include 'partials/_converter_preview_modal.html.twig' %}
+    {% include 'partials/_billing_topup_modal.html.twig' %}
 </div>
 
+{% include 'partials/_billing_topup_script.html.twig' %}
 {% include 'partials/_dashboard_app_script.html.twig' %}
 {% endblock %}

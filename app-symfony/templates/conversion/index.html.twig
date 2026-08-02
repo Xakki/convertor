@@ -37,6 +37,21 @@
                         <span class="font-medium text-slate-700">{{ 'home.quota.max_file_label'|trans }}:</span>
                         <span x-text="humanSize(quota.maxUploadBytes)"></span>
                     </span>
+                    {# CNV-59: баланс только у залогиненного (не в хедере). #}
+                    <template x-if="auth.token">
+                        <span class="inline-flex flex-wrap items-center gap-2">
+                            <span>
+                                <span class="font-medium text-slate-700" x-text="BILLING_I18N.balanceLabel + ':'"></span>
+                                <span class="tabular-nums font-medium text-slate-800" x-text="balanceLabel()"></span>
+                            </span>
+                            <button
+                                type="button"
+                                @click="openTopUp()"
+                                class="rounded bg-indigo-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-indigo-700"
+                                x-text="BILLING_I18N.topupCta"
+                            ></button>
+                        </span>
+                    </template>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full min-w-[18rem] text-xs">
@@ -198,7 +213,17 @@
 
             {# Ошибка отправки #}
             <template x-if="error">
-                <div class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="error"></div>
+                <div class="mt-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <span x-text="error"></span>
+                    <template x-if="errorInsufficientBalance">
+                        <button
+                            type="button"
+                            @click="openTopUp()"
+                            class="ml-2 inline-flex rounded bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-700"
+                            x-text="BILLING_I18N.topupCta"
+                        ></button>
+                    </template>
+                </div>
             </template>
         </div>
 
@@ -480,10 +505,10 @@
        2026-07-21). Переиспользуется conversion/pair.html.twig в той же
        позиции. ── #}
     {% include 'partials/_converter_viewer_modal.html.twig' %}
+    {% include 'partials/_billing_topup_modal.html.twig' %}
 </div>
 
-{# ── converterApp() Alpine-компонент — partial (home-09), переиспользуется
-   conversion/pair.html.twig с ДРУГИМИ options (locked from/to), см.
-   partials/_converter_app_script.html.twig. ── #}
+{# CNV-59: billing mixin → затем converterApp(). #}
+{% include 'partials/_billing_topup_script.html.twig' %}
 {% include 'partials/_converter_app_script.html.twig' %}
 {% endblock %}

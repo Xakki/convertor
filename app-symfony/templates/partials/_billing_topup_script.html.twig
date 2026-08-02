@@ -1,0 +1,333 @@
+{# CNV-59: общий Alpine-mixin пополнения баланса (packs → invoice_link) +
+   привязки Telegram. Подключать ПЕРЕД converterApp()/dashboardApp()/pricingApp().
+   Хост обязан иметь authFetch() и loadQuota(); для converter — auth.token,
+   для dashboard — loggedIn. #}
+<script>
+    const BILLING_I18N = {
+        balanceLabel: '{{ 'billing.balance_label'|trans|e('js') }}',
+        topupCta: '{{ 'billing.topup_cta'|trans|e('js') }}',
+        topupTitle: '{{ 'billing.topup_title'|trans|e('js') }}',
+        topupSubtitle: '{{ 'billing.topup_subtitle'|trans|e('js') }}',
+        packsLoading: '{{ 'billing.packs_loading'|trans|e('js') }}',
+        packsEmpty: '{{ 'billing.packs_empty'|trans|e('js') }}',
+        packStars: '{{ 'billing.pack_stars'|trans|e('js') }}',
+        paying: '{{ 'billing.paying'|trans|e('js') }}',
+        loginRequired: '{{ 'billing.login_required'|trans|e('js') }}',
+        loginCta: '{{ 'billing.login_cta'|trans|e('js') }}',
+        linkRequired: '{{ 'billing.link_required'|trans|e('js') }}',
+        linkCta: '{{ 'billing.link_cta'|trans|e('js') }}',
+        linkOpening: '{{ 'billing.link_opening'|trans|e('js') }}',
+        linkWaiting: '{{ 'billing.link_waiting'|trans|e('js') }}',
+        linkHint: '{{ 'billing.link_hint'|trans|e('js') }}',
+        linkDone: '{{ 'billing.link_done'|trans|e('js') }}',
+        linkFailed: '{{ 'billing.link_failed'|trans|e('js') }}',
+        linkExpired: '{{ 'billing.link_expired'|trans|e('js') }}',
+        linkTaken: '{{ 'billing.link_taken'|trans|e('js') }}',
+        topupFailed: '{{ 'billing.topup_failed'|trans|e('js') }}',
+        insufficientBalance: '{{ 'billing.insufficient_balance'|trans|e('js') }}',
+        ratesNote: '{{ 'billing.rates_note'|trans|e('js') }}',
+        close: '{{ 'common.close'|trans|e('js') }}',
+    };
+
+    function billingTopUpMixin() {
+        return {
+            telegramLinked: false,
+            topup: {
+                open: false,
+                packs: [],
+                packsLoaded: false,
+                loadingPacks: false,
+                payingId: null,
+                error: '',
+                panel: 'packs', // packs | login | link | linking
+                linkOpening: false,
+                linkWaiting: false,
+                linkHint: false,
+            },
+            _linkPollGen: 0,
+            _linkPollTries: 0,
+            _linkPollTimer: null,
+            _linkPollCode: null,
+            _quotaRefreshTimer: null,
+            _quotaRefreshLeft: 0,
+
+            isBillingLoggedIn() {
+                return !!(this.auth && this.auth.token) || !!this.loggedIn;
+            },
+
+            formatUsdCents(cents) {
+                const n = (Number(cents) || 0) / 100;
+                return '$' + n.toFixed(2);
+            },
+
+            balanceLabel() {
+                return this.formatUsdCents(this.quota && this.quota.balanceCents);
+            },
+
+            ratesNoteText() {
+                if (!this.quota || !this.quota.loaded) return '';
+                return BILLING_I18N.ratesNote
+                    .replace('%regular%', this.formatUsdCents(this.quota.payPerUseCents))
+                    .replace('%ai%', this.formatUsdCents(this.quota.payPerUseAiCents));
+            },
+
+            async refreshTelegramLinkFlag() {
+                if (!this.isBillingLoggedIn()) {
+                    this.telegramLinked = false;
+                    return;
+                }
+                try {
+                    const res = await this.authFetch('/api/v1/me');
+                    if (!res.ok) {
+                        this.telegramLinked = false;
+                        return;
+                    }
+                    const d = await res.json();
+                    // php-dev landing: telegram_linked может ещё отсутствовать → false.
+                    this.telegramLinked = d.telegram_linked === true;
+                    if (typeof d.balance_cents === 'number' && this.quota) {
+                        this.quota.balanceCents = d.balance_cents;
+                    }
+                } catch (e) {
+                    this.telegramLinked = false;
+                }
+            },
+
+            async openTopUp() {
+                this.topup.error = '';
+                this.topup.payingId = null;
+                this.stopLinkPoll();
+                this.topup.open = true;
+
+                if (!this.isBillingLoggedIn()) {
+                    this.topup.panel = 'login';
+                    return;
+                }
+
+                await this.refreshTelegramLinkFlag();
+                if (!this.telegramLinked) {
+                    this.topup.panel = 'link';
+                    return;
+                }
+
+                this.topup.panel = 'packs';
+                await this.loadTopUpPacks();
+            },
+
+            closeTopUp() {
+                this.topup.open = false;
+                this.topup.error = '';
+                this.topup.payingId = null;
+                this.stopLinkPoll();
+            },
+
+            async loadTopUpPacks() {
+                this.topup.loadingPacks = true;
+                this.topup.error = '';
+                try {
+                    const res = await this.authFetch('/api/v1/payment/packs');
+                    if (res.status === 401 || res.status === 403) {
+                        this.topup.panel = 'login';
+                        this.topup.error = BILLING_I18N.loginRequired;
+                        return;
+                    }
+                    if (!res.ok) {
+                        this.topup.error = BILLING_I18N.topupFailed;
+                        return;
+                    }
+                    const d = await res.json();
+                    this.topup.packs = Array.isArray(d.packs) ? d.packs : [];
+                    this.topup.packsLoaded = true;
+                } catch (e) {
+                    this.topup.error = BILLING_I18N.topupFailed;
+                } finally {
+                    this.topup.loadingPacks = false;
+                }
+            },
+
+            async buyPack(packId) {
+                if (!packId || this.topup.payingId) return;
+                if (!this.isBillingLoggedIn()) {
+                    this.topup.panel = 'login';
+                    return;
+                }
+                this.topup.payingId = packId;
+                this.topup.error = '';
+                try {
+                    const res = await this.authFetch('/api/v1/payment/topup', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pack: packId }),
+                    });
+                    if (res.status === 401 || res.status === 403) {
+                        let code = '';
+                        try {
+                            const d = await res.clone().json();
+                            code = d.error || '';
+                        } catch (e) { /* ignore */ }
+                        if (code === 'telegram_link_required') {
+                            this.telegramLinked = false;
+                            this.topup.panel = 'link';
+                            this.topup.error = BILLING_I18N.linkRequired;
+                        } else {
+                            this.topup.panel = 'login';
+                            this.topup.error = BILLING_I18N.loginRequired;
+                        }
+                        return;
+                    }
+                    if (!res.ok) {
+                        this.topup.error = BILLING_I18N.topupFailed;
+                        return;
+                    }
+                    const d = await res.json();
+                    if (d.invoice_link) {
+                        window.open(d.invoice_link, '_blank', 'noopener');
+                    }
+                    this.startQuotaRefreshBurst();
+                } catch (e) {
+                    this.topup.error = BILLING_I18N.topupFailed;
+                } finally {
+                    this.topup.payingId = null;
+                }
+            },
+
+            startQuotaRefreshBurst() {
+                if (this._quotaRefreshTimer) {
+                    clearInterval(this._quotaRefreshTimer);
+                    this._quotaRefreshTimer = null;
+                }
+                this._quotaRefreshLeft = 8;
+                if (typeof this.loadQuota === 'function') this.loadQuota();
+                this._quotaRefreshTimer = setInterval(() => {
+                    this._quotaRefreshLeft--;
+                    if (typeof this.loadQuota === 'function') this.loadQuota();
+                    if (this._quotaRefreshLeft <= 0) {
+                        clearInterval(this._quotaRefreshTimer);
+                        this._quotaRefreshTimer = null;
+                    }
+                }, 3000);
+            },
+
+            onBillingWindowFocus() {
+                if (this.topup.open && this.topup.panel === 'packs' && typeof this.loadQuota === 'function') {
+                    this.loadQuota();
+                }
+            },
+
+            async startTelegramLink() {
+                if (this.topup.linkOpening || this.topup.linkWaiting) return;
+                if (!this.isBillingLoggedIn()) {
+                    this.topup.panel = 'login';
+                    return;
+                }
+                this.stopLinkPoll();
+                this.topup.linkOpening = true;
+                this.topup.error = '';
+                this.topup.linkHint = false;
+                this.topup.panel = 'linking';
+                try {
+                    const res = await this.authFetch('/api/v1/auth/telegram/link/start', {
+                        method: 'POST',
+                    });
+                    if (res.status === 401 || res.status === 403) {
+                        this.topup.panel = 'login';
+                        this.topup.error = BILLING_I18N.loginRequired;
+                        return;
+                    }
+                    if (!res.ok) {
+                        let code = '';
+                        try {
+                            const d = await res.clone().json();
+                            code = d.error || '';
+                        } catch (e) { /* ignore */ }
+                        if (code === 'telegram_already_linked' || code === 'telegram_taken') {
+                            this.topup.error = BILLING_I18N.linkTaken;
+                        } else {
+                            this.topup.error = BILLING_I18N.linkFailed.replace('%status%', String(res.status));
+                        }
+                        this.topup.panel = 'link';
+                        return;
+                    }
+                    const d = await res.json();
+                    if (d.deep_link) window.open(d.deep_link, '_blank', 'noopener');
+                    this.topup.linkHint = true;
+                    this.topup.linkWaiting = true;
+                    this._linkPollCode = d.code;
+                    this._linkPollTries = 0;
+                    this._linkPollGen++;
+                    this.pollTelegramLink(this._linkPollGen);
+                } catch (e) {
+                    this.topup.error = BILLING_I18N.linkFailed.replace('%status%', 'net');
+                    this.topup.panel = 'link';
+                } finally {
+                    this.topup.linkOpening = false;
+                }
+            },
+
+            stopLinkPoll() {
+                if (this._linkPollTimer) {
+                    clearTimeout(this._linkPollTimer);
+                    this._linkPollTimer = null;
+                }
+                this._linkPollGen++;
+                this.topup.linkWaiting = false;
+                this._linkPollCode = null;
+            },
+
+            async pollTelegramLink(gen) {
+                if (gen !== this._linkPollGen || !this._linkPollCode) return;
+                this._linkPollTries++;
+                if (this._linkPollTries > 150) {
+                    this.topup.linkWaiting = false;
+                    this.topup.linkHint = false;
+                    this.topup.error = BILLING_I18N.linkExpired;
+                    this.topup.panel = 'link';
+                    return;
+                }
+                try {
+                    const res = await this.authFetch(
+                        '/api/v1/auth/telegram/link/poll?code=' + encodeURIComponent(this._linkPollCode),
+                    );
+                    if (gen !== this._linkPollGen) return;
+                    if (res.status === 204) {
+                        this._linkPollTimer = setTimeout(() => this.pollTelegramLink(gen), 2000);
+                        return;
+                    }
+                    if (res.status === 200) {
+                        this.stopLinkPoll();
+                        this.telegramLinked = true;
+                        this.topup.linkHint = false;
+                        this.topup.panel = 'packs';
+                        this.topup.error = '';
+                        await this.loadTopUpPacks();
+                        return;
+                    }
+                    if (res.status === 410) {
+                        this.topup.linkWaiting = false;
+                        this.topup.linkHint = false;
+                        this.topup.error = BILLING_I18N.linkExpired;
+                        this.topup.panel = 'link';
+                        return;
+                    }
+                    if (res.status === 409) {
+                        this.topup.linkWaiting = false;
+                        this.topup.linkHint = false;
+                        this.topup.error = BILLING_I18N.linkTaken;
+                        this.topup.panel = 'link';
+                        return;
+                    }
+                    // 403 = nonce/user mismatch; 400 = нет code/cookie — бессмысленно крутить ~5 мин
+                    if (res.status === 403 || res.status === 400) {
+                        this.topup.linkWaiting = false;
+                        this.topup.linkHint = false;
+                        this.topup.error = BILLING_I18N.linkFailed.replace('%status%', String(res.status));
+                        this.topup.panel = 'link';
+                        return;
+                    }
+                } catch (e) { /* сеть моргнула — повторим */ }
+                if (gen !== this._linkPollGen) return;
+                this._linkPollTimer = setTimeout(() => this.pollTelegramLink(gen), 2000);
+            },
+        };
+    }
+</script>

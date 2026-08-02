@@ -81,5 +81,17 @@ RU OAuth-юзеры без пути к Stars/top-up.
   «Привязать» после Yandex/VK.
 - (2026-08-02 grooming) Q12=B: `/pricing` = карточки Free/Basic/Pro как в
   прототипе, CTA подписок disabled/«скоро»; packs top-up живые.
-- Зависит от packs/invoice API (CNV-28 ready); CNV-58 желателен раньше,
-  сайт на командах бота не блокируется.
+
+## Execution Log
+
+- (2026-08-03) **php-dev BACKEND**: Telegram link flow (`POST/GET /api/v1/auth/telegram/link/{start,poll}`), webhook `link:` / `start=link_`, `/me.telegram_linked`, firewall `auth_telegram_link` (JWT+ROLE_USER).
+- (2026-08-03, front-dev) FRONTEND slice: баланс USD в quota-bar на `/` и
+  `/dashboard`; shared top-up modal (packs → `invoice_link`); guest → login;
+  User без TG → «Привязать Telegram» (start/poll UX зеркало login); 429
+  `insufficient_balance` → CTA пополнения; `/pricing` Twig + thin
+  `PricingController` + nav link после Docs; `app-front/pricing.html`
+  deprecated redirect; i18n RU/EN (`billing.*` / `pricing.*` / `nav.pricing`);
+  smoke-тест `PricingControllerTest`. PHP link/`telegram_linked` — в
+  unstaged php-dev work на той же ветке (не в этом front-commit).
+- (2026-08-03, front-dev) `pollTelegramLink`: HTTP 403/400 → стоп опроса +
+  `linkFailed` + panel `link` (как 409/410); раньше 403 перепланировал ~5 мин.

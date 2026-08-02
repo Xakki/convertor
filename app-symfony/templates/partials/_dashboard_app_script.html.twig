@@ -77,9 +77,10 @@
     const FAILED_STATUSES = ['failed', 'expired'];
 
     function dashboardApp() {
-        return {
+        return Object.assign({
             auth: { token: null },
             error: '',
+            errorInsufficientBalance: false,
             // authResolved — становится true ПОСЛЕ попытки tryRefresh()+/me
             // (успешной или нет). Гейтит рендер account-карточки/приглашения
             // входа через <template x-if>, чтобы ни то ни другое не мигало до
@@ -93,6 +94,9 @@
                 plan: null,
                 tiers: null,
                 maxUploadBytes: 0,
+                balanceCents: 0,
+                payPerUseCents: 0,
+                payPerUseAiCents: 0,
                 loaded: false,
             },
             quotaTierOrder: QUOTA_TIER_ORDER,
@@ -133,6 +137,8 @@
                     this.authResolved = true;
                 });
 
+                window.addEventListener('focus', () => this.onBillingWindowFocus());
+
                 // Тот же мост, что и в converterApp() — гость может принять/
                 // отклонить согласие ПОСЛЕ первой загрузки страницы.
                 window.addEventListener('cookie-consent-changed', (e) => {
@@ -165,6 +171,8 @@
                         avatarUrl: d.avatar_url,
                         plan: d.plan,
                     };
+                    // CNV-59: telegram_linked может ещё отсутствовать у php-dev → false.
+                    this.telegramLinked = d.telegram_linked === true;
                     this.loggedIn = true;
                 } catch (e) { /* сеть моргнула — остаёмся в состоянии "не вошли" */ }
             },
@@ -182,6 +190,9 @@
                         plan: d.plan,
                         tiers: d.tiers,
                         maxUploadBytes: d.max_upload_bytes,
+                        balanceCents: d.balance_cents ?? 0,
+                        payPerUseCents: d.pay_per_use_cents ?? 0,
+                        payPerUseAiCents: d.pay_per_use_ai_cents ?? 0,
                         loaded: true,
                     };
                 } catch (e) { /* сеть моргнула — виджет останется скрытым */ }
@@ -373,7 +384,18 @@
                         return;
                     }
                     if (res.status === 429) {
-                        this.error = I18N.errors.retryQuota;
+                        let detail = '';
+                        try {
+                            const d = await res.clone().json();
+                            detail = d.error || '';
+                        } catch (e) { /* ignore */ }
+                        if (detail === 'insufficient_balance') {
+                            this.errorInsufficientBalance = true;
+                            this.error = BILLING_I18N.insufficientBalance;
+                        } else {
+                            this.errorInsufficientBalance = false;
+                            this.error = I18N.errors.retryQuota;
+                        }
                         return;
                     }
                     if (!res.ok) {
@@ -469,6 +491,6 @@
                 this.loggedIn = false;
                 this.error = I18N.errors.sessionExpired;
             },
-        };
+        }, billingTopUpMixin());
     }
 </script>

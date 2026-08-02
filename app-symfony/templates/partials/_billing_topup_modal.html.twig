@@ -1,0 +1,102 @@
+{# CNV-59: модалка пополнения баланса / привязки Telegram.
+   Ожидает billingTopUpMixin() в родительском x-data (converterApp / dashboardApp / pricingApp). #}
+<div
+    x-show="topup.open"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center p-4"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="billing-topup-title"
+    @keydown.escape.window="closeTopUp()"
+>
+    <div class="absolute inset-0 bg-slate-900/40" @click="closeTopUp()"></div>
+    <div class="relative w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+        <div class="mb-4 flex items-start justify-between gap-3">
+            <div>
+                <h2 id="billing-topup-title" class="text-lg font-semibold text-slate-800" x-text="BILLING_I18N.topupTitle"></h2>
+                <p class="mt-1 text-sm text-slate-500" x-text="BILLING_I18N.topupSubtitle"></p>
+            </div>
+            <button
+                type="button"
+                @click="closeTopUp()"
+                class="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50"
+                x-text="BILLING_I18N.close"
+            ></button>
+        </div>
+
+        <template x-if="topup.error">
+            <div class="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" x-text="topup.error"></div>
+        </template>
+
+        {# Guest → login #}
+        <template x-if="topup.panel === 'login'">
+            <div class="space-y-3">
+                <p class="text-sm text-slate-600" x-text="BILLING_I18N.loginRequired"></p>
+                <a
+                    href="/login"
+                    class="inline-flex rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-600"
+                    x-text="BILLING_I18N.loginCta"
+                ></a>
+            </div>
+        </template>
+
+        {# User without Telegram → link CTA #}
+        <template x-if="topup.panel === 'link'">
+            <div class="space-y-3">
+                <p class="text-sm text-slate-600" x-text="BILLING_I18N.linkRequired"></p>
+                <button
+                    type="button"
+                    @click="startTelegramLink()"
+                    :disabled="topup.linkOpening"
+                    class="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-600 disabled:opacity-50"
+                >
+                    <span x-show="!topup.linkOpening" x-text="BILLING_I18N.linkCta"></span>
+                    <span x-show="topup.linkOpening" x-cloak x-text="BILLING_I18N.linkOpening"></span>
+                </button>
+            </div>
+        </template>
+
+        {# Link poll in progress #}
+        <template x-if="topup.panel === 'linking'">
+            <div class="space-y-3">
+                <p class="text-sm font-medium text-slate-700" x-text="BILLING_I18N.linkWaiting"></p>
+                <p x-show="topup.linkHint" class="text-sm text-slate-500" x-text="BILLING_I18N.linkHint"></p>
+                <button
+                    type="button"
+                    @click="stopLinkPoll(); topup.panel = 'link'"
+                    class="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                    x-text="BILLING_I18N.close"
+                ></button>
+            </div>
+        </template>
+
+        {# Packs #}
+        <template x-if="topup.panel === 'packs'">
+            <div>
+                <p class="mb-3 text-xs text-slate-400" x-text="ratesNoteText()"></p>
+                <template x-if="topup.loadingPacks">
+                    <p class="text-sm text-slate-500" x-text="BILLING_I18N.packsLoading"></p>
+                </template>
+                <template x-if="!topup.loadingPacks && topup.packsLoaded && topup.packs.length === 0">
+                    <p class="text-sm text-slate-500" x-text="BILLING_I18N.packsEmpty"></p>
+                </template>
+                <div class="space-y-2">
+                    <template x-for="pack in topup.packs" :key="pack.id">
+                        <button
+                            type="button"
+                            @click="buyPack(pack.id)"
+                            :disabled="!!topup.payingId"
+                            class="flex w-full items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-left text-sm hover:border-indigo-300 hover:bg-indigo-50 disabled:opacity-50"
+                        >
+                            <span class="font-medium text-slate-800" x-text="formatUsdCents(pack.usd_cents)"></span>
+                            <span class="text-slate-500">
+                                <span x-show="topup.payingId !== pack.id" x-text="BILLING_I18N.packStars.replace('%stars%', pack.stars)"></span>
+                                <span x-show="topup.payingId === pack.id" x-cloak x-text="BILLING_I18N.paying"></span>
+                            </span>
+                        </button>
+                    </template>
+                </div>
+            </div>
+        </template>
+    </div>
+</div>

@@ -86,6 +86,19 @@ final class MeControllerTest extends TestCase
         self::assertSame('free', $data['plan']);
         self::assertSame(0, $data['balance_cents']);
         self::assertTrue($data['is_admin']);
+        self::assertFalse($data['telegram_linked']);
+    }
+
+    public function testTelegramLinkedTrueWhenTelegramIdSet(): void
+    {
+        $user = $this->user(55);
+        $user->setTelegramId('123456789');
+
+        $res  = $this->controller($this->createStub(S3Client::class))->me($user);
+        $data = $this->payload($res);
+
+        self::assertTrue($data['telegram_linked']);
+        self::assertArrayNotHasKey('telegram_id', $data);
     }
 
     public function testProfileUrlNullWhenNoUsername(): void

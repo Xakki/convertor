@@ -45,6 +45,7 @@ class MeController extends AbstractController
             new OA\Property(property: 'plan', type: 'string', example: 'free'),
             new OA\Property(property: 'balance_cents', type: 'integer', example: 0),
             new OA\Property(property: 'is_admin', type: 'boolean', example: false),
+            new OA\Property(property: 'telegram_linked', type: 'boolean', example: false),
         ]),
     )]
     #[OA\Response(response: 401, description: 'Не аутентифицирован (гость/аноним)')]
@@ -59,14 +60,15 @@ class MeController extends AbstractController
         $userId   = $user->getId();
 
         return $this->json([
-            'id'            => $userId,
-            'name'          => $user->getFirstName() ?? $username ?? ('User ' . $userId),
-            'username'      => $username,
-            'profile_url'   => $username !== null && $username !== '' ? 'https://t.me/' . $username : null,
-            'avatar_url'    => $this->avatarDataUri($user->getPhotoUrl()),
-            'plan'          => $user->getPlan(),
-            'balance_cents' => $user->getBalanceCents(),
-            'is_admin'      => $user->isAdmin(),
+            'id'               => $userId,
+            'name'             => $user->getFirstName() ?? $username ?? ('User ' . $userId),
+            'username'         => $username,
+            'profile_url'      => $username !== null && $username !== '' ? 'https://t.me/' . $username : null,
+            'avatar_url'       => $this->avatarDataUri($user->getPhotoUrl()),
+            'plan'             => $user->getPlan(),
+            'balance_cents'    => $user->getBalanceCents(),
+            'is_admin'         => $user->isAdmin(),
+            'telegram_linked' => $user->getTelegramId() !== null && $user->getTelegramId() !== '',
         ]);
     }
 

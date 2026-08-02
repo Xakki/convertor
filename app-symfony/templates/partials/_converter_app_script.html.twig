@@ -143,7 +143,7 @@
     // остаются null, и ВСЯ ветвящаяся по ним логика ниже становится no-op —
     // поведение `/` не меняется.
     function converterApp(options = {}) {
-        return {
+        return Object.assign({
             lockedFrom: options.lockedFrom || null,
             lockedTo: options.lockedTo || null,
             lockedCategory: options.lockedCategory || null,
@@ -162,15 +162,20 @@
             submitting: false,
             downloading: false,
             error: '',
+            errorInsufficientBalance: false,
             dragging: false,
             job: { id: null, status: null, error: null },
             // home-13: виджет квот у формы (гость + залогиненный) — из GET
             // /api/v1/quota. loaded=false до первого ответа — виджет скрыт
             // (x-if="quota.loaded"), чтобы не мигать нулями до фактических данных.
+            // CNV-59: balance_cents + pay_per_use_* из того же ответа.
             quota: {
                 plan: null,
                 tiers: null,
                 maxUploadBytes: 0,
+                balanceCents: 0,
+                payPerUseCents: 0,
+                payPerUseAiCents: 0,
                 loaded: false,
             },
             quotaTierOrder: QUOTA_TIER_ORDER,
@@ -244,7 +249,11 @@
                     // залогиненного (guest-cookie аутентифицирует, но план/лимиты
                     // были бы гостевые, не реальные пользователя).
                     this.loadQuota();
+                    if (ok) this.refreshTelegramLinkFlag();
                 });
+
+                // CNV-59: после оплаты в Telegram — обновить баланс при возврате на вкладку.
+                window.addEventListener('focus', () => this.onBillingWindowFocus());
 
                 // Загружаем матрицу форматов (публичный эндпоинт)
                 fetch('/api/v1/formats')
@@ -807,6 +816,7 @@
             async submit() {
                 if (!this.canSubmit) return;
                 this.error = '';
+                this.errorInsufficientBalance = false;
                 this.submitting = true;
                 this.resetJob();
 
@@ -852,6 +862,7 @@
             },
 
             async errorMessage(res) {
+                this.errorInsufficientBalance = false;
                 const map = {
                     401: I18N.errors.status401,
                     413: I18N.errors.status413,
@@ -861,6 +872,11 @@
                 };
                 let detail = '';
                 try { const d = await res.json(); detail = d.error || ''; } catch (e) {}
+                // CNV-59: 429 insufficient_balance → отдельный текст + CTA пополнения.
+                if (res.status === 429 && detail === 'insufficient_balance') {
+                    this.errorInsufficientBalance = true;
+                    return BILLING_I18N.insufficientBalance;
+                }
                 return map[res.status] || (detail || I18N.errors.genericStatus.replace('%status%', res.status));
             },
 
@@ -1026,6 +1042,9 @@
                         plan: d.plan,
                         tiers: d.tiers,
                         maxUploadBytes: d.max_upload_bytes,
+                        balanceCents: d.balance_cents ?? 0,
+                        payPerUseCents: d.pay_per_use_cents ?? 0,
+                        payPerUseAiCents: d.pay_per_use_ai_cents ?? 0,
                         loaded: true,
                     };
                 } catch (e) { /* сеть моргнула — покажем при следующем refresh */ }
@@ -1113,6 +1132,6 @@
                 this.auth = { token: null, username: null };
                 localStorage.removeItem('jwt');
             },
-        };
+        }, billingTopUpMixin());
     }
 </script>

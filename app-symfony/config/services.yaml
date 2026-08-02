@@ -139,6 +139,12 @@ services:
             $redisFactory: '@app.redis.sessions'
             $ttl: 300
 
+    # One-time коды привязки Telegram к текущему User (CNV-59), тот же Redis db.
+    App\Service\Auth\TelegramLinkCodeStore:
+        arguments:
+            $redisFactory: '@app.redis.sessions'
+            $ttl: 300
+
     App\Service\Auth\RefreshCookieFactory:
         arguments:
             $name: '%env(REFRESH_COOKIE_NAME)%'
@@ -149,6 +155,11 @@ services:
     # Cookie `tg_login_nonce` (pairing+poll логин). Secure — та же семантика, что и
     # refresh-cookie; TTL = TTL кода (5 мин), задаётся в фабрике по умолчанию.
     App\Service\Auth\TelegramLoginNonceCookieFactory:
+        arguments:
+            $secure: '%env(bool:REFRESH_COOKIE_SECURE)%'
+
+    # Cookie `tg_link_nonce` (привязка Telegram, CNV-59). Отдельное имя от login.
+    App\Service\Auth\TelegramLinkNonceCookieFactory:
         arguments:
             $secure: '%env(bool:REFRESH_COOKIE_SECURE)%'
 
