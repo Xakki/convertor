@@ -159,15 +159,15 @@ final class SocialIdentityResolverDbTest extends KernelTestCase
                     // default (Version20260801214439 dropped column defaults;
                     // Doctrine still sends PHP defaults, this race stub does not).
                     $this->rawConn->insert('users', [
-                        'email'                 => $this->email,
-                        'plan'                  => 'free',
-                        'daily_conversions'     => 0,
-                        'daily_ai_conversions'  => 0,
-                        'quota_reset_at'        => $now,
-                        'created_at'            => $now,
-                        'is_active'             => 1,
-                        'is_guest'              => 0,
-                        'is_admin'              => 0,
+                        'email'                => $this->email,
+                        'plan'                 => 'free',
+                        'daily_conversions'    => 0,
+                        'daily_ai_conversions' => 0,
+                        'quota_reset_at'       => $now,
+                        'created_at'           => $now,
+                        'is_active'            => 1,
+                        'is_guest'             => 0,
+                        'is_admin'             => 0,
                     ]);
                     $this->winnerUserId = (int) $this->rawConn->lastInsertId();
 
