@@ -629,16 +629,40 @@ class ConversionController extends AbstractController
 
     #[Route('/quota', methods: ['GET'])]
     #[OA\Tag(name: 'Conversion')]
-    #[OA\Get(summary: 'Остаток квоты пользователя')]
+    #[OA\Get(summary: 'Остаток квоты пользователя (4 тира × 2 окна)')]
     #[OA\Response(
         response: 200,
-        description: 'Остаток дневной квоты + лимиты плана (home-13: данные для виджета квот на фронте)',
+        description: 'Пер-тир daily+monthly used/limit/remaining + max_upload_bytes (CNV-30)',
         content: new OA\JsonContent(properties: [
-            new OA\Property(property: 'conversions', type: 'integer', description: 'Остаток на сегодня, -1 = безлимит', example: 42),
-            new OA\Property(property: 'ai_conversions', type: 'integer', description: 'Остаток на сегодня, -1 = безлимит', example: 5),
-            new OA\Property(property: 'conversions_limit', type: 'integer', description: 'Дневной лимит плана, -1 = безлимит', example: 50),
-            new OA\Property(property: 'ai_conversions_limit', type: 'integer', description: 'Дневной AI-лимит плана, -1 = безлимит', example: 5),
             new OA\Property(property: 'plan', type: 'string', example: 'free'),
+            new OA\Property(
+                property: 'tiers',
+                type: 'object',
+                description: 'Ключи: light, medium, heavy, ai',
+                additionalProperties: new OA\AdditionalProperties(
+                    properties: [
+                        new OA\Property(
+                            property: 'daily',
+                            properties: [
+                                new OA\Property(property: 'used', type: 'integer', example: 0),
+                                new OA\Property(property: 'limit', type: 'integer', description: '-1 = безлимит', example: 3),
+                                new OA\Property(property: 'remaining', type: 'integer', example: 3),
+                            ],
+                            type: 'object',
+                        ),
+                        new OA\Property(
+                            property: 'monthly',
+                            properties: [
+                                new OA\Property(property: 'used', type: 'integer', example: 0),
+                                new OA\Property(property: 'limit', type: 'integer', description: '-1 = безлимит', example: 30),
+                                new OA\Property(property: 'remaining', type: 'integer', example: 30),
+                            ],
+                            type: 'object',
+                        ),
+                    ],
+                    type: 'object',
+                ),
+            ),
             new OA\Property(property: 'max_upload_bytes', type: 'integer', description: 'Макс. размер файла для загрузки (байт)', example: 52428800),
         ]),
     )]
@@ -659,12 +683,15 @@ class ConversionController extends AbstractController
         $quota                     = $this->quotaService->getRemainingQuota($user);
         $quota['max_upload_bytes'] = $this->quotaService->maxUploadBytes($user);
 
-        // Для гостя переопределяем: ai недоступен (0/0), план — "guest". Не полагаемся
-        // на User.plan гостя (free-fallback дал бы ai_conversions:1/лимит:1).
+        // Для гостя: ai/heavy недоступны (0/0), план — "guest".
         if (! $privileged) {
-            $quota['ai_conversions']       = 0;
-            $quota['ai_conversions_limit'] = 0;
-            $quota['plan']                 = 'guest';
+            $quota['plan'] = 'guest';
+            foreach (['ai', 'heavy'] as $tierKey) {
+                $quota['tiers'][$tierKey]['daily']['limit']       = 0;
+                $quota['tiers'][$tierKey]['daily']['remaining']   = 0;
+                $quota['tiers'][$tierKey]['monthly']['limit']     = 0;
+                $quota['tiers'][$tierKey]['monthly']['remaining'] = 0;
+            }
         }
 
         return $this->json($quota);

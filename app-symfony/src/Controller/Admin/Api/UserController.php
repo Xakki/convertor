@@ -131,17 +131,22 @@ class UserController extends AbstractController
     private function serialize(User $user): array
     {
         return [
-            'id'                 => $user->getId(),
-            'email'              => $user->getEmail(),
-            'telegramId'         => $user->getTelegramId(),
-            'plan'               => $user->getPlan(),
-            'isActive'           => $user->isActive(),
-            'isGuest'            => $user->isGuest(),
-            'isAdmin'            => $user->isAdmin(),
-            'dailyConversions'   => $user->getDailyConversions(),
-            'dailyAiConversions' => $user->getDailyAiConversions(),
-            'quotaResetAt'       => $user->getQuotaResetAt()->format(\DateTimeInterface::ATOM),
-            'createdAt'          => $user->getCreatedAt()->format(\DateTimeInterface::ATOM),
+            'id'            => $user->getId(),
+            'email'         => $user->getEmail(),
+            'telegramId'    => $user->getTelegramId(),
+            'plan'          => $user->getPlan(),
+            'isActive'      => $user->isActive(),
+            'isGuest'       => $user->isGuest(),
+            'isAdmin'       => $user->isAdmin(),
+            'quotaCounters' => [
+                'light'  => ['daily' => $user->getLightDailyConversions(), 'monthly' => $user->getLightMonthlyConversions()],
+                'medium' => ['daily' => $user->getMediumDailyConversions(), 'monthly' => $user->getMediumMonthlyConversions()],
+                'heavy'  => ['daily' => $user->getHeavyDailyConversions(), 'monthly' => $user->getHeavyMonthlyConversions()],
+                'ai'     => ['daily' => $user->getAiDailyConversions(), 'monthly' => $user->getAiMonthlyConversions()],
+            ],
+            'quotaResetAt'   => $user->getQuotaResetAt()->format(\DateTimeInterface::ATOM),
+            'monthlyResetAt' => $user->getMonthlyResetAt()->format(\DateTimeInterface::ATOM),
+            'createdAt'      => $user->getCreatedAt()->format(\DateTimeInterface::ATOM),
         ];
     }
 }

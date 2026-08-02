@@ -13,18 +13,26 @@
       <a href="/pricing.html" class="text-sm text-zinc-400 hover:text-white transition-colors">Тарифы</a>
       <a href="/dashboard.html" class="text-sm text-zinc-400 hover:text-white transition-colors">История</a>
 
-      <!-- Quota badge (authenticated) -->
+      <!-- Quota badge (authenticated) — light tier, daily window (CNV-30) -->
       <template x-if="$store.auth.isAuthenticated">
-        <div id="quota-bar"
-          hx-get="/api/v1/quota"
-          hx-trigger="load, auth:login from:document"
-          hx-headers='js:{"Authorization": "Bearer " + (localStorage.getItem("jwt_token") || "")}'
+        <div
+          id="quota-bar"
+          x-data="quotaBar()"
+          x-init="load()"
+          @auth:login.window="load()"
           class="hidden items-center gap-2 rounded-full bg-zinc-800 px-3 py-1 text-xs text-zinc-300 md:flex"
-          aria-label="Квота конвертаций">
-          <span class="text-zinc-500">Квота:</span>
-          <span class="font-medium text-indigo-400" x-text="$store.auth.quota?.used || 0"></span>
-          <span class="text-zinc-500">/</span>
-          <span x-text="$store.auth.quota?.limit === -1 ? '∞' : ($store.auth.quota?.limit || 10)"></span>
+          aria-label="Квота конвертаций (лёгкие, день)">
+          <span class="text-zinc-500">Лёгкие:</span>
+          <template x-if="loaded">
+            <span class="font-medium tabular-nums">
+              <span class="text-indigo-400" x-text="tiers?.light?.daily?.used ?? 0"></span>
+              <span class="text-zinc-500">/</span>
+              <span x-text="limitDisplay(tiers?.light?.daily?.limit)"></span>
+            </span>
+          </template>
+          <template x-if="!loaded">
+            <span class="h-3 w-8 animate-pulse rounded bg-zinc-700"></span>
+          </template>
         </div>
       </template>
 

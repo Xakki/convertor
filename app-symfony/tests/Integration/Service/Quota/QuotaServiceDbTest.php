@@ -5,23 +5,17 @@ declare(strict_types=1);
 namespace App\Tests\Integration\Service\Quota;
 
 use App\Entity\User;
+use App\Enum\FileCategory;
 use App\Repository\PlanRepository;
 use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\Attributes\Group;
 use Psr\Log\NullLogger;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
+use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 
 /**
- * charge()/refund() против РЕАЛЬНОЙ БД (convertor-test): raw-UPDATE
- * (`= col+1` / `= GREATEST(0, col-1)`) + `em->refresh()`. Юнит-тест мокает
- * Connection и проверяет лишь выбор SQL — здесь проверяем фактический эффект:
- *  - счётчик в строке БД реально меняется на нужной колонке;
- *  - клемп на 0 (`GREATEST`) отрабатывает на уровне БД;
- *  - refresh() синхронизирует in-memory User со строкой БД (главное в фиче B).
- *
- * charge/refund не зовут planRepo/logger/appEnv, поэтому собираем сервис из
- * реального EM + stub-репозитория + NullLogger + appEnv='prod'.
+ * charge()/refund() против реальной БД: raw-UPDATE + refresh().
  */
 #[Group('integration')]
 final class QuotaServiceDbTest extends KernelTestCase
@@ -45,69 +39,120 @@ final class QuotaServiceDbTest extends KernelTestCase
         );
     }
 
-    public function testChargeIncrementsRegularCounterAndSyncsInMemory(): void
+    public function testChargeIncrementsLightTierAndSyncsInMemory(): void
     {
-        $user = $this->persistUser(dailyConversions: 0, dailyAi: 0);
+        $user = $this->persistUser();
 
-        $this->service->charge($user, false);
+        $this->service->charge($user, FileCategory::Document, false);
 
-        // refresh() синхронизировал in-memory снимок.
-        self::assertSame(1, $user->getDailyConversions(), 'in-memory синхронизирован');
-        self::assertSame(0, $user->getDailyAiConversions());
-        // И строка в БД реально инкрементирована.
-        self::assertSame([1, 0], $this->dbCounters($user->getId()));
+        self::assertSame(1, $user->getLightDailyConversions());
+        self::assertSame(1, $user->getLightMonthlyConversions());
+        self::assertSame([1, 1], $this->dbLightCounters($user->getId()));
 
         $this->removeUser($user);
     }
 
-    public function testChargeIncrementsAiCounterOnly(): void
+    public function testChargeIncrementsAiTierOnly(): void
     {
-        $user = $this->persistUser(dailyConversions: 0, dailyAi: 0);
+        $user = $this->persistUser();
 
-        $this->service->charge($user, true);
+        $this->service->charge($user, FileCategory::Audio, true);
 
-        self::assertSame(0, $user->getDailyConversions());
-        self::assertSame(1, $user->getDailyAiConversions());
-        self::assertSame([0, 1], $this->dbCounters($user->getId()));
+        self::assertSame(1, $user->getAiDailyConversions());
+        self::assertSame(1, $user->getAiMonthlyConversions());
+        self::assertSame(0, $user->getMediumDailyConversions());
 
         $this->removeUser($user);
     }
 
-    public function testRefundDecrementsRegularCounter(): void
+    public function testRefundDecrementsMediumTier(): void
     {
-        $user = $this->persistUser(dailyConversions: 3, dailyAi: 2);
+        $user = $this->persistUser();
+        $user->setMediumDailyConversions(3)->setMediumMonthlyConversions(2);
+        $this->em->flush();
 
-        $this->service->refund($user, false);
+        $this->service->refund($user, FileCategory::Audio, false);
 
-        self::assertSame(2, $user->getDailyConversions());
-        self::assertSame(2, $user->getDailyAiConversions());
-        self::assertSame([2, 2], $this->dbCounters($user->getId()));
+        self::assertSame(2, $user->getMediumDailyConversions());
+        self::assertSame(1, $user->getMediumMonthlyConversions());
 
         $this->removeUser($user);
     }
 
     public function testRefundClampsAtZeroInDb(): void
     {
-        // Счётчики уже на 0 → GREATEST(0, 0-1)=0, refund — no-op на обеих колонках.
-        $user = $this->persistUser(dailyConversions: 0, dailyAi: 0);
+        $user = $this->persistUser();
 
-        $this->service->refund($user, false);
-        $this->service->refund($user, true);
+        $this->service->refund($user, FileCategory::Document, false);
 
-        self::assertSame(0, $user->getDailyConversions());
-        self::assertSame(0, $user->getDailyAiConversions());
-        self::assertSame([0, 0], $this->dbCounters($user->getId()));
+        self::assertSame(0, $user->getLightDailyConversions());
+        self::assertSame(0, $user->getLightMonthlyConversions());
 
         $this->removeUser($user);
     }
 
-    private function persistUser(int $dailyConversions, int $dailyAi): User
+    public function testCheckThrows429AtDailyLimitAgainstDb(): void
+    {
+        $user = $this->persistUser();
+        $user->setLightDailyConversions(3);
+        $this->em->flush();
+
+        try {
+            $this->service->check($user, FileCategory::Document, false);
+            self::fail('expected daily quota 429');
+        } catch (TooManyRequestsHttpException $e) {
+            self::assertStringContainsString('Daily light', $e->getMessage());
+        }
+
+        $this->removeUser($user);
+    }
+
+    public function testCheckThrows429AtMonthlyLimitWhenDailyHasHeadroom(): void
+    {
+        $user = $this->persistUser();
+        $user->setLightDailyConversions(0)->setLightMonthlyConversions(30);
+        $this->em->flush();
+
+        try {
+            $this->service->check($user, FileCategory::Document, false);
+            self::fail('expected monthly quota 429');
+        } catch (TooManyRequestsHttpException $e) {
+            self::assertStringContainsString('Monthly light', $e->getMessage());
+        }
+
+        $this->removeUser($user);
+    }
+
+    public function testChargeIncrementsBothWindowsAtomicallyInDb(): void
+    {
+        $user = $this->persistUser();
+
+        $this->service->charge($user, FileCategory::Image, false);
+
+        self::assertSame([1, 1], $this->dbMediumCounters($user->getId()));
+
+        $this->removeUser($user);
+    }
+
+    /**
+     * @return array{0: int, 1: int} [medium_daily, medium_monthly]
+     */
+    private function dbMediumCounters(?int $id): array
+    {
+        $row = $this->em->getConnection()->fetchAssociative(
+            'SELECT medium_daily_conversions, medium_monthly_conversions FROM users WHERE id = :id',
+            ['id' => $id],
+        );
+        self::assertIsArray($row);
+
+        return [(int) $row['medium_daily_conversions'], (int) $row['medium_monthly_conversions']];
+    }
+
+    private function persistUser(): User
     {
         $user = (new User())
             ->setGuestId('itest-quota-' . bin2hex(random_bytes(8)))
-            ->setIsGuest(true)
-            ->setDailyConversions($dailyConversions)
-            ->setDailyAiConversions($dailyAi);
+            ->setIsGuest(true);
         $this->em->persist($user);
         $this->em->flush();
 
@@ -115,20 +160,17 @@ final class QuotaServiceDbTest extends KernelTestCase
     }
 
     /**
-     * Читает счётчики строки прямо из БД (в обход identity-map), чтобы отделить
-     * реальный эффект UPDATE от in-memory состояния.
-     *
-     * @return array{0: int, 1: int} [daily_conversions, daily_ai_conversions]
+     * @return array{0: int, 1: int} [light_daily, light_monthly]
      */
-    private function dbCounters(?int $id): array
+    private function dbLightCounters(?int $id): array
     {
         $row = $this->em->getConnection()->fetchAssociative(
-            'SELECT daily_conversions, daily_ai_conversions FROM users WHERE id = :id',
+            'SELECT light_daily_conversions, light_monthly_conversions FROM users WHERE id = :id',
             ['id' => $id],
         );
         self::assertIsArray($row);
 
-        return [(int) $row['daily_conversions'], (int) $row['daily_ai_conversions']];
+        return [(int) $row['light_daily_conversions'], (int) $row['light_monthly_conversions']];
     }
 
     private function removeUser(User $user): void

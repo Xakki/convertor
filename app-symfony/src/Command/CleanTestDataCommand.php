@@ -43,11 +43,9 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  * они тоже входят в общий вайп (согласованная семантика: остаётся только
  * сама users-строка админа).
  *
- * Квота (`users.daily_conversions`/`daily_ai_conversions`) живёт КОЛОНКАМИ в
- * `users` (см. {@see \App\Service\Quota\QuotaService::applyDelta} — raw UPDATE
- * users, без KeyDB) — у не-админов она вайпается вместе со строкой пользователя
- * автоматически; отдельного шага сброса в KeyDB НЕТ и не нужно (KeyDB-очереди/
- * сессии эта команда не трогает вообще).
+ * Квота (пер-тир daily/monthly счётчики в колонках `users`) живёт в `users` и
+ * вайпается вместе с не-админами автоматически; отдельного шага сброса в KeyDB
+ * НЕТ и не нужно (KeyDB-очереди/сессии эта команда не трогает вообще).
  */
 #[AsCommand(
     name: 'app:clean-test-data',

@@ -15,6 +15,7 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Security\Http\Attribute\IsGranted;
 
@@ -39,9 +40,8 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
  * charge/refund должны остаться симметричны (submit charge → fail#1 refund →
  * requeue re-charge → fail#2 refund ИЛИ success). Без re-charge успешный
  * requeue не учитывался бы в дневном лимите — бесплатная конверсия.
- * Re-charge — ПРИНУДИТЕЛЬНЫЙ (`QuotaService::charge()`, не `check()`+`charge()`):
- * оператор не должен получать отказ из-за того, что юзер тем временем упёрся
- * в лимит — это восстановление после сбоя инфраструктуры, не новый запрос.
+ * Re-charge — через `check()` + `charge()` (как ConversionManager): admin requeue
+ * не может overshoot квоту; при исчерпанном лимите — 429 с сообщением check().
  */
 #[Route('/api/v1/admin/dead-letter')]
 #[IsGranted('ROLE_ADMIN')]
@@ -128,11 +128,25 @@ final class DlqController extends AbstractController
                 ], Response::HTTP_CONFLICT);
             }
 
+            try {
+                $this->quotaService->check(
+                    $conversion->getUser(),
+                    $conversion->getCategory(),
+                    $conversion->isAi(),
+                );
+            } catch (TooManyRequestsHttpException $e) {
+                return $this->json(['error' => $e->getMessage()], Response::HTTP_TOO_MANY_REQUESTS);
+            }
+
             $conversion->setStatus(ConversionStatus::Pending);
             $conversion->setErrorMessage(null);
             $conversion->setProcessingMs(null);
             $conversion->incrementAttempt();
-            $this->quotaService->charge($conversion->getUser(), $conversion->isAi());
+            $this->quotaService->charge(
+                $conversion->getUser(),
+                $conversion->getCategory(),
+                $conversion->isAi(),
+            );
 
             return $conversion;
         });
@@ -153,7 +167,11 @@ final class DlqController extends AbstractController
             // symmetric; the row is retryable via the same endpoint, not stuck.
             $this->em->wrapInTransaction(function () use ($conversion): void {
                 $conversion->setStatus(ConversionStatus::Failed);
-                $this->quotaService->refund($conversion->getUser(), $conversion->isAi());
+                $this->quotaService->refund(
+                    $conversion->getUser(),
+                    $conversion->getCategory(),
+                    $conversion->isAi(),
+                );
             });
 
             return $this->json([

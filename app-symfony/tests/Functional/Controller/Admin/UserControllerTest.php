@@ -104,8 +104,10 @@ final class UserControllerTest extends WebTestCase
         $client = static::createClient();
         $token  = $this->adminToken();
         $target = $this->persistUser();
-        $target->setDailyConversions(5)->setDailyAiConversions(3)
-            ->setQuotaResetAt(new \DateTimeImmutable('-2 days'));
+        $target->setLightDailyConversions(5)->setAiDailyConversions(3)
+            ->setLightMonthlyConversions(2)
+            ->setQuotaResetAt(new \DateTimeImmutable('-2 days'))
+            ->setMonthlyResetAt(new \DateTimeImmutable('-31 days'));
         $this->flush();
         $id = $target->getId();
 
@@ -113,13 +115,77 @@ final class UserControllerTest extends WebTestCase
         self::assertResponseIsSuccessful();
 
         $fresh = $this->reload($id);
-        self::assertSame(0, $fresh->getDailyConversions());
-        self::assertSame(0, $fresh->getDailyAiConversions());
+        self::assertSame(0, $fresh->getLightDailyConversions());
+        self::assertSame(0, $fresh->getAiDailyConversions());
+        self::assertSame(0, $fresh->getLightMonthlyConversions());
         self::assertSame(
             (new \DateTimeImmutable())->format('Y-m-d'),
             $fresh->getQuotaResetAt()->format('Y-m-d'),
             'quotaResetAt подвинут на сегодня',
         );
+        self::assertSame(
+            (new \DateTimeImmutable())->format('Y-m-d'),
+            $fresh->getMonthlyResetAt()->format('Y-m-d'),
+            'monthlyResetAt подвинут на сегодня',
+        );
+    }
+
+    public function testResetQuotaResponseIncludesTierCounterShape(): void
+    {
+        $client = static::createClient();
+        $token  = $this->adminToken();
+        $target = $this->persistUser();
+        $target->setLightDailyConversions(4)->setAiMonthlyConversions(2);
+        $this->flush();
+        $id = $target->getId();
+
+        $client->request('POST', "/api/v1/admin/users/{$id}/reset-quota", server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertIsArray($data);
+        $this->assertQuotaCountersShape($data['quotaCounters']);
+        self::assertSame(0, $data['quotaCounters']['light']['daily']);
+        self::assertSame(0, $data['quotaCounters']['ai']['monthly']);
+    }
+
+    public function testListItemsExposeQuotaCountersShape(): void
+    {
+        $client = static::createClient();
+        $token  = $this->adminToken();
+        $target = $this->persistUser();
+        $target->setMediumDailyConversions(1)->setHeavyMonthlyConversions(2);
+        $this->flush();
+
+        $client->request('GET', '/api/v1/admin/users', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertIsArray($data);
+        self::assertNotEmpty($data['items']);
+
+        $item = null;
+        foreach ($data['items'] as $row) {
+            if (($row['id'] ?? null) === $target->getId()) {
+                $item = $row;
+                break;
+            }
+        }
+        self::assertIsArray($item);
+        $this->assertQuotaCountersShape($item['quotaCounters']);
+        self::assertSame(1, $item['quotaCounters']['medium']['daily']);
+        self::assertSame(2, $item['quotaCounters']['heavy']['monthly']);
+    }
+
+    /**
+     * @param array<string, mixed> $counters
+     */
+    private function assertQuotaCountersShape(array $counters): void
+    {
+        foreach (['light', 'medium', 'heavy', 'ai'] as $tier) {
+            self::assertArrayHasKey($tier, $counters);
+            self::assertSame(['daily', 'monthly'], array_keys($counters[$tier]));
+        }
     }
 
     public function testChangePlanValidatesAndPersists(): void

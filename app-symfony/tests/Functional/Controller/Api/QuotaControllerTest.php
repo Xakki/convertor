@@ -10,17 +10,11 @@ use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 /**
- * home-13: GET /api/v1/quota для залогиненного юзера — проверяем НОВЫЕ поля
- * (conversions_limit, ai_conversions_limit, max_upload_bytes), добавленные
- * для виджета квот на фронте. Гостевая ветка (форс ai=0/0, plan=guest) —
- * покрыта отдельно в GuestAuthenticationTest.
- *
- * Свежий User → plan='free' (default), сид из миграции Version20260419000001:
- * free = daily_limit 2, daily_ai_limit 1, max_file_size_mb 50.
+ * GET /api/v1/quota — 4 тира × 2 окна (CNV-30).
  */
 final class QuotaControllerTest extends WebTestCase
 {
-    public function testRegisteredUserGetsLimitsAndMaxUploadBytes(): void
+    public function testRegisteredUserGetsTierLimitsAndMaxUploadBytes(): void
     {
         $client = static::createClient();
         $em     = static::getContainer()->get(EntityManagerInterface::class);
@@ -42,25 +36,33 @@ final class QuotaControllerTest extends WebTestCase
         self::assertIsArray($data);
 
         self::assertSame('free', $data['plan']);
-        self::assertSame(2, $data['conversions']);
-        self::assertSame(1, $data['ai_conversions']);
-        self::assertSame(2, $data['conversions_limit']);
-        self::assertSame(1, $data['ai_conversions_limit']);
+        self::assertArrayHasKey('tiers', $data);
+        self::assertSame(3, $data['tiers']['light']['daily']['remaining']);
+        self::assertSame(30, $data['tiers']['light']['monthly']['limit']);
+        self::assertSame(2, $data['tiers']['medium']['daily']['remaining']);
+        self::assertSame(0, $data['tiers']['heavy']['daily']['limit']);
+        self::assertSame(0, $data['tiers']['ai']['daily']['limit']);
         self::assertSame(50 * 1024 * 1024, $data['max_upload_bytes']);
+
+        foreach (['light', 'medium', 'heavy', 'ai'] as $tier) {
+            self::assertArrayHasKey($tier, $data['tiers']);
+            foreach (['daily', 'monthly'] as $window) {
+                self::assertArrayHasKey($window, $data['tiers'][$tier]);
+                foreach (['used', 'limit', 'remaining'] as $field) {
+                    self::assertArrayHasKey($field, $data['tiers'][$tier][$window], "{$tier}.{$window}.{$field}");
+                }
+            }
+        }
 
         $em->remove($user);
         $em->flush();
     }
 
-    public function testUnlimitedPlanRendersMinusOneLimits(): void
+    public function testUnlimitedPlanRendersMinusOneOnLightTier(): void
     {
         $client = static::createClient();
         $em     = static::getContainer()->get(EntityManagerInterface::class);
 
-        // 'pro' — засеян той же миграцией с daily_limit=-1 (безлимит обычных
-        // конверсий), daily_ai_limit=100 (НЕ безлимит) — так тест покрывает и
-        // -1-рендер, и конечный лимит в одном запросе. Если сид поменяется,
-        // тест упадёт явно, а не молча.
         $user = (new User())->setPlan('pro');
         $em->persist($user);
         $em->flush();
@@ -75,10 +77,9 @@ final class QuotaControllerTest extends WebTestCase
         self::assertIsArray($data);
 
         self::assertSame('pro', $data['plan']);
-        self::assertSame(-1, $data['conversions']);
-        self::assertSame(100, $data['ai_conversions']);
-        self::assertSame(-1, $data['conversions_limit']);
-        self::assertSame(100, $data['ai_conversions_limit']);
+        self::assertSame(-1, $data['tiers']['light']['daily']['remaining']);
+        self::assertSame(-1, $data['tiers']['light']['monthly']['limit']);
+        self::assertSame(80, $data['tiers']['ai']['daily']['limit']);
 
         $em->remove($user);
         $em->flush();

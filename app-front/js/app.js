@@ -133,6 +133,85 @@ function formatStatus(status) {
 }
 
 /**
+ * CNV-30: quota bar widget — 4 tiers × daily/monthly windows from GET /api/v1/quota.
+ * @returns {object} Alpine.js component
+ */
+function quotaBar() {
+  const TIER_ORDER = ['light', 'medium', 'heavy', 'ai'];
+  const TIER_LABELS = {
+    light: 'Лёгкие',
+    medium: 'Средние',
+    heavy: 'Видео',
+    ai: 'AI',
+  };
+  const PLAN_LABELS = {
+    free: 'Free',
+    basic: 'Basic',
+    pro: 'Pro',
+    guest: 'Гость',
+  };
+
+  return {
+    loaded: false,
+    plan: null,
+    tiers: null,
+    maxUploadBytes: 0,
+    tierOrder: TIER_ORDER,
+
+    get planLabel() {
+      return PLAN_LABELS[this.plan] || this.plan || '';
+    },
+
+    tierLabel(tier) {
+      return TIER_LABELS[tier] || tier;
+    },
+
+    limitDisplay(limit) {
+      return limit === -1 ? '∞' : (limit ?? 0);
+    },
+
+    windowLine(tier, win) {
+      if (!win) return '—';
+      if (win.limit === -1) return win.used + ' / ∞';
+      if (win.limit === 0 && (tier === 'heavy' || tier === 'ai')) return '0 / 0';
+      return win.used + ' / ' + win.limit;
+    },
+
+    isTierLocked(tier) {
+      if (this.plan !== 'guest') return false;
+      if (tier !== 'heavy' && tier !== 'ai') return false;
+      const win = this.tiers?.[tier]?.daily;
+      return win && win.limit === 0;
+    },
+
+    dailyPercent(tier) {
+      const win = this.tiers?.[tier]?.daily;
+      if (!win || win.limit <= 0) return 0;
+      if (win.limit === -1) return win.used > 0 ? 100 : 0;
+      return Math.min(100, Math.round((win.used / win.limit) * 100));
+    },
+
+    humanSize(bytes) {
+      return formatFileSize(bytes ?? 0);
+    },
+
+    async load() {
+      try {
+        const res = await apiFetch('/api/v1/quota');
+        if (!res.ok) return;
+        const d = await res.json();
+        this.plan = d.plan;
+        this.tiers = d.tiers;
+        this.maxUploadBytes = d.max_upload_bytes;
+        this.loaded = true;
+      } catch (e) {
+        /* виджет остаётся в skeleton-состоянии */
+      }
+    },
+  };
+}
+
+/**
  * Format date to locale string
  * @param {string} dateStr
  * @returns {string}

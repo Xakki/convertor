@@ -21,10 +21,28 @@ class Plan
     private string $name;
 
     #[ORM\Column(type: 'integer')]
-    private int $dailyLimit;
+    private int $lightDailyLimit;
 
     #[ORM\Column(type: 'integer')]
-    private int $dailyAiLimit;
+    private int $lightMonthlyLimit;
+
+    #[ORM\Column(type: 'integer')]
+    private int $mediumDailyLimit;
+
+    #[ORM\Column(type: 'integer')]
+    private int $mediumMonthlyLimit;
+
+    #[ORM\Column(type: 'integer')]
+    private int $heavyDailyLimit;
+
+    #[ORM\Column(type: 'integer')]
+    private int $heavyMonthlyLimit;
+
+    #[ORM\Column(type: 'integer')]
+    private int $aiDailyLimit;
+
+    #[ORM\Column(type: 'integer')]
+    private int $aiMonthlyLimit;
 
     #[ORM\Column(type: 'integer')]
     private int $maxFileSizeMb;
@@ -52,26 +70,98 @@ class Plan
         return $this;
     }
 
-    public function getDailyLimit(): int
+    public function getLightDailyLimit(): int
     {
-        return $this->dailyLimit;
+        return $this->lightDailyLimit;
     }
 
-    public function setDailyLimit(int $dailyLimit): self
+    public function setLightDailyLimit(int $lightDailyLimit): self
     {
-        $this->dailyLimit = $dailyLimit;
+        $this->lightDailyLimit = $lightDailyLimit;
 
         return $this;
     }
 
-    public function getDailyAiLimit(): int
+    public function getLightMonthlyLimit(): int
     {
-        return $this->dailyAiLimit;
+        return $this->lightMonthlyLimit;
     }
 
-    public function setDailyAiLimit(int $dailyAiLimit): self
+    public function setLightMonthlyLimit(int $lightMonthlyLimit): self
     {
-        $this->dailyAiLimit = $dailyAiLimit;
+        $this->lightMonthlyLimit = $lightMonthlyLimit;
+
+        return $this;
+    }
+
+    public function getMediumDailyLimit(): int
+    {
+        return $this->mediumDailyLimit;
+    }
+
+    public function setMediumDailyLimit(int $mediumDailyLimit): self
+    {
+        $this->mediumDailyLimit = $mediumDailyLimit;
+
+        return $this;
+    }
+
+    public function getMediumMonthlyLimit(): int
+    {
+        return $this->mediumMonthlyLimit;
+    }
+
+    public function setMediumMonthlyLimit(int $mediumMonthlyLimit): self
+    {
+        $this->mediumMonthlyLimit = $mediumMonthlyLimit;
+
+        return $this;
+    }
+
+    public function getHeavyDailyLimit(): int
+    {
+        return $this->heavyDailyLimit;
+    }
+
+    public function setHeavyDailyLimit(int $heavyDailyLimit): self
+    {
+        $this->heavyDailyLimit = $heavyDailyLimit;
+
+        return $this;
+    }
+
+    public function getHeavyMonthlyLimit(): int
+    {
+        return $this->heavyMonthlyLimit;
+    }
+
+    public function setHeavyMonthlyLimit(int $heavyMonthlyLimit): self
+    {
+        $this->heavyMonthlyLimit = $heavyMonthlyLimit;
+
+        return $this;
+    }
+
+    public function getAiDailyLimit(): int
+    {
+        return $this->aiDailyLimit;
+    }
+
+    public function setAiDailyLimit(int $aiDailyLimit): self
+    {
+        $this->aiDailyLimit = $aiDailyLimit;
+
+        return $this;
+    }
+
+    public function getAiMonthlyLimit(): int
+    {
+        return $this->aiMonthlyLimit;
+    }
+
+    public function setAiMonthlyLimit(int $aiMonthlyLimit): self
+    {
+        $this->aiMonthlyLimit = $aiMonthlyLimit;
 
         return $this;
     }

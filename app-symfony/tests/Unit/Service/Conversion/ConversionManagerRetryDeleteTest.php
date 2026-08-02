@@ -46,8 +46,8 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         $source = $this->seedSource($owner, 'inputs/2026/08/01/aabbccddeeff0011.jpg');
 
         $quota = $this->createMock(QuotaService::class);
-        $quota->expects($this->once())->method('check')->with($owner, false);
-        $quota->expects($this->once())->method('charge')->with($owner, false);
+        $quota->expects($this->once())->method('check')->with($owner, FileCategory::Image, false);
+        $quota->expects($this->once())->method('charge')->with($owner, FileCategory::Image, false);
 
         $copied   = [];
         $s3Client = $this->createMock(S3Client::class);

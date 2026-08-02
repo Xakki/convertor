@@ -30,11 +30,8 @@ async function onTelegramAuth(user) {
       if (modalData?.close) modalData.close();
     }
 
-    // Dispatch event for components to react
+    // Reload quota widgets after login (header badge listens on auth:login)
     document.dispatchEvent(new CustomEvent('auth:login', { detail: data.user }));
-
-    // Reload HTMX components that depend on auth
-    htmx.trigger('#quota-bar', 'load');
 
   } catch (err) {
     console.error('Telegram auth error:', err);

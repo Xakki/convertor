@@ -108,7 +108,7 @@ class ConversionManager
         $this->assertWithinSizeLimit($user, $sizeBytes);
         $this->assertMimeAllowed($mimeType, $category, $ocr);
 
-        $this->quotaService->check($user, $isAi);
+        $this->quotaService->check($user, $category, $isAi);
 
         $storagePath = $this->storeInput($file, $fromFormat, $mimeType);
 
@@ -151,7 +151,7 @@ class ConversionManager
         // it only ever fires for a job that was successfully enqueued here, so the
         // two can never double-count.
         $this->dispatch($conversion);
-        $this->quotaService->charge($user, $isAi);
+        $this->quotaService->charge($user, $category, $isAi);
 
         return $conversion;
     }
@@ -190,7 +190,7 @@ class ConversionManager
             throw new ConversionDisabledException('Конвертация временно отключена');
         }
 
-        $this->quotaService->check($user, $isAi);
+        $this->quotaService->check($user, $category, $isAi);
 
         // Серверная копия в новый ключ — delete одной строки не затронет другую.
         $dstKey = 'inputs/' . date('Y/m/d') . '/' . bin2hex(random_bytes(16)) . '.' . $fromFormat;
@@ -224,7 +224,7 @@ class ConversionManager
         $this->em->flush();
 
         $this->dispatch($conversion);
-        $this->quotaService->charge($user, $isAi);
+        $this->quotaService->charge($user, $category, $isAi);
 
         return $conversion;
     }

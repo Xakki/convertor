@@ -95,7 +95,11 @@ final class ConversionResultPersister
             // сообщение переставится, а idempotency-guard выше (статус ещё не
             // терминальный) пропустит refund повторно → двойной возврат квоты.
             $em->wrapInTransaction(function () use ($em, $conversion): void {
-                $this->quotaService->refund($conversion->getUser(), $conversion->isAi());
+                $this->quotaService->refund(
+                    $conversion->getUser(),
+                    $conversion->getCategory(),
+                    $conversion->isAi(),
+                );
                 $em->flush();
             });
 

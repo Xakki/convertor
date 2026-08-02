@@ -36,7 +36,7 @@ description: Единый контракт редизайна auth/доступ�
 ## Rate-limit и размеры (зона A)
 - `config/packages/rate_limiter.yaml`: лимитер для guest по IP (например `anon_convert`: sliding_window, N/час — согласовать значение, стартовое N=20/час). Применять в `convert` для `ROLE_GUEST`.
 - Размер файла: free = 50MB (как в CLAUDE.md). Проверка в `convert` (уже может быть — сверить).
-- `GET /api/v1/quota` для guest: вернуть гостевые остатки (не 401). Форма как сейчас `{conversions, ai_conversions, plan}` — для guest `plan: "guest"`, `ai_conversions: 0`.
+- `GET /api/v1/quota` для guest: вернуть гостевые остатки (не 401). Форма CNV-30: `{ plan, tiers: { light|medium|heavy|ai: { daily|monthly: { used, limit, remaining } } }, max_upload_bytes }` — для guest `plan: "guest"`, AI-тир с нулевыми лимитами.
 
 ## Anon status/download (зона A, читает C)
 - `GET /api/v1/convert/{id}/status` и `/download`: заменить проверку владельца на `conversion.user.id === currentUser.id`, где currentUser может быть guest (owner-check работает и для guest, т.к. guest владеет своей конвертацией). Т.е. НЕ добавлять отдельный signed-token — доступ по owner=guest через ту же guest-cookie-аутентификацию.

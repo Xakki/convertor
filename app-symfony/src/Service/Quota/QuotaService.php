@@ -6,6 +6,8 @@ namespace App\Service\Quota;
 
 use App\Entity\Plan;
 use App\Entity\User;
+use App\Enum\FileCategory;
+use App\Enum\QuotaTier;
 use App\Repository\PlanRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -14,19 +16,39 @@ use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 class QuotaService
 {
     /**
-     * Last-resort daily limits used only when the `plans` table is unseeded
-     * (the migration seeds free/basic/pro). -1 = unlimited.
+     * Last-resort tier limits (daily/monthly) when the `plans` table is unseeded.
+     * Mirrors the free tier from CNV-30. -1 = unlimited.
      *
-     * @var array<string, int>
+     * @var array<string, array{daily: int, monthly: int}>
      */
-    private const FREE_FALLBACK = ['conversions' => 2, 'ai_conversions' => 1];
+    private const FREE_FALLBACK = [
+        'light'  => ['daily' => 3, 'monthly' => 30],
+        'medium' => ['daily' => 2, 'monthly' => 15],
+        'heavy'  => ['daily' => 0, 'monthly' => 0],
+        'ai'     => ['daily' => 0, 'monthly' => 0],
+    ];
 
     /**
      * Last-resort max upload size (MB) used only when the resolved plan row is
-     * missing or carries a non-positive `maxFileSizeMb` (mirrors the free tier:
-     * 50 MB free / 500 MB paid, enforced from the `plans` table).
+     * missing or carries a non-positive `maxFileSizeMb`.
      */
     private const FREE_MAX_UPLOAD_MB = 50;
+
+    /** @var array<string, array{daily: string, monthly: string}> */
+    private const TIER_COUNTER_COLUMNS = [
+        'light'  => ['daily' => 'light_daily_conversions', 'monthly' => 'light_monthly_conversions'],
+        'medium' => ['daily' => 'medium_daily_conversions', 'monthly' => 'medium_monthly_conversions'],
+        'heavy'  => ['daily' => 'heavy_daily_conversions', 'monthly' => 'heavy_monthly_conversions'],
+        'ai'     => ['daily' => 'ai_daily_conversions', 'monthly' => 'ai_monthly_conversions'],
+    ];
+
+    /** @var list<QuotaTier> */
+    private const ALL_TIERS = [
+        QuotaTier::Light,
+        QuotaTier::Medium,
+        QuotaTier::Heavy,
+        QuotaTier::Ai,
+    ];
 
     public function __construct(
         private readonly EntityManagerInterface $em,
@@ -38,121 +60,124 @@ class QuotaService
 
     /**
      * Up-front limit check: reject an over-limit request BEFORE any work is done.
-     * Read-only w.r.t. the counters (no increment) — the actual charge happens in
-     * {@see charge()} only after a successful submit, so a failure mid-submit can
-     * never leak a charge.
+     * Проверяет оба окна (суточное и скользящее 30-дневное) для тира конверсии.
      */
-    public function check(User $user, bool $isAi): void
+    public function check(User $user, FileCategory $category, bool $isAi): void
     {
         $this->resetIfNeeded($user);
 
-        $limits = $this->limitsFor($user);
-        $limit  = $isAi ? $limits['ai_conversions'] : $limits['conversions'];
-        $used   = $isAi ? $user->getDailyAiConversions() : $user->getDailyConversions();
+        $tier   = QuotaTier::resolve($category, $isAi);
+        $limits = $this->limitsForTier($this->resolvePlan($user), $tier);
+        $used   = $this->usedForTier($user, $tier);
 
-        if ($limit !== -1 && $used >= $limit) {
+        if ($limits['daily'] !== -1 && $used['daily'] >= $limits['daily']) {
             throw new TooManyRequestsHttpException(
                 null,
-                $isAi
-                    ? "Daily AI conversion limit of {$limit} reached. Upgrade your plan."
-                    : "Daily conversion limit of {$limit} reached. Upgrade your plan.",
+                sprintf('Daily %s conversion limit of %d reached. Upgrade your plan.', $tier->value, $limits['daily']),
+            );
+        }
+
+        if ($limits['monthly'] !== -1 && $used['monthly'] >= $limits['monthly']) {
+            throw new TooManyRequestsHttpException(
+                null,
+                sprintf('Monthly %s conversion limit of %d reached. Upgrade your plan.', $tier->value, $limits['monthly']),
             );
         }
     }
 
     /**
-     * Commit one daily conversion. Call only AFTER the submit succeeded
-     * (S3 upload + persist + enqueue) so the charge is never left dangling.
-     *
-     * Инкремент — атомарным `UPDATE … WHERE id` (в обход read-then-write), чтобы
-     * параллельные сабмиты одного юзера не теряли друг друга. Вызов идёт из
-     * HTTP-пути сабмита (без redelivery), поэтому отдельная транзакция не нужна.
+     * Commit one conversion charge (daily + monthly counters). Call only AFTER
+     * the submit succeeded.
      */
-    public function charge(User $user, bool $isAi): void
+    public function charge(User $user, FileCategory $category, bool $isAi): void
     {
-        $this->applyDelta($user, $isAi, +1);
+        $this->resetIfNeeded($user);
+        $this->applyDelta($user, QuotaTier::resolve($category, $isAi), +1);
     }
 
     /**
-     * Refund one daily conversion (e.g. the worker reported a failure). Атомарный
-     * decrement с клемпом на 0 (raw UPDATE, не read-then-write) — параллельные
-     * возвраты не теряются, а клемп делает refund no-op после суточного сброса
-     * счётчика (окно уже прокрутилось).
-     *
-     * ВАЖНО: сам refund НЕ оборачивает decrement в транзакцию — это делает
-     * вызывающий ({@see \App\Service\Queue\ConversionResultPersister}), коммитя
-     * decrement вместе с переходом Conversion в терминальный статус одной
-     * транзакцией. Иначе при падении flush сообщение переставится, idempotency-
-     * guard пропустит refund повторно → двойной возврат квоты.
+     * Refund one conversion (atomic decrement with clamp at 0 on both windows).
      */
-    public function refund(User $user, bool $isAi): void
+    public function refund(User $user, FileCategory $category, bool $isAi): void
     {
-        $this->applyDelta($user, $isAi, -1);
+        $this->resetIfNeeded($user);
+        $this->applyDelta($user, QuotaTier::resolve($category, $isAi), -1);
     }
 
     /**
-     * Остаток + лимиты плана в одном ответе (для UI-виджета квот: home-13).
-     * `*_limit` — те же значения, что резолвит limitsFor() (-1 = безлимит) —
-     * без них фронт не может показать «использовано/лимит», только remaining.
+     * Остаток + лимиты плана по всем 4 тирам × 2 окна (CNV-30).
      *
-     * @return array<string, int|string>
+     * @return array<string, mixed>
      */
     public function getRemainingQuota(User $user): array
     {
         $this->resetIfNeeded($user);
 
-        $limits = $this->limitsFor($user);
+        $plan  = $this->resolvePlan($user);
+        $tiers = [];
+        foreach (self::ALL_TIERS as $tier) {
+            $limits = $this->limitsForTier($plan, $tier);
+            $used   = $this->usedForTier($user, $tier);
+            $key    = $tier->value;
+
+            $tiers[$key] = [
+                'daily' => [
+                    'used'      => $used['daily'],
+                    'limit'     => $limits['daily'],
+                    'remaining' => $this->remaining($limits['daily'], $used['daily']),
+                ],
+                'monthly' => [
+                    'used'      => $used['monthly'],
+                    'limit'     => $limits['monthly'],
+                    'remaining' => $this->remaining($limits['monthly'], $used['monthly']),
+                ],
+            ];
+        }
 
         return [
-            'conversions' => $limits['conversions'] === -1
-                ? -1
-                : max(0, $limits['conversions'] - $user->getDailyConversions()),
-            'ai_conversions' => $limits['ai_conversions'] === -1
-                ? -1
-                : max(0, $limits['ai_conversions'] - $user->getDailyAiConversions()),
-            'conversions_limit'    => $limits['conversions'],
-            'ai_conversions_limit' => $limits['ai_conversions'],
-            'plan'                 => $user->getPlan(),
+            'plan'  => $user->getPlan(),
+            'tiers' => $tiers,
         ];
     }
 
     public function resetIfNeeded(User $user): void
     {
-        $now = new \DateTimeImmutable();
+        $now        = new \DateTimeImmutable();
+        $needsFlush = false;
 
         if ($user->getQuotaResetAt()->format('Y-m-d') < $now->format('Y-m-d')) {
-            $this->reset($user);
+            $this->resetDailyCounters($user);
+            $user->setQuotaResetAt($now);
+            $needsFlush = true;
+        }
+
+        if ($now >= $user->getMonthlyResetAt()->modify('+30 days')) {
+            $this->resetMonthlyCounters($user);
+            $user->setMonthlyResetAt($now);
+            $needsFlush = true;
+        }
+
+        if ($needsFlush) {
+            $this->em->flush();
         }
     }
 
     /**
-     * Безусловный сброс дневной квоты: счётчики → 0, окно (`quotaResetAt`) → now.
-     * Единая точка обнуления счётчиков (её же зовёт resetIfNeeded при смене
-     * суток) — ручной admin-сброс не дублирует логику в контроллере, а бьёт
-     * ровно те же поля. $flush=false — если вызывающий владеет своим flush.
-     *
-     * TODO(scale-out): сброс пишет счётчики через flush (UnitOfWork), а
-     * charge/refund — raw UPDATE. На одном инстансе гонки нет (запросы одного
-     * юзера сериализуются). При горизонтальном масштабировании сброс на одном
-     * инстансе может затереть параллельный decrement на другом — тогда перевести
-     * сброс на атомарный `UPDATE … SET daily_* = 0` с guard по quota_reset_at.
+     * Безусловный сброс всех пер-тир счётчиков обоих окон (admin reset-quota).
      */
     public function reset(User $user, bool $flush = true): void
     {
-        $user->setDailyConversions(0);
-        $user->setDailyAiConversions(0);
-        $user->setQuotaResetAt(new \DateTimeImmutable());
+        $now = new \DateTimeImmutable();
+        $this->resetDailyCounters($user);
+        $this->resetMonthlyCounters($user);
+        $user->setQuotaResetAt($now);
+        $user->setMonthlyResetAt($now);
 
         if ($flush) {
             $this->em->flush();
         }
     }
 
-    /**
-     * Per-plan max upload size in bytes, read from the `plans` table
-     * (`maxFileSizeMb`). Falls back to the `free` plan, then to
-     * {@see FREE_MAX_UPLOAD_MB} when the row is missing or non-positive.
-     */
     public function maxUploadBytes(User $user): int
     {
         $plan = $this->resolvePlan($user);
@@ -166,54 +191,102 @@ class QuotaService
     }
 
     /**
-     * Single source of truth for daily limits: the `plans` table. Falls back to
-     * the `free` plan, then to a hardcoded free baseline if the table is unseeded.
-     *
-     * @return array<string, int>
+     * @return array{daily: int, monthly: int}
      */
-    private function limitsFor(User $user): array
+    private function limitsForTier(?Plan $plan, QuotaTier $tier): array
     {
-        $plan = $this->resolvePlan($user);
-
         if ($plan === null) {
-            return self::FREE_FALLBACK;
+            return self::FREE_FALLBACK[$tier->value];
         }
 
-        return [
-            'conversions'    => $plan->getDailyLimit(),
-            'ai_conversions' => $plan->getDailyAiLimit(),
-        ];
+        return match ($tier) {
+            QuotaTier::Light => [
+                'daily'   => $plan->getLightDailyLimit(),
+                'monthly' => $plan->getLightMonthlyLimit(),
+            ],
+            QuotaTier::Medium => [
+                'daily'   => $plan->getMediumDailyLimit(),
+                'monthly' => $plan->getMediumMonthlyLimit(),
+            ],
+            QuotaTier::Heavy => [
+                'daily'   => $plan->getHeavyDailyLimit(),
+                'monthly' => $plan->getHeavyMonthlyLimit(),
+            ],
+            QuotaTier::Ai => [
+                'daily'   => $plan->getAiDailyLimit(),
+                'monthly' => $plan->getAiMonthlyLimit(),
+            ],
+        };
     }
 
     /**
-     * Атомарно применяет дельту (+1 charge / -1 refund) к дневному счётчику юзера
-     * прямым `UPDATE … WHERE id` в обход UnitOfWork. Затем `refresh()`
-     * синхронизирует in-memory User с БД: без этого последующий flush в том же
-     * запросе перезапишет счётчик устаревшим снимком, а check()/getRemainingQuota()
-     * видели бы неконсистентное значение. refresh() ещё и сбрасывает snapshot —
-     * так исчезает race «прочитал-записал».
+     * @return array{daily: int, monthly: int}
      */
-    private function applyDelta(User $user, bool $isAi, int $delta): void
+    private function usedForTier(User $user, QuotaTier $tier): array
     {
-        // Имя колонки — из белого списка (не из ввода), поэтому интерполяция в SQL безопасна.
-        $col = $isAi ? 'daily_ai_conversions' : 'daily_conversions';
-        $sql = $delta < 0
-            ? "UPDATE users SET {$col} = GREATEST(0, {$col} - 1) WHERE id = :id"
-            : "UPDATE users SET {$col} = {$col} + 1 WHERE id = :id";
+        return match ($tier) {
+            QuotaTier::Light => [
+                'daily'   => $user->getLightDailyConversions(),
+                'monthly' => $user->getLightMonthlyConversions(),
+            ],
+            QuotaTier::Medium => [
+                'daily'   => $user->getMediumDailyConversions(),
+                'monthly' => $user->getMediumMonthlyConversions(),
+            ],
+            QuotaTier::Heavy => [
+                'daily'   => $user->getHeavyDailyConversions(),
+                'monthly' => $user->getHeavyMonthlyConversions(),
+            ],
+            QuotaTier::Ai => [
+                'daily'   => $user->getAiDailyConversions(),
+                'monthly' => $user->getAiMonthlyConversions(),
+            ],
+        };
+    }
+
+    private function remaining(int $limit, int $used): int
+    {
+        return $limit === -1 ? -1 : max(0, $limit - $used);
+    }
+
+    private function resetDailyCounters(User $user): void
+    {
+        $user->setLightDailyConversions(0);
+        $user->setMediumDailyConversions(0);
+        $user->setHeavyDailyConversions(0);
+        $user->setAiDailyConversions(0);
+    }
+
+    private function resetMonthlyCounters(User $user): void
+    {
+        $user->setLightMonthlyConversions(0);
+        $user->setMediumMonthlyConversions(0);
+        $user->setHeavyMonthlyConversions(0);
+        $user->setAiMonthlyConversions(0);
+    }
+
+    /**
+     * Атомарно применяет дельту (+1 charge / -1 refund) к daily+monthly колонкам
+     * выбранного тира прямым `UPDATE … WHERE id`.
+     */
+    private function applyDelta(User $user, QuotaTier $tier, int $delta): void
+    {
+        $cols       = self::TIER_COUNTER_COLUMNS[$tier->value];
+        $dailyCol   = $cols['daily'];
+        $monthlyCol = $cols['monthly'];
+
+        if ($delta < 0) {
+            $sql = "UPDATE users SET {$dailyCol} = GREATEST(0, {$dailyCol} - 1), "
+                . "{$monthlyCol} = GREATEST(0, {$monthlyCol} - 1) WHERE id = :id";
+        } else {
+            $sql = "UPDATE users SET {$dailyCol} = {$dailyCol} + 1, "
+                . "{$monthlyCol} = {$monthlyCol} + 1 WHERE id = :id";
+        }
 
         $this->em->getConnection()->executeStatement($sql, ['id' => $user->getId()]);
         $this->em->refresh($user);
     }
 
-    /**
-     * Резолвит план юзера из `plans`, сигналя о «тихом даунгрейде»: платному
-     * юзеру молча выдавался free/FREE_FALLBACK без единой ошибки. Даунгрейд =
-     * строки запрошенного плана нет (независимо от того, есть ли free), в т.ч.
-     * пустая таблица (нет и free → вызывающий возьмёт FREE_FALLBACK).
-     *
-     * На даунгрейде — ВСЕГДА warning (вкл. prod), а вне prod ещё и throw:
-     * misconfig обязан падать в CI/dev, но не ломать платящих в prod (fail-open).
-     */
     private function resolvePlan(User $user): ?Plan
     {
         $requested = $user->getPlan();
@@ -223,8 +296,6 @@ class QuotaService
             return $plan;
         }
 
-        // Строки запрошенного плана нет → тихий даунгрейд. Пытаемся выдать free;
-        // если и его нет (пустая таблица) — вызывающий уйдёт в FREE_FALLBACK.
         $free       = $this->planRepository->findByName('free');
         $fallbackTo = $free !== null ? 'free' : 'FREE_FALLBACK';
 

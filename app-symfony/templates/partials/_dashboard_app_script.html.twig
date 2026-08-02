@@ -59,12 +59,20 @@
                 pro: '{{ 'home.quota.plan_pro'|trans|e('js') }}',
                 guest: '{{ 'home.quota.plan_guest'|trans|e('js') }}',
             },
+            tierNames: {
+                light: '{{ 'home.quota.tier_light'|trans|e('js') }}',
+                medium: '{{ 'home.quota.tier_medium'|trans|e('js') }}',
+                heavy: '{{ 'home.quota.tier_heavy'|trans|e('js') }}',
+                ai: '{{ 'home.quota.tier_ai'|trans|e('js') }}',
+            },
+            windowDaily: '{{ 'home.quota.window_daily'|trans|e('js') }}',
+            windowMonthly: '{{ 'home.quota.window_monthly'|trans|e('js') }}',
         },
-        // Квоты: -1 = безлимит. AC карточки требует ИМЕННО переведённое слово
-        // "unlimited"/«без лимита», НЕ "-1" и НЕ символ ∞ (в отличие от
-        // виджета на главной, quotaLine() который печатает литерал ∞).
+        // Квоты: -1 = безлимит. Dashboard показывает «used / без лимита»
+        // (I18N.unlimited); главная — «used / ∞» (QUOTA_UNLIMITED_SYMBOL).
         unlimited: '{{ 'home.limits.unlimited'|trans|e('js') }}',
     };
+    const QUOTA_TIER_ORDER = ['light', 'medium', 'heavy', 'ai'];
     const ACTIVE_STATUSES = ['pending', 'processing'];
     const FAILED_STATUSES = ['failed', 'expired'];
 
@@ -82,10 +90,12 @@
             me: { name: null, username: null, profileUrl: null, avatarUrl: null, plan: null },
 
             quota: {
-                conversions: 0, aiConversions: 0,
-                conversionsLimit: 0, aiConversionsLimit: 0,
-                plan: null, maxUploadBytes: 0, loaded: false,
+                plan: null,
+                tiers: null,
+                maxUploadBytes: 0,
+                loaded: false,
             },
+            quotaTierOrder: QUOTA_TIER_ORDER,
 
             conversions: [],
             historyLoading: true,
@@ -169,11 +179,8 @@
                     if (!res.ok) return;
                     const d = await res.json();
                     this.quota = {
-                        conversions: d.conversions,
-                        aiConversions: d.ai_conversions,
-                        conversionsLimit: d.conversions_limit,
-                        aiConversionsLimit: d.ai_conversions_limit,
                         plan: d.plan,
+                        tiers: d.tiers,
                         maxUploadBytes: d.max_upload_bytes,
                         loaded: true,
                     };
@@ -188,12 +195,25 @@
                 return I18N.quota.planNames[this.me.plan] || this.me.plan || '';
             },
 
-            // «использовано / лимит»; -1 → переведённое "unlimited" (НЕ "-1",
-            // НЕ ∞ — см. комментарий у I18N.unlimited выше). API отдаёт ОСТАТОК
-            // (getRemainingQuota), used = limit - remaining только при limit !== -1.
-            quotaLine(remaining, limit) {
-                if (limit === -1) return I18N.unlimited;
-                return (limit - remaining) + ' / ' + limit;
+            // CNV-30: used/limit по окну тира; -1 → переведённое "unlimited".
+            quotaWindowLine(tierKey, window) {
+                if (!window) return '—';
+                if (window.limit === -1) return window.used + ' / ' + I18N.unlimited;
+                if (window.limit === 0 && (tierKey === 'heavy' || tierKey === 'ai') && this.quota.plan === 'guest') {
+                    return '0 / 0';
+                }
+                return window.used + ' / ' + window.limit;
+            },
+
+            quotaTierLabel(tierKey) {
+                return I18N.quota.tierNames[tierKey] || tierKey;
+            },
+
+            isQuotaTierLocked(tierKey) {
+                if (this.quota.plan !== 'guest') return false;
+                if (tierKey !== 'heavy' && tierKey !== 'ai') return false;
+                const win = this.quota.tiers?.[tierKey]?.daily;
+                return win && win.limit === 0;
             },
 
             maxFileLabel(bytes) {

@@ -46,7 +46,7 @@
                     <th class="px-4 py-3">Email / TG</th>
                     <th class="px-4 py-3">План</th>
                     <th class="px-4 py-3">Статус</th>
-                    <th class="px-4 py-3">Квота (обыч./AI)</th>
+                    <th class="px-4 py-3">Квота (тир × д/м)</th>
                     <th class="px-4 py-3">Регистрация</th>
                     <th class="px-4 py-3 text-right">Действия</th>
                 </tr>
@@ -67,7 +67,24 @@
                             <span x-show="!u.isActive" x-cloak class="rounded-full bg-red-500/15 px-2.5 py-0.5 text-xs text-red-400">забанен</span>
                         </td>
                         <td class="px-4 py-3 font-mono text-xs text-zinc-400">
-                            <span x-text="u.dailyConversions"></span> / <span x-text="u.dailyAiConversions"></span>
+                            <table class="border-separate border-spacing-x-2 border-spacing-y-0.5" aria-label="Счётчики квоты">
+                                <thead>
+                                    <tr class="text-zinc-600">
+                                        <td></td>
+                                        <td class="text-right">д</td>
+                                        <td class="text-right">м</td>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="tier in quotaTiers" :key="tier.key">
+                                        <tr>
+                                            <td class="text-zinc-500" x-text="tier.label"></td>
+                                            <td class="text-right text-zinc-300" x-text="quotaVal(u, tier.key, 'daily')"></td>
+                                            <td class="text-right text-zinc-300" x-text="quotaVal(u, tier.key, 'monthly')"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
                         </td>
                         <td class="px-4 py-3 text-xs text-zinc-500" x-text="fmtDate(u.createdAt)"></td>
                         <td class="px-4 py-3">
@@ -148,6 +165,12 @@
             items: [],
             planOptions: ['free', 'basic', 'pro'],
             planModal: { open: false, userId: null, plan: 'free' },
+            quotaTiers: [
+                { key: 'light', label: 'L' },
+                { key: 'medium', label: 'M' },
+                { key: 'heavy', label: 'H' },
+                { key: 'ai', label: 'AI' },
+            ],
 
             async init() {
                 const ok = await window.admin.ready;
@@ -232,10 +255,15 @@
             },
 
             resetQuota(u) {
-                if (!confirm('Сбросить дневную квоту пользователя #' + u.id + '?')) {
+                if (!confirm('Сбросить квоту пользователя #' + u.id + ' (оба окна: суточное и месячное)?')) {
                     return;
                 }
-                return this.action('/api/v1/admin/users/' + u.id + '/reset-quota', null, 'Квота сброшена');
+                return this.action('/api/v1/admin/users/' + u.id + '/reset-quota', null, 'Квота сброшена (оба окна)');
+            },
+
+            quotaVal(u, tier, window) {
+                const c = u && u.quotaCounters && u.quotaCounters[tier];
+                return (c && c[window] !== undefined && c[window] !== null) ? c[window] : '—';
             },
 
             openPlan(u) {

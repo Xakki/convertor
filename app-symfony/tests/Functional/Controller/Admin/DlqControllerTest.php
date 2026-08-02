@@ -203,13 +203,10 @@ final class DlqControllerTest extends WebTestCase
     }
 
     /**
-     * requeue-attempt-generation-marker MAJOR #1: quota re-charge on requeue is
-     * FORCED (`QuotaService::charge()`, not the limit-gated `check()`+`charge()`)
-     * — an operator recovering a stuck job must never be blocked by the user's
-     * own daily limit. Charge/refund stays symmetric with the original submit +
-     * fail#1 refund (see class docblock).
+     * CNV-30: requeue respects quota via check()+charge() — at daily limit the
+     * operator gets 429, status stays Failed, counters unchanged.
      */
-    public function testRequeueForceRechargesQuotaEvenAtDailyLimit(): void
+    public function testRequeueReturns429WhenQuotaExceededAtDailyLimit(): void
     {
         $client    = static::createClient();
         $container = static::getContainer();
@@ -218,7 +215,7 @@ final class DlqControllerTest extends WebTestCase
         $conversion = $this->persistConversion($em, ConversionStatus::Failed);
         $owner      = $conversion->getUser();
         $owner->setPlan('free');
-        $owner->setDailyConversions(2); // free plan daily_limit = 2 — already AT the limit
+        $owner->setMediumDailyConversions(2); // free medium daily = 2 — already AT the limit
         $em->flush();
 
         $s3Client = $this->createStub(S3Client::class);
@@ -226,9 +223,7 @@ final class DlqControllerTest extends WebTestCase
         $container->set(S3Storage::class, new S3Storage($s3Client, 'test_'));
 
         $bus = $this->createMock(MessageBusInterface::class);
-        $bus->expects(self::once())
-            ->method('dispatch')
-            ->willReturnCallback(static fn (object $message, array $stamps = []): Envelope => new Envelope($message, $stamps));
+        $bus->expects(self::never())->method('dispatch');
         $container->set(MessageBusInterface::class, $bus);
 
         $token = $this->jwtFor($this->persistUser(true));
@@ -240,12 +235,16 @@ final class DlqControllerTest extends WebTestCase
             content: json_encode(['conversionId' => $conversion->getId()], JSON_THROW_ON_ERROR),
         );
 
-        self::assertSame(200, $client->getResponse()->getStatusCode(), (string) $client->getResponse()->getContent());
+        self::assertSame(429, $client->getResponse()->getStatusCode(), (string) $client->getResponse()->getContent());
 
         $em->clear();
         $reloadedOwner = $em->find(User::class, $owner->getId());
         self::assertNotNull($reloadedOwner);
-        self::assertSame(3, $reloadedOwner->getDailyConversions());
+        self::assertSame(2, $reloadedOwner->getMediumDailyConversions());
+
+        $reloadedConversion = $em->find(Conversion::class, $conversion->getId());
+        self::assertNotNull($reloadedConversion);
+        self::assertSame(ConversionStatus::Failed, $reloadedConversion->getStatus());
     }
 
     /**
@@ -264,7 +263,7 @@ final class DlqControllerTest extends WebTestCase
         $owner        = $conversion->getUser();
         $ownerId      = $owner->getId();
         $conversionId = $conversion->getId();
-        $dailyBefore  = $owner->getDailyConversions();
+        $dailyBefore  = $owner->getMediumDailyConversions();
 
         $s3Client = $this->createStub(S3Client::class);
         $s3Client->method('headObject')->willReturn(ResultMockFactory::create(HeadObjectOutput::class));
@@ -291,8 +290,8 @@ final class DlqControllerTest extends WebTestCase
         $em->clear();
         $reloadedOwner = $em->find(User::class, $ownerId);
         self::assertNotNull($reloadedOwner);
-        // Ровно одно принудительное re-charge (+1), не два.
-        self::assertSame($dailyBefore + 1, $reloadedOwner->getDailyConversions());
+        // Ровно одно re-charge (+1), не два.
+        self::assertSame($dailyBefore + 1, $reloadedOwner->getMediumDailyConversions());
 
         $reloadedConversion = $em->find(Conversion::class, $conversionId);
         self::assertNotNull($reloadedConversion);
@@ -316,7 +315,7 @@ final class DlqControllerTest extends WebTestCase
         $conversion  = $this->persistConversion($em, ConversionStatus::Failed);
         $owner       = $conversion->getUser();
         $ownerId     = $owner->getId();
-        $dailyBefore = $owner->getDailyConversions();
+        $dailyBefore = $owner->getMediumDailyConversions();
 
         $s3Client = $this->createStub(S3Client::class);
         $s3Client->method('headObject')->willReturn(ResultMockFactory::create(HeadObjectOutput::class));
@@ -350,7 +349,7 @@ final class DlqControllerTest extends WebTestCase
         $reloadedOwner = $em->find(User::class, $ownerId);
         self::assertNotNull($reloadedOwner);
         // Re-charge was refunded: net quota effect is zero.
-        self::assertSame($dailyBefore, $reloadedOwner->getDailyConversions());
+        self::assertSame($dailyBefore, $reloadedOwner->getMediumDailyConversions());
     }
 
     private function notFoundHeadObjectOutput(): HeadObjectOutput

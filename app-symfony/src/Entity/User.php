@@ -60,13 +60,35 @@ class User implements UserInterface
     private string $plan = 'free';
 
     #[ORM\Column(type: 'integer')]
-    private int $dailyConversions = 0;
+    private int $lightDailyConversions = 0;
 
     #[ORM\Column(type: 'integer')]
-    private int $dailyAiConversions = 0;
+    private int $lightMonthlyConversions = 0;
+
+    #[ORM\Column(type: 'integer')]
+    private int $mediumDailyConversions = 0;
+
+    #[ORM\Column(type: 'integer')]
+    private int $mediumMonthlyConversions = 0;
+
+    #[ORM\Column(type: 'integer')]
+    private int $heavyDailyConversions = 0;
+
+    #[ORM\Column(type: 'integer')]
+    private int $heavyMonthlyConversions = 0;
+
+    #[ORM\Column(type: 'integer')]
+    private int $aiDailyConversions = 0;
+
+    #[ORM\Column(type: 'integer')]
+    private int $aiMonthlyConversions = 0;
 
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $quotaResetAt;
+
+    /** Начало текущего скользящего 30-дневного месячного окна (CNV-30). */
+    #[ORM\Column(type: 'datetime_immutable')]
+    private \DateTimeImmutable $monthlyResetAt;
 
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
@@ -99,8 +121,10 @@ class User implements UserInterface
 
     public function __construct()
     {
-        $this->createdAt    = new \DateTimeImmutable();
-        $this->quotaResetAt = new \DateTimeImmutable();
+        $now                  = new \DateTimeImmutable();
+        $this->createdAt      = $now;
+        $this->quotaResetAt   = $now;
+        $this->monthlyResetAt = $now;
     }
 
     public function getId(): ?int
@@ -192,40 +216,98 @@ class User implements UserInterface
         return $this;
     }
 
-    public function getDailyConversions(): int
+    public function getLightDailyConversions(): int
     {
-        return $this->dailyConversions;
+        return $this->lightDailyConversions;
     }
 
-    public function setDailyConversions(int $dailyConversions): self
+    public function setLightDailyConversions(int $lightDailyConversions): self
     {
-        $this->dailyConversions = $dailyConversions;
+        $this->lightDailyConversions = $lightDailyConversions;
 
         return $this;
     }
 
-    public function incrementDailyConversions(): self
+    public function getLightMonthlyConversions(): int
     {
-        $this->dailyConversions++;
+        return $this->lightMonthlyConversions;
+    }
+
+    public function setLightMonthlyConversions(int $lightMonthlyConversions): self
+    {
+        $this->lightMonthlyConversions = $lightMonthlyConversions;
 
         return $this;
     }
 
-    public function getDailyAiConversions(): int
+    public function getMediumDailyConversions(): int
     {
-        return $this->dailyAiConversions;
+        return $this->mediumDailyConversions;
     }
 
-    public function setDailyAiConversions(int $dailyAiConversions): self
+    public function setMediumDailyConversions(int $mediumDailyConversions): self
     {
-        $this->dailyAiConversions = $dailyAiConversions;
+        $this->mediumDailyConversions = $mediumDailyConversions;
 
         return $this;
     }
 
-    public function incrementDailyAiConversions(): self
+    public function getMediumMonthlyConversions(): int
     {
-        $this->dailyAiConversions++;
+        return $this->mediumMonthlyConversions;
+    }
+
+    public function setMediumMonthlyConversions(int $mediumMonthlyConversions): self
+    {
+        $this->mediumMonthlyConversions = $mediumMonthlyConversions;
+
+        return $this;
+    }
+
+    public function getHeavyDailyConversions(): int
+    {
+        return $this->heavyDailyConversions;
+    }
+
+    public function setHeavyDailyConversions(int $heavyDailyConversions): self
+    {
+        $this->heavyDailyConversions = $heavyDailyConversions;
+
+        return $this;
+    }
+
+    public function getHeavyMonthlyConversions(): int
+    {
+        return $this->heavyMonthlyConversions;
+    }
+
+    public function setHeavyMonthlyConversions(int $heavyMonthlyConversions): self
+    {
+        $this->heavyMonthlyConversions = $heavyMonthlyConversions;
+
+        return $this;
+    }
+
+    public function getAiDailyConversions(): int
+    {
+        return $this->aiDailyConversions;
+    }
+
+    public function setAiDailyConversions(int $aiDailyConversions): self
+    {
+        $this->aiDailyConversions = $aiDailyConversions;
+
+        return $this;
+    }
+
+    public function getAiMonthlyConversions(): int
+    {
+        return $this->aiMonthlyConversions;
+    }
+
+    public function setAiMonthlyConversions(int $aiMonthlyConversions): self
+    {
+        $this->aiMonthlyConversions = $aiMonthlyConversions;
 
         return $this;
     }
@@ -238,6 +320,18 @@ class User implements UserInterface
     public function setQuotaResetAt(\DateTimeImmutable $quotaResetAt): self
     {
         $this->quotaResetAt = $quotaResetAt;
+
+        return $this;
+    }
+
+    public function getMonthlyResetAt(): \DateTimeImmutable
+    {
+        return $this->monthlyResetAt;
+    }
+
+    public function setMonthlyResetAt(\DateTimeImmutable $monthlyResetAt): self
+    {
+        $this->monthlyResetAt = $monthlyResetAt;
 
         return $this;
     }

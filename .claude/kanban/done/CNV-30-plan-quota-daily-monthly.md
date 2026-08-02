@@ -88,7 +88,21 @@
 - Смежные карты: `seed-plans-stub`, `pay-per-use-credits`.
 - QuotaService hardening — коммит `73f5c11`.
 
-**NOTE:** Финальные числа таблицы — предложение; подтвердить/поправить перед
-стартом реализации.
+**NOTE:** Числа прайса подтверждены 2026-08-02 (см. Decisions).
 
-**Status:** grooming.
+**Decisions (старт 2026-08-02):**
+- Числа прайса из таблицы карточки/ROADMAP — **подтверждены пользователем** без правок.
+- Состав команды: backend → test-engineer → frontend → reviewer.
+- Release note: миграция `Version20260802180000` **обнуляет** legacy `daily_conversions`/`daily_ai_conversions` без переноса в tier-счётчики (одноразовый reset usage на prod).
+
+**Status:** ready
+
+## Execution Log
+
+- 2026-08-02: старт — `todo→progress`, ветка `task/CNV-30`, числа прайса подтверждены.
+- 2026-08-02: делегирован backend (entity/migration/QuotaService/API/admin).
+- 2026-08-02: backend landed `4b9b8b4` — 4×2 tiers, `/quota` shape `tiers.{light|medium|heavy|ai}.{daily|monthly}`; phpstan/cs/unit OK.
+- 2026-08-02: делегированы test-engineer + frontend.
+- 2026-08-02: tests `b0a6afb` — 539 PHP OK (+18); frontend `51abadc` — quota bar 4×2.
+- 2026-08-02: QA PASS (`e3df5a1` cs); reviewer REQUEST CHANGES → fix `8988a67` (admin UI + DLQ check + charge reset) → APPROVE.
+- 2026-08-02: hand-off → `test` → `ready`. Ожидает approve пользователя (`ready→done` + merge).

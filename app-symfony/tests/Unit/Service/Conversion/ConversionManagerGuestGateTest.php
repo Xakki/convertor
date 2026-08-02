@@ -7,6 +7,7 @@ namespace App\Tests\Unit\Service\Conversion;
 use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\User;
+use App\Enum\FileCategory;
 use App\Exception\AuthRequiredException;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
@@ -52,8 +53,8 @@ final class ConversionManagerGuestGateTest extends TestCase
         // jpg→txt = image, non-AI. Гость конвертит свободно.
         $quota = $this->createMock(QuotaService::class);
         $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
-        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), false);
-        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), false);
+        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Image, false);
+        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), FileCategory::Image, false);
 
         $manager = $this->buildManager($quota, $this->okS3Client(), $this->stampingEm());
 
@@ -74,8 +75,8 @@ final class ConversionManagerGuestGateTest extends TestCase
         // Залогиненный (privileged=true) проходит ai-пару штатно.
         $quota = $this->createMock(QuotaService::class);
         $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
-        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), true);
-        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), true);
+        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Audio, true);
+        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), FileCategory::Audio, true);
 
         $manager = $this->buildManager($quota, $this->okS3Client(), $this->stampingEm());
 

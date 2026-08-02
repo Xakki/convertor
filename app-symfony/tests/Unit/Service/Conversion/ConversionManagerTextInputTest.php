@@ -7,6 +7,7 @@ namespace App\Tests\Unit\Service\Conversion;
 use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\User;
+use App\Enum\FileCategory;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
@@ -41,8 +42,8 @@ final class ConversionManagerTextInputTest extends TestCase
     {
         $quota = $this->createMock(QuotaService::class);
         $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
-        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), false);
-        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), false);
+        $quota->expects($this->once())->method('check')->with($this->isInstanceOf(User::class), FileCategory::Document, false);
+        $quota->expects($this->once())->method('charge')->with($this->isInstanceOf(User::class), FileCategory::Document, false);
 
         $em = $this->createStub(EntityManagerInterface::class);
         $em->method('persist')->willReturnCallback(static function (object $entity): void {

@@ -20,7 +20,7 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  * строка в `users` создаётся лишь при первой успешной конвертации, а cookie
  * `guest_id` эмитится только когда гость реально материализовался.
  *
- * Проверяем: /quota без cookie — 200 (plan=guest/ai_conversions=0), но НИ cookie,
+ * Проверяем: /quota без cookie — 200 (plan=guest, ai/heavy=0), но НИ cookie,
  * НИ строки в `users` не создаётся; существующая cookie переиспользуется (тот же
  * guest-User, без новой cookie); отклонённый convert (400/403) ничего не плодит.
  */
@@ -43,14 +43,11 @@ final class GuestAuthenticationTest extends WebTestCase
         $data = json_decode((string) $response->getContent(), true);
         self::assertIsArray($data);
         self::assertSame('guest', $data['plan']);
-        self::assertSame(0, $data['ai_conversions']);
-        self::assertArrayHasKey('conversions', $data);
-
-        // home-13: /quota теперь отдаёт ещё и лимиты плана + max_upload_bytes —
-        // гостю ai-лимит форсится в 0 (не «тихая» free-квота в 1), чтобы виджет
-        // на фронте не показывал доступный AI-лимит гостю.
-        self::assertSame(0, $data['ai_conversions_limit']);
-        self::assertArrayHasKey('conversions_limit', $data);
+        self::assertArrayHasKey('tiers', $data);
+        self::assertSame(0, $data['tiers']['ai']['daily']['remaining']);
+        self::assertSame(0, $data['tiers']['ai']['daily']['limit']);
+        self::assertSame(0, $data['tiers']['heavy']['daily']['limit']);
+        self::assertArrayHasKey('light', $data['tiers']);
         self::assertArrayHasKey('max_upload_bytes', $data);
         self::assertIsInt($data['max_upload_bytes']);
         self::assertGreaterThan(0, $data['max_upload_bytes']);

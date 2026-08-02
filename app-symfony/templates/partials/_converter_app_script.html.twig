@@ -80,11 +80,20 @@
                 pro: '{{ 'home.quota.plan_pro'|trans|e('js') }}',
                 guest: '{{ 'home.quota.plan_guest'|trans|e('js') }}',
             },
+            tierNames: {
+                light: '{{ 'home.quota.tier_light'|trans|e('js') }}',
+                medium: '{{ 'home.quota.tier_medium'|trans|e('js') }}',
+                heavy: '{{ 'home.quota.tier_heavy'|trans|e('js') }}',
+                ai: '{{ 'home.quota.tier_ai'|trans|e('js') }}',
+            },
+            windowDaily: '{{ 'home.quota.window_daily'|trans|e('js') }}',
+            windowMonthly: '{{ 'home.quota.window_monthly'|trans|e('js') }}',
         },
     };
     // home-13: символ безлимита в виджете квот — литерал, не переводимый текст
     // (AC карточки требует именно «∞», не строку "unlimited").
     const QUOTA_UNLIMITED_SYMBOL = '∞';
+    const QUOTA_TIER_ORDER = ['light', 'medium', 'heavy', 'ai'];
     // Статусы задачи: активные (идёт обработка) и терминальные (менять не будут).
     const ACTIVE_STATUSES = ['pending', 'processing'];
     const TERMINAL_STATUSES = ['completed', 'failed', 'expired'];
@@ -159,10 +168,12 @@
             // /api/v1/quota. loaded=false до первого ответа — виджет скрыт
             // (x-if="quota.loaded"), чтобы не мигать нулями до фактических данных.
             quota: {
-                conversions: 0, aiConversions: 0,
-                conversionsLimit: 0, aiConversionsLimit: 0,
-                plan: null, maxUploadBytes: 0, loaded: false,
+                plan: null,
+                tiers: null,
+                maxUploadBytes: 0,
+                loaded: false,
             },
+            quotaTierOrder: QUOTA_TIER_ORDER,
             conversions: [],    // история конвертаций залогиненного пользователя
             downloadingId: null, // id строки истории, которая сейчас качается
             sourceLoadingId: null, // id строки, чей исходник сейчас качается
@@ -1012,26 +1023,33 @@
                     if (!res.ok) return;
                     const d = await res.json();
                     this.quota = {
-                        conversions: d.conversions,
-                        aiConversions: d.ai_conversions,
-                        conversionsLimit: d.conversions_limit,
-                        aiConversionsLimit: d.ai_conversions_limit,
                         plan: d.plan,
+                        tiers: d.tiers,
                         maxUploadBytes: d.max_upload_bytes,
                         loaded: true,
                     };
                 } catch (e) { /* сеть моргнула — покажем при следующем refresh */ }
             },
 
-            // «использовано / лимит» (AC карточки home-13: «обычные конверсии
-            // сегодня (использовано/лимит)», буквально). API отдаёт ОСТАТОК
-            // (getRemainingQuota() — «сколько ЕЩЁ можно»), не «использовано» —
-            // used = limit - remaining, точная арифметика по двум реальным
-            // полям (не выдумываем число: check() гарантирует remaining ≤ limit,
-            // так что used всегда ≥ 0). Безлимит (-1) — символ ∞ (не
-            // переведённый текст: AC требует именно символ, не строку "unlimited").
-            quotaLine(remaining, limit) {
-                return limit === -1 ? QUOTA_UNLIMITED_SYMBOL : ((limit - remaining) + ' / ' + limit);
+            // CNV-30: used/limit по окну тира; -1 → символ ∞.
+            quotaWindowLine(tierKey, window) {
+                if (!window) return '—';
+                if (window.limit === -1) return window.used + ' / ' + QUOTA_UNLIMITED_SYMBOL;
+                if (window.limit === 0 && (tierKey === 'heavy' || tierKey === 'ai') && this.quota.plan === 'guest') {
+                    return '0 / 0';
+                }
+                return window.used + ' / ' + window.limit;
+            },
+
+            quotaTierLabel(tierKey) {
+                return I18N.quota.tierNames[tierKey] || tierKey;
+            },
+
+            isQuotaTierLocked(tierKey) {
+                if (this.quota.plan !== 'guest') return false;
+                if (tierKey !== 'heavy' && tierKey !== 'ai') return false;
+                const win = this.quota.tiers?.[tierKey]?.daily;
+                return win && win.limit === 0;
             },
 
             // Человекочитаемое имя плана — известные значения переведены

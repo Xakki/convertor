@@ -69,33 +69,51 @@
             </section>
         </template>
 
-        {# ── Квоты/лимиты — работает и для гостя, и для залогиненного. -1 =
-           безлимит, показываем переведённым словом (см. I18N.unlimited в
-           partials/_dashboard_app_script.html.twig), а не "-1" и не ∞. ── #}
+        {# ── Квоты/лимиты — CNV-30: 4 тира × день/месяц. -1 = безлимит
+           (dashboard: переведённое слово; см. quotaWindowLine()). ── #}
         <template x-if="quota.loaded">
             <section class="mb-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 class="mb-3 text-sm font-semibold text-slate-600">{{ 'dashboard.quota.heading'|trans }}</h2>
-                <dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+                <dl class="mb-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
                     <div>
                         <dt class="text-xs text-slate-400">{{ 'home.quota.plan_label'|trans }}</dt>
                         <dd class="font-medium text-slate-700" x-text="quotaPlanLabel"></dd>
                     </div>
-                    <div>
-                        <dt class="text-xs text-slate-400">{{ 'home.quota.conversions_label'|trans }}</dt>
-                        <dd class="font-medium text-slate-700" x-text="quotaLine(quota.conversions, quota.conversionsLimit)"></dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs text-slate-400">{{ 'home.quota.ai_label'|trans }}</dt>
-                        <dd class="font-medium text-slate-700" x-text="quotaLine(quota.aiConversions, quota.aiConversionsLimit)"></dd>
-                        <template x-if="quota.plan === 'guest'">
-                            <p class="text-xs text-slate-400">{{ 'home.quota.ai_guest_note'|trans }}</p>
-                        </template>
-                    </div>
-                    <div>
+                    <div class="sm:col-span-3">
                         <dt class="text-xs text-slate-400">{{ 'home.quota.max_file_label'|trans }}</dt>
                         <dd class="font-medium text-slate-700" x-text="maxFileLabel(quota.maxUploadBytes)"></dd>
                     </div>
                 </dl>
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[20rem] text-sm">
+                        <thead>
+                            <tr class="text-left text-xs text-slate-400">
+                                <th class="pb-2 pr-4 font-normal">{{ 'home.quota.tier_col'|trans }}</th>
+                                <th class="pb-2 pr-4 font-normal">{{ 'home.quota.window_daily'|trans }}</th>
+                                <th class="pb-2 font-normal">{{ 'home.quota.window_monthly'|trans }}</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-700">
+                            <template x-for="tier in quotaTierOrder" :key="tier">
+                                <tr class="border-t border-slate-100">
+                                    <td class="py-2 pr-4">
+                                        <span class="inline-flex items-center gap-1 font-medium">
+                                            <span x-text="quotaTierLabel(tier)"></span>
+                                            <template x-if="isQuotaTierLocked(tier)">
+                                                <span class="text-xs text-slate-400" title="{{ 'home.quota.ai_guest_note'|trans }}">🔒</span>
+                                            </template>
+                                        </span>
+                                    </td>
+                                    <td class="py-2 pr-4 tabular-nums" x-text="quotaWindowLine(tier, quota.tiers?.[tier]?.daily)"></td>
+                                    <td class="py-2 tabular-nums" x-text="quotaWindowLine(tier, quota.tiers?.[tier]?.monthly)"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                <template x-if="quota.plan === 'guest'">
+                    <p class="mt-3 text-xs text-slate-400">{{ 'home.quota.guest_locked_note'|trans }}</p>
+                </template>
             </section>
         </template>
 
