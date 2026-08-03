@@ -2,4 +2,5 @@
 docker/logs
 tmp
 data
-/.claude/kanban/grooming/TODO.md
+.claude/kanban/grooming/TODO.md
+.claude/kanban/done
