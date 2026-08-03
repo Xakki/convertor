@@ -29,8 +29,10 @@ PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
 HOST_NAME ?= $(shell hostname)
 HOST_IP   := $(shell hostname -I 2>/dev/null | awk '{print $$1}' || echo unknown)
-MYSQL_SLOWLOG_PATH := $(CURDIR)/docker/logs
-JSON_LOG_PATH      := $(CURDIR)/docker/logs
+MYSQL_SLOWLOG_PATH    := $(CURDIR)/docker/logs
+JSON_LOG_PATH         := $(CURDIR)/docker/logs
+FLUENT_BIT_CONF_DIR   := $(CURDIR)/docker/fluent-log/fluent-bit
+FLUENT_LOGROTATE_CONF := $(CURDIR)/docker/fluent-log/logrotate/logrotate.conf
 PUID := $(shell id -u)
 PGID := $(shell id -g)
 

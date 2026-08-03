@@ -42,4 +42,18 @@
 - Registry/матрица рекламирует ровно то, что воркер умеет.
 - Tests/QA green per project gates.
 
-**Status:** todo (Stage 7 — do not start early).
+**Status:** ready
+
+## Execution Log
+
+- (2026-08-03, Agent: chore) started; branch task/CNV-41.
+- (2026-08-03, Agent: python-worker) Dockerfile: +libreoffice-calc, +libreoffice-impress; build-time libetonyek probe → **present** (`libetonyek-0.1-1` in Debian trixie) → **pages KEPT** (`pages` → office targets, runtime probe `_libetonyek_available()`).
+- (2026-08-03, Agent: python-worker) worker `_MATRIX` Stage-7: epub-input pandoc pairs (no epub→pdf); Calc xls/xlsx/ods/csv→office; Impress ppt/pptx/odp→pptx/odp/pdf; pdf→jpg; markup rst/latex/tex/wiki→md-family.
+- (2026-08-03, Agent: python-worker) pdf→jpg: pdftoppm; 1 page → `.jpg`; 2+ pages → `.zip` (`page-001.jpg`, …); delivery ext `jpg`/`zip`.
+- (2026-08-03, Agent: python-worker) `make test-python-libreoffice` → 37 passed, 1 skipped (pages test skipped in container — libetonyek present).
+- (2026-08-03, Agent: php-registry) seed sync: обновлены `Version20260722150301` documentMatrix + `ConversionRegistrySeedFixture`; новая миграция `Version20260803120000` (UPDATE seed document для уже засеянных БД). 22 source × 155 пар document; golden 394 entries; `ConversionRegistrySeedFixtureSyncTest` + `ConversionRegistryGoldenTest` + `test-drift` green; phpstan migrations OK.
+- (2026-08-03, Agent: qa) progress→test; gates: `TEST=1 test-drift` 5/5, `test-python-libreoffice` 37 passed/1 skipped, `TEST=1 test-php-unit` 301/301, `phpstan` OK; `cs-check` 7 violations — только файлы вне diff CNV-41 (billing/Telegram с parent). AC: matrix synced, pages kept, no epub→pdf in golden/worker.
+- (2026-08-03, Agent: qa) test→ready; AC met, CNV-41-scope gates green.
+- (2026-08-03, Agent: reviewer) REQUEST_CHANGES: pages seed↔worker drift (Dockerfile soft probe); pdf→jpg DoS без лимита страниц.
+- (2026-08-03, Agent: python-worker) review fixes: Dockerfile явно ставит `libetonyek-0.1-1`, build падает без .so; `PDFTOPPM_MAX_PAGES=50` + pdfinfo pre-check; убран dup `_IMPRESS_TARGETS`; комментарий seed-миграции актуализирован; +tests page cap / pages→pdf.
+- (2026-08-03, Agent: qa) re-verify post-89686e8: `test-python-libreoffice` 39 passed/1 skipped, `TEST=1 test-drift` 5/5; AC spot-check OK (no epub→pdf, libetonyek fail-build, PDFTOPPM_MAX_PAGES=50); test→ready.

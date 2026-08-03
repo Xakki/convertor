@@ -241,8 +241,12 @@ worker-logs: ## Tail logs всех 6 on-server воркеров вкл. worker-a
 # Свой fluent-bit нужен ТОЛЬКО remote-хосту (на главном сервере логи шлём в общий
 # host-wide сборщик на ${EXT_FLUENT_PORT}, и порт уже занят им).
 .PHONY: fluent-up
-fluent-up: ## REMOTE-хост: поднять свой fluent-bit-сайдкар (на главном сервере не нужен — там общий)
-	$(DC_FLUENT) up -d fluent-bit
+fluent-up: ## REMOTE-хост: поднять fluent-bit+logrotate (на главном сервере не нужен — там общий)
+	$(DC_FLUENT) up -d fluent-bit logrotate
+
+.PHONY: fluent-recreate
+fluent-recreate: ## REMOTE-хост: force-recreate fluent-bit+logrotate (после смены bind paths)
+	$(DC_FLUENT) up -d --force-recreate fluent-bit logrotate
 
 .PHONY: fluent-restart
 fluent-restart: ## Restart fluent-bit-сайдкара (подхватить изменения conf.d)
