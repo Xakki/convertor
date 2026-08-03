@@ -12,6 +12,7 @@ use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Exception\ConversionDisabledException;
 use App\Repository\ConversionRepository;
+use App\Service\Conversion\ConversionChainFailPropagator;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionToggleService;
 use App\Service\Queue\ConversionStatusReader;
@@ -437,6 +438,11 @@ final class ConversionManagerRetryDeleteTest extends TestCase
             $bus,
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
             $toggle,
             $logger,
         );

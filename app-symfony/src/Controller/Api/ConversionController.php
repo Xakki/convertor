@@ -236,11 +236,21 @@ class ConversionController extends AbstractController
         try {
             $result = $this->conversionManager->getStatus($id, $user);
 
-            return $this->json([
+            $payload = [
                 'conversion_id' => $result->conversionId,
                 'status'        => $result->status->value,
                 'error'         => $result->errorMessage,
-            ]);
+                'from_format'   => $result->fromFormat,
+                'to_format'     => $result->toFormat,
+            ];
+            if ($result->chainId !== null) {
+                $payload['chain_id']        = $result->chainId;
+                $payload['sequence']        = $result->sequence;
+                $payload['final_to_format'] = $result->finalToFormat;
+                $payload['chain_length']    = $result->chainLength;
+            }
+
+            return $this->json($payload);
         } catch (\RuntimeException) {
             return $this->json(['error' => 'Conversion not found'], Response::HTTP_NOT_FOUND);
         }
@@ -266,9 +276,13 @@ class ConversionController extends AbstractController
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
         }
 
-        $conversion = $this->conversionRepository->find($id);
+        try {
+            $conversion = $this->conversionManager->resolveDownloadConversion($id, $user);
+        } catch (\RuntimeException $e) {
+            if ($e->getMessage() === 'Output file not available') {
+                return $this->json(['error' => 'Output file not available'], Response::HTTP_NOT_FOUND);
+            }
 
-        if ($conversion === null || $conversion->getUser()->getId() !== $user->getId()) {
             throw new NotFoundHttpException('Conversion not found');
         }
 

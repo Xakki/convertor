@@ -7,20 +7,30 @@ namespace App\Service\Queue;
 use App\Entity\Conversion;
 use App\Entity\FileStorage;
 use App\Enum\ConversionStatus;
+use App\Event\ConversionCompleted;
+use App\Event\ConversionFailed;
+use App\Repository\ConversionRepository;
 use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
 use Psr\Log\LoggerInterface;
+use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
 /**
  * Persists a worker result event (contract §5) to MariaDB: creates the output
  * FileStorage (S3 key) and finalizes Conversion.status. DB writes stay in PHP
  * (design decision 2). Idempotent: a conversion already in a terminal state is
- * skipped, so redelivery never double-writes.
+ * skipped for DB writes, so redelivery never double-writes.
  *
  * The EM is obtained from ManagerRegistry on every persist() call so that after
  * a flush() failure (which closes the EM) and a ManagerRegistry::resetManager()
  * the next call automatically picks up the fresh EM.
+ *
+ * CNV-5: after the first successful terminal flush, dispatches
+ * {@see ConversionCompleted} / {@see ConversionFailed} for chain orchestration.
+ * On idempotent Completed redelivery, re-fires ConversionCompleted only when a
+ * next Pending hop still exists (advance recovery) — never re-fires Failed
+ * propagation blindly.
  */
 final class ConversionResultPersister
 {
@@ -29,6 +39,8 @@ final class ConversionResultPersister
         private readonly string $resultsBucket,
         private readonly LoggerInterface $logger,
         private readonly QuotaService $quotaService,
+        private readonly EventDispatcherInterface $eventDispatcher,
+        private readonly ConversionRepository $conversionRepository,
     ) {
     }
 
@@ -77,8 +89,18 @@ final class ConversionResultPersister
             return;
         }
 
-        // Idempotency guard: skip if already finalized.
+        // Idempotency: skip DB write if already finalized. Completed + chain with
+        // a still-Pending next hop → re-arm ConversionCompleted so the listener
+        // can resume advance (crash between flush and dispatch / lost event).
+        // Failed is never re-fired (propagation already durable in DB).
         if (in_array($conversion->getStatus(), [ConversionStatus::Completed, ConversionStatus::Failed], true)) {
+            if (
+                $conversion->getStatus() === ConversionStatus::Completed
+                && $this->shouldRearmChainAdvance($conversion)
+            ) {
+                $this->eventDispatcher->dispatch(new ConversionCompleted($conversion));
+            }
+
             return;
         }
 
@@ -104,6 +126,8 @@ final class ConversionResultPersister
                 );
                 $em->flush();
             });
+
+            $this->eventDispatcher->dispatch(new ConversionFailed($conversion));
 
             return;
         }
@@ -137,5 +161,23 @@ final class ConversionResultPersister
         $conversion->setStatus(ConversionStatus::Completed);
         $conversion->setProcessingMs($processingMs);
         $em->flush();
+
+        $this->eventDispatcher->dispatch(new ConversionCompleted($conversion));
+    }
+
+    /**
+     * True when a Completed hop still has a Pending successor — safe to re-emit
+     * ConversionCompleted without looping forever (listener only advances while
+     * next stays Pending; after dispatch/fail next leaves Pending).
+     */
+    private function shouldRearmChainAdvance(Conversion $conversion): bool
+    {
+        $chainId  = $conversion->getChainId();
+        $sequence = $conversion->getSequence();
+        if ($chainId === null || $sequence === null) {
+            return false;
+        }
+
+        return $this->conversionRepository->findNextPendingHop($chainId, $sequence) !== null;
     }
 }

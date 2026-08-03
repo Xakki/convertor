@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Controller\Api;
 
 use App\Entity\Conversion;
-use App\Entity\FileStorage;
 use App\Entity\User;
 use App\Enum\BillingMode;
 use App\Messenger\Transport\CleanRedisTransport;

@@ -99,8 +99,8 @@ class TelegramLinkCodeStore
      */
     public function mint(int $userId): array
     {
-        $code  = $this->newSecret();
-        $nonce = $this->newSecret();
+        $code    = $this->newSecret();
+        $nonce   = $this->newSecret();
         $payload = json_encode([
             'status'    => self::STATUS_PENDING,
             'userId'    => $userId,

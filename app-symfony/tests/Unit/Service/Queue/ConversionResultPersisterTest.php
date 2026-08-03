@@ -9,22 +9,31 @@ use App\Entity\User;
 use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
+use App\Event\ConversionCompleted;
+use App\Repository\ConversionRepository;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
+use Symfony\Component\EventDispatcher\EventDispatcher;
 
 final class ConversionResultPersisterTest extends TestCase
 {
-    private function makePersister(ManagerRegistry $registry, ?QuotaService $quota = null): ConversionResultPersister
-    {
+    private function makePersister(
+        ManagerRegistry $registry,
+        ?QuotaService $quota = null,
+        ?EventDispatcher $dispatcher = null,
+        ?ConversionRepository $conversionRepository = null,
+    ): ConversionResultPersister {
         return new ConversionResultPersister(
             $registry,
             'test-results',
             new NullLogger(),
-            $quota ?? $this->createStub(QuotaService::class),
+            $quota                ?? $this->createStub(QuotaService::class),
+            $dispatcher           ?? new EventDispatcher(),
+            $conversionRepository ?? $this->createStub(ConversionRepository::class),
         );
     }
 
@@ -65,15 +74,79 @@ final class ConversionResultPersisterTest extends TestCase
     {
         $conversion = $this->createStub(Conversion::class);
         $conversion->method('getStatus')->willReturn(ConversionStatus::Completed);
+        $conversion->method('getChainId')->willReturn(null);
 
         $em = $this->createMock(EntityManagerInterface::class);
         $em->method('find')->willReturn($conversion);
         $em->expects($this->never())->method('flush');
 
-        $persister = $this->makePersister($this->makeRegistry($em));
+        $dispatcher = $this->createMock(EventDispatcher::class);
+        $dispatcher->expects($this->never())->method('dispatch');
+
+        $persister = $this->makePersister($this->makeRegistry($em), null, $dispatcher);
         $persister->persist(['conversionId' => 1, 'state' => 'completed', 'outputKey' => 'x.pdf']);
 
         $this->addToAssertionCount(1);
+    }
+
+    public function testIdempotentCompletedRearmsChainAdvanceWhenNextPending(): void
+    {
+        $conversion = $this->createStub(Conversion::class);
+        $conversion->method('getStatus')->willReturn(ConversionStatus::Completed);
+        $conversion->method('getChainId')->willReturn('chain-rearm');
+        $conversion->method('getSequence')->willReturn(1);
+
+        $next = $this->createStub(Conversion::class);
+        $next->method('getStatus')->willReturn(ConversionStatus::Pending);
+
+        $repo = $this->createMock(ConversionRepository::class);
+        $repo->expects($this->once())
+            ->method('findNextPendingHop')
+            ->with('chain-rearm', 1)
+            ->willReturn($next);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('find')->willReturn($conversion);
+        $em->expects($this->never())->method('flush');
+
+        $dispatched = null;
+        $dispatcher = $this->createMock(EventDispatcher::class);
+        $dispatcher->expects($this->once())->method('dispatch')->willReturnCallback(
+            static function (object $event) use (&$dispatched): object {
+                $dispatched = $event;
+
+                return $event;
+            },
+        );
+
+        $persister = $this->makePersister($this->makeRegistry($em), null, $dispatcher, $repo);
+        $persister->persist(['conversionId' => 1, 'state' => 'completed', 'outputKey' => 'x.pdf']);
+
+        self::assertInstanceOf(ConversionCompleted::class, $dispatched);
+    }
+
+    public function testIdempotentCompletedDoesNotRearmWithoutPendingNext(): void
+    {
+        $conversion = $this->createStub(Conversion::class);
+        $conversion->method('getStatus')->willReturn(ConversionStatus::Completed);
+        $conversion->method('getChainId')->willReturn('chain-done');
+        $conversion->method('getSequence')->willReturn(2);
+
+        $repo = $this->createMock(ConversionRepository::class);
+        $repo->expects($this->once())
+            ->method('findNextPendingHop')
+            ->with('chain-done', 2)
+            ->willReturn(null);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('find')->willReturn($conversion);
+        $em->expects($this->never())->method('flush');
+
+        $dispatcher = $this->createMock(EventDispatcher::class);
+        $dispatcher->expects($this->never())->method('dispatch');
+
+        $persister = $this->makePersister($this->makeRegistry($em), null, $dispatcher, $repo);
+        $persister->persist(['conversionId' => 2, 'state' => 'completed', 'outputKey' => 'x.pdf']);
     }
 
     public function testIdempotencySkipsFailedConversionNoDoubleRefund(): void
@@ -105,7 +178,14 @@ final class ConversionResultPersisterTest extends TestCase
         $registry = $this->createMock(ManagerRegistry::class);
         $registry->expects($this->exactly(2))->method('getManager')->willReturn($em);
 
-        $persister = new ConversionResultPersister($registry, 'test-results', new NullLogger(), $this->createStub(QuotaService::class));
+        $persister = new ConversionResultPersister(
+            $registry,
+            'test-results',
+            new NullLogger(),
+            $this->createStub(QuotaService::class),
+            new EventDispatcher(),
+            $this->createStub(ConversionRepository::class),
+        );
 
         $persister->persist(['conversionId' => 1, 'state' => 'completed', 'outputKey' => 'x.pdf']);
         $persister->persist(['conversionId' => 2, 'state' => 'completed', 'outputKey' => 'y.pdf']);

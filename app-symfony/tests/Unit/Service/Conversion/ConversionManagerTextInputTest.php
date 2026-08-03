@@ -11,6 +11,7 @@ use App\Enum\BillingMode;
 use App\Enum\FileCategory;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
+use App\Service\Conversion\ConversionChainFailPropagator;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
@@ -77,6 +78,11 @@ final class ConversionManagerTextInputTest extends TestCase
             $bus,
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $request = ConversionRequestDTO::fromText(new User(), "# Заголовок\n\nтекст", 'md', 'html', true);
@@ -137,6 +143,11 @@ final class ConversionManagerTextInputTest extends TestCase
             $this->createStub(MessageBusInterface::class),
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $request = ConversionRequestDTO::fromText(new User(), str_repeat('x', 1000), 'txt', 'md');

@@ -16,8 +16,8 @@ use App\Service\Auth\TelegramBotClient;
 use App\Service\Billing\BalanceService;
 use App\Service\Billing\PaymentTopUpService;
 use App\Service\Billing\TopUpPackRegistry;
-use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\DBAL\Driver\Exception as DriverException;
+use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -135,7 +135,7 @@ final class PaymentTopUpServiceTest extends TestCase
         $em->expects(self::once())->method('refresh')->with(self::identicalTo($payment));
         $em->expects(self::once())->method('flush')
             ->willThrowException(new UniqueConstraintViolationException(
-                new class('duplicate') extends \Exception implements DriverException {
+                new class ('duplicate') extends \Exception implements DriverException {
                     public function getSQLState(): ?string
                     {
                         return '23000';

@@ -36,6 +36,48 @@ class ConversionRepository extends ServiceEntityRepository
     }
 
     /**
+     * Все hop-строки цепочки по `chainId`, по возрастанию `sequence` (CNV-5).
+     *
+     * @return list<Conversion>
+     */
+    public function findByChainIdOrdered(string $chainId): array
+    {
+        /** @var list<Conversion> $rows */
+        $rows = $this->createQueryBuilder('c')
+            ->where('c.chainId = :chainId')
+            ->setParameter('chainId', $chainId)
+            ->orderBy('c.sequence', 'ASC')
+            ->addOrderBy('c.id', 'ASC')
+            ->getQuery()
+            ->getResult();
+
+        return $rows;
+    }
+
+    /**
+     * Следующий Pending-hop после `afterSequence` в цепочке (CNV-5 advance).
+     * null если цепочка завершена или следующего hop нет.
+     */
+    public function findNextPendingHop(string $chainId, int $afterSequence): ?Conversion
+    {
+        /** @var Conversion|null $row */
+        $row = $this->createQueryBuilder('c')
+            ->where('c.chainId = :chainId')
+            ->andWhere('c.sequence > :afterSequence')
+            ->andWhere('c.status = :pending')
+            ->setParameter('chainId', $chainId)
+            ->setParameter('afterSequence', $afterSequence)
+            ->setParameter('pending', ConversionStatus::Pending)
+            ->orderBy('c.sequence', 'ASC')
+            ->addOrderBy('c.id', 'ASC')
+            ->setMaxResults(1)
+            ->getQuery()
+            ->getOneOrNullResult();
+
+        return $row;
+    }
+
+    /**
      * История пользователя. inputFile/outputFile — fetch-join, чтобы сериализация
      * истории (source_name/size, result_size/mime, previewable) не плодила N+1.
      * outputFile nullable → LEFT JOIN (иначе строки без результата отсеклись бы);

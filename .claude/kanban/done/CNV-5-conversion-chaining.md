@@ -18,7 +18,7 @@ User requests A→C explicitly; the backend finds the path and runs it transpare
   `mp3_stt`) and flag-only OCR pairs (require explicit intent, not BFS discovery).
 - **Orchestration = `ConversionCompleted` domain event emitted by `ConversionResultPersister`**, a
   listener dispatches the next pending hop. CRITICAL: both worker paths (on-server via
-  `QueueResultConsumerCommand`, off-server/AI via `WorkerController.result`) converge ONLY at
+  `InternalWorkerController`, off-server/AI via `WorkerController`) converge ONLY at
   `ConversionResultPersister::persist()` — the advance hook MUST live there, else AI/off-server hops
   never advance.
 - **Hop plan materialized as rows at submit** — add `chainId` + `sequence` (+ `finalToFormat` or
@@ -40,6 +40,12 @@ User requests A→C explicitly; the backend finds the path and runs it transpare
 - **Phase 0 timing = STAYS in Stage 7** [USER DECISION 2026-07-01] — whole epic post-MVP; do NOT pull
   `findPath()` forward, even though it is buildable on the current matrix today.
 - **(2026-08-01 grooming)** Дизайн готов; **не стартовать раньше Stage 7 / по приоритету ROADMAP**.
+- **(2026-08-03 team-lead)** Remaining undropped hops on chain failure → status `Failed` (no new
+  `Cancelled` enum in Phase 1), message points to failed hop.
+- **(2026-08-03 team-lead)** POST `/convert` returns hop-1 conversion id; status by any hop id resolves
+  chain via `chainId`; download only when final hop `Completed`.
+- **(2026-08-03 team-lead)** Enablement: allowlist stub (default empty/off) — mechanism in Phase 1,
+  curated edges later.
 
 **Phasing:**
 - **Phase 0** — `findPath()` on `ConversionRegistry` (pure, unit-testable, no wiring). Buildable on the
@@ -65,4 +71,18 @@ User requests A→C explicitly; the backend finds the path and runs it transpare
 - Tests/QA green per project gates when implemented.
 - Start only when Stage 7 / ROADMAP priority says so (Decision 2026-08-01).
 
-**Status:** todo (Stage 7 — do not start early).
+**Status:** progress (Phase 1 mechanism wired; enablement allowlist empty until curated edges).
+
+## Execution Log
+
+- Started Phase 0+1; branch `task/CNV-5`; team = Grok + composer for chores.
+- Team-lead decisions recorded (2026-08-03); Phase 0 in progress.
+- Phase 0 done (2026-08-03): `ConversionRegistry::findPath()` BFS + `ConversionRegistryFindPathTest` (12 tests). Manager/Entity/Persister/Quota untouched.
+- Quota multi-hop API done (2026-08-03): `QuotaService::checkPlan` / `chargeHop` / `refundHops` + unit tests; Manager not wired.
+- entity-chain-schema done (2026-08-03): `Conversion.chainId`/`sequence`/`finalToFormat` + `Version20260803180000` + repo `findByChainIdOrdered`/`findNextPendingHop`. Manager/Persister/Quota still untouched.
+- manager-chain-submit + persister-event-advance done (2026-08-03): `ChainEnablement` (`CHAIN_ENABLED_PAIRS`, default empty), `ConversionManager` chain materialize (hop-1 return), `ConversionCompleted`/`ConversionFailed` from `ConversionResultPersister`, `ConversionChainListener` advance (results→inputs copy) + fail-propagate/`refundHops`, status/download chain-aware. Unit tests green (`make TEST=1 test-php-unit`). Prod unchanged until curated pairs added to allowlist.
+- QA (2026-08-03): gates `make phpstan` PASS, `make cs-check` PASS (after CS align + listener phpstan fix), `make TEST=1 test-php-unit` PASS (332 tests; pre-existing PHPUnit Deprecations×6 / Notices×10 — not CNV-5). AC smoke OK: `findPath` present; `/formats` = `getSupportedFormats()` matrix only (no chain pairs); `CHAIN_ENABLED_PAIRS` default `''`; `ConversionCompleted`/`Failed` dispatched only from `ConversionResultPersister`. Residual: no dedicated `ChainEnablementTest`; enablement still empty (by design).
+- Review must-fixes (2026-08-03): (1) `createChain` hop-1 abort fail-propagates sibling Pending via shared `ConversionChainFailPropagator`; (2) idempotent Completed persist re-emits `ConversionCompleted` when next Pending exists; (3) `wireIntermediateInput` validates S3 keys via `assertSafeObjectKey` before copy. Also: status JSON `from_format`/`to_format`; entity sequence doc → 1-based. Gates: phpstan/cs-check/test-php-unit PASS (336).
+- PlanQuota createChain abort fix (2026-08-03): on ANY post-flush abort mark hop-1 Failed if still Pending, then always `failPropagateFrom`; `ConversionChainFailPropagator` required ctor dep on `ConversionManager`. Unit: `testCreateChainPlanQuotaDispatchAbortFailPropagatesSiblings`. Gates: phpstan/cs-check/test-php-unit PASS (337).
+- QA green (337 unit), review APPROVE (after PlanQuota abort fix). Phase 0+1 complete; enablement via empty CHAIN_ENABLED_PAIRS (prod off).
+

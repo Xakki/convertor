@@ -7,6 +7,7 @@ namespace App\Tests\Functional\Controller\Api;
 use App\Entity\Conversion;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
+use App\Service\Conversion\ConversionChainFailPropagator;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
@@ -199,6 +200,11 @@ final class ConversionTextInputControllerTest extends WebTestCase
             $bus,
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
     }
 

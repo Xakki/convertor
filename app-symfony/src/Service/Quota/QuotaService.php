@@ -93,6 +93,69 @@ class QuotaService
     }
 
     /**
+     * Atomic up-front gate for a multi-hop chain: virtually consume remaining
+     * quota per tier across ALL hops, then sum prepaid costs for hops that do
+     * not fit. Rejects the entire plan if any bucket (tier quota or prepaid
+     * balance) is insufficient — same exceptions as {@see check()}.
+     *
+     * Returns one BillingMode per hop (same order) so Manager can charge/refund
+     * without re-running check() mid-chain (which would race / double-count).
+     *
+     * @param list<array{category: FileCategory, isAi: bool}> $hops
+     *
+     * @return list<BillingMode>
+     *
+     * @throws TooManyRequestsHttpException guest over any hop's quota
+     * @throws InsufficientBalanceException logged-in, over quota, balance short
+     */
+    public function checkPlan(User $user, array $hops): array
+    {
+        if ($hops === []) {
+            return [];
+        }
+
+        $this->resetIfNeeded($user);
+
+        $plan             = $this->resolvePlan($user);
+        $virtualUsed      = [];
+        $modes            = [];
+        $prepaidCostCents = 0;
+
+        foreach ($hops as $hop) {
+            $category = $hop['category'];
+            $isAi     = $hop['isAi'];
+            $tier     = QuotaTier::resolve($category, $isAi);
+            $limits   = $this->limitsForTier($plan, $tier);
+            $used     = $virtualUsed[$tier->value] ?? $this->usedForTier($user, $tier);
+
+            if (! $this->isOverQuota($limits, $used)) {
+                $modes[]                   = BillingMode::PlanQuota;
+                $virtualUsed[$tier->value] = [
+                    'daily'   => $used['daily']   + 1,
+                    'monthly' => $used['monthly'] + 1,
+                ];
+
+                continue;
+            }
+
+            if ($user->isGuest()) {
+                $this->throwQuotaExceeded($tier, $limits, $used);
+            }
+
+            $prepaidCostCents += $this->balanceService->getPayPerUseCostCents($isAi);
+            $modes[] = BillingMode::PrepaidBalance;
+        }
+
+        if ($prepaidCostCents > 0
+            && $this->balanceService->getBalanceCents($user) < $prepaidCostCents
+        ) {
+            throw new InsufficientBalanceException('insufficient_balance');
+        }
+
+        return $modes;
+    }
+
+    /**
      * Commit one conversion charge. plan_quota → tier counters; prepaid_balance →
      * atomic debit (без инкремента счётчиков). Call only AFTER submit succeeded
      * (plan_quota) or BEFORE dispatch (prepaid — debit до постановки в очередь).
@@ -122,6 +185,20 @@ class QuotaService
     }
 
     /**
+     * Per-hop charge for chains — identical semantics to {@see charge()}.
+     * Kept as a named entry-point so Manager call sites stay explicit.
+     */
+    public function chargeHop(
+        User $user,
+        FileCategory $category,
+        bool $isAi,
+        BillingMode $billingMode,
+        ?int $conversionId = null,
+    ): void {
+        $this->charge($user, $category, $isAi, $billingMode, $conversionId);
+    }
+
+    /**
      * Refund one conversion: prepaid → credit баланса; plan_quota → decrement counters.
      */
     public function refund(
@@ -146,6 +223,26 @@ class QuotaService
 
         $this->resetIfNeeded($user);
         $this->applyDelta($user, QuotaTier::resolve($category, $isAi), -1);
+    }
+
+    /**
+     * Refund every already-charged hop on chain failure (plan_quota counters
+     * and/or prepaid balance). Order = caller order; each hop uses its own
+     * BillingMode from the earlier {@see checkPlan()} result.
+     *
+     * @param list<array{category: FileCategory, isAi: bool, billingMode: BillingMode, conversionId?: int|null}> $chargedHops
+     */
+    public function refundHops(User $user, array $chargedHops): void
+    {
+        foreach ($chargedHops as $hop) {
+            $this->refund(
+                $user,
+                $hop['category'],
+                $hop['isAi'],
+                $hop['billingMode'],
+                $hop['conversionId'] ?? null,
+            );
+        }
     }
 
     /**

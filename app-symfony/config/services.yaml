@@ -72,6 +72,10 @@ parameters:
     # Пакеты пополнения prepaid-баланса через Telegram Stars (CNV-28 slice 5).
     env(TOPUP_PACKS_JSON): '{"pack_100":{"usd_cents":100,"stars":100},"pack_500":{"usd_cents":500,"stars":450},"pack_2000":{"usd_cents":2000,"stars":1700}}'
 
+    # CNV-5 Phase 1: allowlist финальных пар для chaining (from:to через запятую).
+    # Пусто = цепочки выключены (механизм есть, curated edges ещё нет).
+    env(CHAIN_ENABLED_PAIRS): ''
+
     # Username Telegram-бота (без @) для deep-link `t.me/<username>` в хедере
     # (home-01-header-nav). Не секрет; используется и TelegramLoginController.
     app.telegram_bot_username: '%env(TELEGRAM_BOT_USERNAME)%'
@@ -93,6 +97,7 @@ services:
         exclude:
             - '../src/DependencyInjection/'
             - '../src/Entity/'
+            - '../src/Event/'
             - '../src/Kernel.php'
             # Кастомные AbstractProvider-транспорты (Yandex/VK) — НЕ сервисы, только
             # $client-seam для тестов у YandexProvider/VkProvider (см. их конструкторы).

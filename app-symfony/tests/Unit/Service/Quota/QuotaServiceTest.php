@@ -410,6 +410,175 @@ final class QuotaServiceTest extends TestCase
         self::assertSame(-1, $remaining['tiers']['light']['monthly']['remaining']);
     }
 
+    public function testCheckPlanEmptyReturnsEmptyModes(): void
+    {
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->expects(self::never())->method('flush');
+
+        $modes = $this->prodService($this->freePlanStub(), $em)->checkPlan($this->freeUser(), []);
+
+        self::assertSame([], $modes);
+    }
+
+    public function testCheckPlanAllWithinQuotaReturnsPlanQuotaPerHop(): void
+    {
+        // free: light daily=3, medium daily=2 — two light hops fit.
+        $user = $this->freeUser()->setLightDailyConversions(1);
+        $em   = $this->createMock(EntityManagerInterface::class);
+        $em->expects(self::never())->method('flush');
+
+        $modes = $this->prodService($this->freePlanStub(), $em)->checkPlan($user, [
+            ['category' => FileCategory::Document, 'isAi' => false],
+            ['category' => FileCategory::Markup, 'isAi' => false],
+        ]);
+
+        self::assertSame([BillingMode::PlanQuota, BillingMode::PlanQuota], $modes);
+    }
+
+    public function testCheckPlanVirtuallyConsumesSameTierAcrossHops(): void
+    {
+        // free light daily=3, used=2 → only 1 slot left; 2nd hop must go prepaid.
+        $user = $this->freeUser()->setLightDailyConversions(2);
+        $em   = $this->createMock(EntityManagerInterface::class);
+
+        $modes = $this->prodService($this->freePlanStub(), $em, balanceCents: 100)->checkPlan($user, [
+            ['category' => FileCategory::Document, 'isAi' => false],
+            ['category' => FileCategory::Document, 'isAi' => false],
+        ]);
+
+        self::assertSame([BillingMode::PlanQuota, BillingMode::PrepaidBalance], $modes);
+    }
+
+    public function testCheckPlanMixedAiAndNonAiChecksBothBuckets(): void
+    {
+        // free: light ok, ai daily=0 → AI hop needs prepaid; light stays plan_quota.
+        $user = $this->freeUser();
+        $em   = $this->createMock(EntityManagerInterface::class);
+
+        $modes = $this->prodService($this->freePlanStub(), $em, balanceCents: 15)->checkPlan($user, [
+            ['category' => FileCategory::Document, 'isAi' => false],
+            ['category' => FileCategory::Audio, 'isAi' => true],
+        ]);
+
+        self::assertSame([BillingMode::PlanQuota, BillingMode::PrepaidBalance], $modes);
+    }
+
+    public function testCheckPlanRejectsWhenPrepaidSumExceedsBalance(): void
+    {
+        // free light used=3 → both hops prepaid (5+5=10); balance 5 → reject whole plan.
+        $user = $this->freeUser()->setLightDailyConversions(3);
+        $em   = $this->createMock(EntityManagerInterface::class);
+
+        $this->expectException(InsufficientBalanceException::class);
+
+        $this->prodService($this->freePlanStub(), $em, balanceCents: 5)->checkPlan($user, [
+            ['category' => FileCategory::Document, 'isAi' => false],
+            ['category' => FileCategory::Document, 'isAi' => false],
+        ]);
+    }
+
+    public function testCheckPlanSumsNormalAndAiPrepaidCosts(): void
+    {
+        // light over (5¢) + ai over (15¢) = 20¢; balance 19 → reject; 20 → accept.
+        $user = $this->freeUser()
+            ->setLightDailyConversions(3)
+            ->setAiDailyConversions(0); // free ai limit=0 → always over
+        $em = $this->createMock(EntityManagerInterface::class);
+
+        $this->expectException(InsufficientBalanceException::class);
+
+        $this->prodService($this->freePlanStub(), $em, balanceCents: 19)->checkPlan($user, [
+            ['category' => FileCategory::Document, 'isAi' => false],
+            ['category' => FileCategory::Audio, 'isAi' => true],
+        ]);
+    }
+
+    public function testCheckPlanAcceptsWhenPrepaidSumExact(): void
+    {
+        $user = $this->freeUser()->setLightDailyConversions(3);
+        $em   = $this->createMock(EntityManagerInterface::class);
+
+        $modes = $this->prodService($this->freePlanStub(), $em, balanceCents: 20)->checkPlan($user, [
+            ['category' => FileCategory::Document, 'isAi' => false],
+            ['category' => FileCategory::Audio, 'isAi' => true],
+        ]);
+
+        self::assertSame([BillingMode::PrepaidBalance, BillingMode::PrepaidBalance], $modes);
+    }
+
+    public function testCheckPlanGuestOverQuotaThrows429WithoutPrepaid(): void
+    {
+        $user = $this->guestUser()->setLightDailyConversions(2);
+        $em   = $this->createMock(EntityManagerInterface::class);
+
+        $this->expectException(TooManyRequestsHttpException::class);
+        $this->expectExceptionMessageMatches('/Daily light conversion limit of 3 reached/');
+
+        $this->prodService($this->freePlanStub(), $em, balanceCents: 1000)->checkPlan($user, [
+            ['category' => FileCategory::Document, 'isAi' => false],
+            ['category' => FileCategory::Document, 'isAi' => false],
+        ]);
+    }
+
+    public function testChargeHopDelegatesToChargeSql(): void
+    {
+        $user = (new User())->setPlan('free');
+
+        $conn = $this->createMock(Connection::class);
+        $conn->expects(self::once())
+            ->method('executeStatement')
+            ->with(
+                self::callback(static fn (string $sql): bool => str_contains($sql, 'light_daily_conversions = light_daily_conversions + 1')),
+                self::identicalTo(['id' => $user->getId()]),
+            )
+            ->willReturn(1);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('getConnection')->willReturn($conn);
+        $em->expects(self::once())->method('refresh')->with(self::identicalTo($user));
+
+        $service = new QuotaService($em, $this->createStub(PlanRepository::class), $this->stubBalanceService(), new NullLogger(), 'prod');
+        $service->chargeHop($user, FileCategory::Document, false, BillingMode::PlanQuota);
+    }
+
+    public function testRefundHopsRefundsEachChargedHop(): void
+    {
+        $user = (new User())->setPlan('free');
+
+        $conn = $this->createMock(Connection::class);
+        $conn->expects(self::exactly(2))
+            ->method('executeStatement')
+            ->willReturnCallback(static function (string $sql): int {
+                self::assertStringContainsString('GREATEST(0,', $sql);
+
+                return 1;
+            });
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('getConnection')->willReturn($conn);
+        $em->expects(self::exactly(2))->method('refresh')->with(self::identicalTo($user));
+
+        $balance = $this->createMock(BalanceService::class);
+        $balance->method('getPayPerUseCostCents')->willReturnCallback(
+            static fn (bool $isAi): int => $isAi ? 15 : 5,
+        );
+        $balance->expects(self::once())
+            ->method('refund')
+            ->with(
+                self::identicalTo($user),
+                15,
+                self::anything(),
+                '99',
+            );
+
+        $service = new QuotaService($em, $this->createStub(PlanRepository::class), $balance, new NullLogger(), 'prod');
+        $service->refundHops($user, [
+            ['category' => FileCategory::Document, 'isAi' => false, 'billingMode' => BillingMode::PlanQuota],
+            ['category' => FileCategory::Audio, 'isAi' => true, 'billingMode' => BillingMode::PrepaidBalance, 'conversionId' => 99],
+            ['category' => FileCategory::Image, 'isAi' => false, 'billingMode' => BillingMode::PlanQuota],
+        ]);
+    }
+
     public function testDailyResetClearsOnlyDailyCounters(): void
     {
         $user = $this->freeUser()

@@ -12,6 +12,7 @@ use App\Entity\User;
 use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
+use App\EventListener\ConversionChainListener;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
 use App\Exception\InsufficientBalanceException;
@@ -39,6 +40,9 @@ class ConversionManager
         private readonly MessageBusInterface $bus,
         private readonly ConversionStatusReader $statusReader,
         private readonly S3Storage $s3,
+        // Required: post-flush createChain abort must always fail-propagate
+        // sibling hops (no silent skip when optional null).
+        private readonly ConversionChainFailPropagator $chainFailPropagator,
         // Опционален (как nullable-зависимости ConversionRegistry): в проде
         // autowiring инжектит сервис, unit-тесты без БД получают null →
         // toggle-проверка пропускается (поведение по умолчанию = всё включено).
@@ -46,6 +50,9 @@ class ConversionManager
         // В проде Symfony инжектит monolog; unit-тесты без логгера → null,
         // warning при сбое S3 просто не пишется (поведение delete не меняется).
         private readonly ?LoggerInterface $logger = null,
+        // Allowlist финальных пар для chaining (CNV-5). null в unit-тестах =
+        // пустой allowlist (цепочки выключены), как дефолт CHAIN_ENABLED_PAIRS.
+        private readonly ?ChainEnablement $chainEnablement = null,
     ) {
     }
 
@@ -66,23 +73,66 @@ class ConversionManager
 
         $fromFormat = strtolower($file->getClientOriginalExtension());
 
-        // Explicit OCR intent: validate against the OCR capability set up front
-        // (cheap 400 before quota/S3), then force an image-worker, non-AI, free
-        // job. The worker decides OCR by the text targetFormat.
+        // Explicit OCR intent: single-hop only (OCR never via chain BFS).
         if ($ocr) {
             if (! $this->registry->isOcrSupported($fromFormat, $toFormat)) {
                 throw new \InvalidArgumentException("Unsupported OCR conversion: {$fromFormat} → {$toFormat}");
             }
-            $category = FileCategory::Image;
-            $isAi     = false;
-        } else {
-            if (! $this->registry->isSupported($fromFormat, $toFormat)) {
-                throw new \InvalidArgumentException("Unsupported conversion: {$fromFormat} → {$toFormat}");
-            }
-            $category = $this->registry->getCategory($fromFormat, $toFormat);
-            $isAi     = $this->registry->isAi($fromFormat, $toFormat);
+
+            return $this->createSingleHop(
+                $user,
+                $file,
+                $fromFormat,
+                $toFormat,
+                FileCategory::Image,
+                isAi: false,
+                ocr: true,
+                privileged: $privileged,
+            );
         }
 
+        // Direct single-worker pair ALWAYS preferred over chaining.
+        if ($this->registry->isSupported($fromFormat, $toFormat)) {
+            return $this->createSingleHop(
+                $user,
+                $file,
+                $fromFormat,
+                $toFormat,
+                $this->registry->getCategory($fromFormat, $toFormat),
+                $this->registry->isAi($fromFormat, $toFormat),
+                ocr: false,
+                privileged: $privileged,
+            );
+        }
+
+        $path = $this->registry->findPath($fromFormat, $toFormat);
+        if ($path === null || count($path) < 2) {
+            throw new \InvalidArgumentException("Unsupported conversion: {$fromFormat} → {$toFormat}");
+        }
+
+        // Enablement allowlist (final user-facing pair). Empty default → reject
+        // with the same unsupported message (do not leak chain internals).
+        $enabled = $this->chainEnablement?->isFinalPairEnabled($fromFormat, $toFormat) ?? false;
+        if (! $enabled) {
+            throw new \InvalidArgumentException("Unsupported conversion: {$fromFormat} → {$toFormat}");
+        }
+
+        return $this->createChain($user, $file, $fromFormat, $toFormat, $path, $privileged);
+    }
+
+    /**
+     * Обычная одношаговая конверсия (OCR / прямая isSupported-пара).
+     */
+    private function createSingleHop(
+        User $user,
+        UploadedFile $file,
+        string $fromFormat,
+        string $toFormat,
+        FileCategory $category,
+        bool $isAi,
+        bool $ocr,
+        bool $privileged,
+    ): Conversion {
         // Toggle-гейт: пара, отключённая админом, режется ДО любых quota/S3-
         // эффектов и до постановки в очередь. Проверка по паре (from→to) —
         // независимо от ocr-флага (та же пара). Отсутствие ряда = включено.
@@ -154,6 +204,132 @@ class ConversionManager
         }
 
         return $conversion;
+    }
+
+    /**
+     * Multi-hop chain (CNV-5): materialize ALL hops, dispatch hop-1 only.
+     *
+     * @param list<array{from: string, to: string, category: FileCategory, isAi: bool}> $path
+     */
+    private function createChain(
+        User $user,
+        UploadedFile $file,
+        string $fromFormat,
+        string $toFormat,
+        array $path,
+        bool $privileged,
+    ): Conversion {
+        foreach ($path as $hop) {
+            if ($this->toggleService !== null && ! $this->toggleService->isEnabled($hop['from'], $hop['to'])) {
+                throw new ConversionDisabledException('Конвертация временно отключена');
+            }
+            if (! $privileged && ($hop['isAi'] || $hop['category'] === FileCategory::Video)) {
+                throw new AuthRequiredException('Для ai/video конвертаций нужен вход.');
+            }
+        }
+
+        $originalName = $file->getClientOriginalName() ?: 'upload';
+        $mimeType     = $file->getMimeType() ?? 'application/octet-stream';
+        $sizeBytes    = (int) $file->getSize();
+
+        // Size/MIME gates use hop-1 category (uploaded bytes belong to source).
+        $firstCategory = $path[0]['category'];
+        $this->assertWithinSizeLimit($user, $sizeBytes);
+        $this->assertMimeAllowed($mimeType, $firstCategory, false);
+
+        $planHops = array_map(
+            static fn (array $hop): array => ['category' => $hop['category'], 'isAi' => $hop['isAi']],
+            $path,
+        );
+        $billingModes = $this->quotaService->checkPlan($user, $planHops);
+
+        $storagePath = $this->storeInput($file, $fromFormat, $mimeType);
+
+        $inputFile = new FileStorage();
+        $inputFile->setOriginalName($originalName);
+        $inputFile->setStoragePath($storagePath);
+        $inputFile->setMimeType($mimeType);
+        $inputFile->setSizeBytes($sizeBytes);
+        $inputFile->setExpiresAt(new \DateTimeImmutable('+48 hours'));
+        $this->em->persist($inputFile);
+
+        if ($user->getId() === null) {
+            $this->em->persist($user);
+        }
+
+        $chainId = $this->newChainId();
+        /** @var list<Conversion> $conversions */
+        $conversions = [];
+
+        foreach ($path as $i => $hop) {
+            $seq        = $i + 1;
+            $conversion = new Conversion();
+            $conversion->setUser($user);
+            $conversion->setFromFormat($hop['from']);
+            $conversion->setToFormat($hop['to']);
+            $conversion->setCategory($hop['category']);
+            $conversion->setIsAi($hop['isAi']);
+            $conversion->setIsOcr(false);
+            $conversion->setBillingMode($billingModes[$i]);
+            $conversion->setChainId($chainId);
+            $conversion->setSequence($seq);
+            $conversion->setFinalToFormat($toFormat);
+
+            if ($seq === 1) {
+                $conversion->setInputFile($inputFile);
+            } else {
+                $placeholder = new FileStorage();
+                $placeholder->setOriginalName('pending');
+                $placeholder->setStoragePath(
+                    ConversionChainListener::PENDING_INPUT_PREFIX . $chainId . '/' . $seq,
+                );
+                $placeholder->setMimeType('application/octet-stream');
+                $placeholder->setSizeBytes(0);
+                $placeholder->setExpiresAt(new \DateTimeImmutable('+48 hours'));
+                $this->em->persist($placeholder);
+                $conversion->setInputFile($placeholder);
+            }
+
+            $this->em->persist($conversion);
+            $conversions[] = $conversion;
+        }
+
+        $this->em->flush();
+
+        $hop1        = $conversions[0];
+        $category    = $hop1->getCategory();
+        $isAi        = $hop1->isAi();
+        $billingMode = $hop1->getEffectiveBillingMode();
+
+        try {
+            $this->chargePrepaidOrFail($hop1, $user, $category, $isAi, $billingMode);
+            $this->dispatchOrRollbackPrepaid($hop1, $user, $category, $isAi, $billingMode);
+        } catch (\Throwable $e) {
+            // PlanQuota dispatch abort leaves hop-1 Pending; Prepaid paths may
+            // already have marked Failed. Always Fail + fail-propagate siblings.
+            if ($hop1->getStatus() === ConversionStatus::Pending) {
+                $hop1->setStatus(ConversionStatus::Failed);
+                $this->em->flush();
+            }
+            $this->chainFailPropagator->failPropagateFrom($hop1);
+
+            throw $e;
+        }
+
+        if ($billingMode === BillingMode::PlanQuota) {
+            $this->quotaService->chargeHop($user, $category, $isAi, $billingMode, $hop1->getId());
+        }
+
+        return $hop1;
+    }
+
+    private function newChainId(): string
+    {
+        $bytes    = random_bytes(16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
     }
 
     /**
@@ -256,6 +432,7 @@ class ConversionManager
             $conversion->setStatus(ConversionStatus::Failed);
             $conversion->setErrorMessage('insufficient_balance');
             $this->em->flush();
+
             throw $e;
         }
     }
@@ -345,8 +522,10 @@ class ConversionManager
      * с ожидаемым префиксом (`inputs/` / `results/`), без `..`, `\0`, `\`,
      * ведущего `/`. Имена объектов генерируем сами (uuid.ext) — пользовательский
      * filename в ключ никогда не попадает.
+     *
+     * Public for chain advance ({@see \App\EventListener\ConversionChainListener}).
      */
-    private function assertSafeObjectKey(string $key, string $expectedPrefix): void
+    public function assertSafeObjectKey(string $key, string $expectedPrefix): void
     {
         if (
             $key === ''
@@ -477,6 +656,14 @@ class ConversionManager
             throw new \RuntimeException('Conversion not found');
         }
 
+        $chainId     = $conversion->getChainId();
+        $sequence    = $conversion->getSequence();
+        $finalTo     = $conversion->getFinalToFormat();
+        $chainLength = null;
+        if ($chainId !== null) {
+            $chainLength = count($this->conversionRepository->findByChainIdOrdered($chainId));
+        }
+
         // Live status from Redis hash `conv:status:{id}` (TTL 24h). Falls back to
         // the MariaDB row once the hash has expired. Contract §4.
         $live = $this->statusReader->read($id);
@@ -488,6 +675,12 @@ class ConversionManager
                 status: $state                 ?? $conversion->getStatus(),
                 outputPath: $live['outputUrl'] ?? $live['outputKey'] ?? $conversion->getOutputFile()?->getStoragePath(),
                 errorMessage: ($live['error'] ?? '') !== '' ? $live['error'] : $conversion->getErrorMessage(),
+                chainId: $chainId,
+                sequence: $sequence,
+                finalToFormat: $finalTo,
+                chainLength: $chainLength,
+                fromFormat: $conversion->getFromFormat(),
+                toFormat: $conversion->getToFormat(),
             );
         }
 
@@ -496,7 +689,45 @@ class ConversionManager
             status: $conversion->getStatus(),
             outputPath: $conversion->getOutputFile()?->getStoragePath(),
             errorMessage: $conversion->getErrorMessage(),
+            chainId: $chainId,
+            sequence: $sequence,
+            finalToFormat: $finalTo,
+            chainLength: $chainLength,
+            fromFormat: $conversion->getFromFormat(),
+            toFormat: $conversion->getToFormat(),
         );
+    }
+
+    /**
+     * Resolve the conversion whose output may be downloaded for the given id.
+     * Single-hop: the row itself. Chain: the final hop only when Completed.
+     *
+     * @throws \RuntimeException not found / not owned
+     */
+    public function resolveDownloadConversion(int $id, User $user): Conversion
+    {
+        $conversion = $this->conversionRepository->find($id);
+
+        if ($conversion === null || $conversion->getUser()->getId() !== $user->getId()) {
+            throw new \RuntimeException('Conversion not found');
+        }
+
+        $chainId = $conversion->getChainId();
+        if ($chainId === null) {
+            return $conversion;
+        }
+
+        $hops = $this->conversionRepository->findByChainIdOrdered($chainId);
+        if ($hops === []) {
+            return $conversion;
+        }
+
+        $final = $hops[array_key_last($hops)];
+        if ($final->getStatus() !== ConversionStatus::Completed || $final->getOutputFile() === null) {
+            throw new \RuntimeException('Output file not available');
+        }
+
+        return $final;
     }
 
     /**

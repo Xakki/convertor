@@ -375,7 +375,7 @@ class TelegramWebhookController extends AbstractController
             $totalAmountStars,
             $telegramUserId,
         );
-        if (!$credited) {
+        if (! $credited) {
             return;
         }
 

@@ -147,8 +147,8 @@ final class TelegramWebhookControllerTest extends WebTestCase
         $client    = static::createClient();
         $container = static::getContainer();
 
-        $bound   = $this->makeUser(10);
-        $other   = $this->makeUser(20);
+        $bound = $this->makeUser(10);
+        $other = $this->makeUser(20);
         $other->setTelegramId('555');
 
         $users = $this->createMock(UserRepository::class);
@@ -376,7 +376,7 @@ final class TelegramWebhookControllerTest extends WebTestCase
                 999,
                 self::stringContains('пакет'),
                 self::callback(static function (?array $markup): bool {
-                    $rows = $markup['inline_keyboard'] ?? [];
+                    $rows      = $markup['inline_keyboard'] ?? [];
                     $callbacks = [];
                     foreach ($rows as $row) {
                         foreach ($row as $btn) {

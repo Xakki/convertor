@@ -60,14 +60,14 @@ class MeController extends AbstractController
         $userId   = $user->getId();
 
         return $this->json([
-            'id'               => $userId,
-            'name'             => $user->getFirstName() ?? $username ?? ('User ' . $userId),
-            'username'         => $username,
-            'profile_url'      => $username !== null && $username !== '' ? 'https://t.me/' . $username : null,
-            'avatar_url'       => $this->avatarDataUri($user->getPhotoUrl()),
-            'plan'             => $user->getPlan(),
-            'balance_cents'    => $user->getBalanceCents(),
-            'is_admin'         => $user->isAdmin(),
+            'id'              => $userId,
+            'name'            => $user->getFirstName() ?? $username ?? ('User ' . $userId),
+            'username'        => $username,
+            'profile_url'     => $username !== null && $username !== '' ? 'https://t.me/' . $username : null,
+            'avatar_url'      => $this->avatarDataUri($user->getPhotoUrl()),
+            'plan'            => $user->getPlan(),
+            'balance_cents'   => $user->getBalanceCents(),
+            'is_admin'        => $user->isAdmin(),
             'telegram_linked' => $user->getTelegramId() !== null && $user->getTelegramId() !== '',
         ]);
     }

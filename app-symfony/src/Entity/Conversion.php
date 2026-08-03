@@ -18,6 +18,7 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'FK_CONVERSIONS_OUTPUT', columns: ['output_file_id'])]
 #[ORM\Index(name: 'IDX_CONVERSIONS_STATUS_UPDATED_AT', columns: ['status', 'updated_at'])]
 #[ORM\Index(name: 'IDX_CONVERSIONS_STATUS_CREATED_AT', columns: ['status', 'created_at'])]
+#[ORM\Index(name: 'IDX_CONVERSIONS_CHAIN_ID_SEQUENCE', columns: ['chain_id', 'sequence'])]
 #[ORM\HasLifecycleCallbacks]
 class Conversion
 {
@@ -78,6 +79,27 @@ class Conversion
      */
     #[ORM\Column(type: 'string', length: 20, enumType: BillingMode::class, nullable: true)]
     private ?BillingMode $billingMode = null;
+
+    /**
+     * Идентификатор цепочки хопов (CNV-5). null = одиночная конверсия (не цепочка).
+     * UUID-строка; общий для всех hop-строк одной submit-цепочки.
+     */
+    #[ORM\Column(type: 'string', length: 36, nullable: true)]
+    private ?string $chainId = null;
+
+    /**
+     * Порядковый номер hop внутри цепочки (1-based; задаёт Manager при submit).
+     * null вне цепочки.
+     */
+    #[ORM\Column(type: 'integer', nullable: true)]
+    private ?int $sequence = null;
+
+    /**
+     * Пользовательский финальный target всей цепочки (A→…→final).
+     * У одиночной конверсии = null; у hop'ов цепочки дублируется на каждой строке.
+     */
+    #[ORM\Column(type: 'string', length: 20, nullable: true)]
+    private ?string $finalToFormat = null;
 
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
@@ -273,6 +295,42 @@ class Conversion
     public function setBillingMode(?BillingMode $billingMode): self
     {
         $this->billingMode = $billingMode;
+
+        return $this;
+    }
+
+    public function getChainId(): ?string
+    {
+        return $this->chainId;
+    }
+
+    public function setChainId(?string $chainId): self
+    {
+        $this->chainId = $chainId;
+
+        return $this;
+    }
+
+    public function getSequence(): ?int
+    {
+        return $this->sequence;
+    }
+
+    public function setSequence(?int $sequence): self
+    {
+        $this->sequence = $sequence;
+
+        return $this;
+    }
+
+    public function getFinalToFormat(): ?string
+    {
+        return $this->finalToFormat;
+    }
+
+    public function setFinalToFormat(?string $finalToFormat): self
+    {
+        $this->finalToFormat = $finalToFormat;
 
         return $this;
     }

@@ -13,6 +13,7 @@ use App\Enum\FileCategory;
 use App\Exception\InsufficientBalanceException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
+use App\Service\Conversion\ConversionChainFailPropagator;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
@@ -95,6 +96,11 @@ final class ConversionManagerOcrTest extends TestCase
             $bus,
             new ConversionStatusReader(new RedisConnectionFactory("redis://localhost")),
             $s3,
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $file = $this->makeUpload($from);
@@ -222,6 +228,11 @@ final class ConversionManagerOcrTest extends TestCase
             $this->createStub(MessageBusInterface::class),
             new ConversionStatusReader(new RedisConnectionFactory("redis://localhost")),
             new S3Storage($this->createStub(S3Client::class), 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $this->expectException(\InvalidArgumentException::class);
@@ -264,6 +275,11 @@ final class ConversionManagerOcrTest extends TestCase
             $bus,
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $this->expectException(\RuntimeException::class);
@@ -315,6 +331,11 @@ final class ConversionManagerOcrTest extends TestCase
             $bus,
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $this->expectException(\RuntimeException::class);
@@ -361,6 +382,11 @@ final class ConversionManagerOcrTest extends TestCase
             $bus,
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $this->expectException(InsufficientBalanceException::class);
@@ -393,6 +419,11 @@ final class ConversionManagerOcrTest extends TestCase
             $this->createStub(MessageBusInterface::class),
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $this->expectException(\RuntimeException::class);
@@ -420,6 +451,11 @@ final class ConversionManagerOcrTest extends TestCase
             $this->createStub(MessageBusInterface::class),
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($this->createStub(S3Client::class), 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $this->expectException(\InvalidArgumentException::class);
@@ -542,6 +578,11 @@ final class ConversionManagerOcrTest extends TestCase
             $bus,
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
 
         $conversion = $manager->createConversion(new ConversionRequestDTO($this->makeUser(), $this->makeUpload('jpg'), 'txt', false));
@@ -586,6 +627,11 @@ final class ConversionManagerOcrTest extends TestCase
             $this->createStub(MessageBusInterface::class),
             new ConversionStatusReader(new RedisConnectionFactory('redis://localhost')),
             new S3Storage($s3Client, 'convertor'),
+            new ConversionChainFailPropagator(
+                $this->createStub(ConversionRepository::class),
+                $this->createStub(EntityManagerInterface::class),
+                $this->createStub(QuotaService::class),
+            ),
         );
     }
 

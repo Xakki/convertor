@@ -147,6 +147,99 @@ class ConversionRegistry
         return isset($this->getMatrix()[$from][$to]);
     }
 
+    /**
+     * Shortest conversion path over the routing matrix (BFS, depth-capped).
+     *
+     * Uses the same matrix as {@see isSupported()} / {@see getMatrix()} — never
+     * invents OCR-only edges (matrix membership only). Format keys containing
+     * `_` (virtual STT/TTS) are excluded as graph nodes. Same-format
+     * (`$from === $to`) returns null. A direct edge is a valid length-1 path;
+     * Manager should still prefer {@see isSupported()} before chaining.
+     * Among equal-length paths, prefers fewest AI hops (non-AI first).
+     * Formats are NOT case-normalized here — same style as {@see isSupported()}.
+     *
+     * @return list<array{from: string, to: string, category: FileCategory, isAi: bool}>|null
+     */
+    public function findPath(string $from, string $to, int $maxDepth = 2): ?array
+    {
+        if ($from === $to || $maxDepth < 1) {
+            return null;
+        }
+        if (str_contains($from, '_') || str_contains($to, '_')) {
+            return null;
+        }
+
+        $matrix = $this->getMatrix();
+        if (! isset($matrix[$from])) {
+            return null;
+        }
+
+        /** @var list<array{from: string, to: string, category: FileCategory, isAi: bool}>|null $bestPath */
+        $bestPath   = null;
+        $bestDepth  = PHP_INT_MAX;
+        $bestAiHops = PHP_INT_MAX;
+
+        /** @var \SplQueue<array{0: string, 1: list<array{from: string, to: string, category: FileCategory, isAi: bool}>, 2: int}> $queue */
+        $queue = new \SplQueue();
+        $queue->enqueue([$from, [], 0]);
+
+        /** @var array<string, array{0: int, 1: int}> $bestReached depth + aiHops per node */
+        $bestReached = [$from => [0, 0]];
+
+        while (! $queue->isEmpty()) {
+            /** @var array{0: string, 1: list<array{from: string, to: string, category: FileCategory, isAi: bool}>, 2: int} $frame */
+            $frame                  = $queue->dequeue();
+            [$node, $path, $aiHops] = $frame;
+            $depth                  = count($path);
+
+            if ($depth >= $maxDepth || $depth >= $bestDepth) {
+                continue;
+            }
+
+            foreach ($matrix[$node] ?? [] as $next => $meta) {
+                if (str_contains((string) $next, '_')) {
+                    continue;
+                }
+
+                $edge = [
+                    'from'     => $node,
+                    'to'       => $next,
+                    'category' => $meta['category'],
+                    'isAi'     => $meta['isAi'],
+                ];
+                $newPath  = [...$path, $edge];
+                $newDepth = $depth  + 1;
+                $newAi    = $aiHops + ($meta['isAi'] ? 1 : 0);
+
+                if ($next === $to) {
+                    if ($newDepth < $bestDepth || ($newDepth === $bestDepth && $newAi < $bestAiHops)) {
+                        $bestDepth  = $newDepth;
+                        $bestAiHops = $newAi;
+                        $bestPath   = $newPath;
+                    }
+                    continue;
+                }
+
+                if ($newDepth >= $bestDepth) {
+                    continue;
+                }
+
+                $prev = $bestReached[$next] ?? null;
+                if ($prev !== null) {
+                    [$prevDepth, $prevAi] = $prev;
+                    if ($newDepth > $prevDepth || ($newDepth === $prevDepth && $newAi >= $prevAi)) {
+                        continue;
+                    }
+                }
+
+                $bestReached[$next] = [$newDepth, $newAi];
+                $queue->enqueue([$next, $newPath, $newAi]);
+            }
+        }
+
+        return $bestPath;
+    }
+
     public function getCategory(string $from, string $to): FileCategory
     {
         return $this->getMatrix()[$from][$to]['category']

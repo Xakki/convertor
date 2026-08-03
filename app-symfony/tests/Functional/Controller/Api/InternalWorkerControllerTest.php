@@ -11,6 +11,7 @@ use App\Entity\WorkerCapability;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Enum\WorkerLivenessStatus;
+use App\Repository\ConversionRepository;
 use App\Repository\WorkerCapabilityRepository;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Quota\QuotaService;
@@ -24,6 +25,7 @@ use Doctrine\Persistence\ManagerRegistry;
 use Psr\Log\NullLogger;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
+use Symfony\Component\EventDispatcher\EventDispatcher;
 
 /**
  * Functional tests for the WS-Gateway internal relay (/api/v1/internal/worker/*).
@@ -77,6 +79,8 @@ final class InternalWorkerControllerTest extends WebTestCase
             'test_-results',
             new NullLogger(),
             $this->createStub(QuotaService::class),
+            new EventDispatcher(),
+            $this->createStub(ConversionRepository::class),
         );
     }
 
