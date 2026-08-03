@@ -1,21 +1,4 @@
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:GetBucketLocation", "s3:ListBucket"],
-      "Resource": ["arn:aws:s3:::convertor-results"]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:AbortMultipartUpload",
-        "s3:DeleteObject",
-        "s3:GetObject",
-        "s3:ListMultipartUploadParts",
-        "s3:PutObject"
-      ],
-      "Resource": ["arn:aws:s3:::convertor-results/*"]
-    }
-  ]
+  "deprecated": true,
+  "message": "See minio-convertor-dev-inputs-policy.json, minio-convertor-dev-results-policy.json, minio-convertor-dump-policy.json"
 }
