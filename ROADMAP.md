@@ -136,7 +136,7 @@ swagger полон; unit зелёные; интеграционные с зам�
   (Impress) / PDF→jpg постранично, разметка rst/latex/wiki (решение 2026-06-20).
 - [ ] **[[CNV-4-archive-input-fanout]]** — распаковка архива на входе → fan-out файлов в отдельные очереди по target-формату
   (batch-распаковка, не конвертация формата архива).
-- [ ] **[[CNV-5-conversion-chaining]]** — цепочки конвертаций A→B→C (grooming, Стадия 7).
+- [x] **[[CNV-5-conversion-chaining]]** — цепочки конвертаций A→B→C (grooming, Стадия 7).
 - [ ] **Расширение data-воркера** (лёгкие форматы, тот же движок pandas/stdlib) — кандидаты:
   - **TSV** и иные разделители (`;`, `|`) ↔ csv/json — тривиально через pandas.
   - **NDJSON / JSON Lines** ↔ csv/json.
