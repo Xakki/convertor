@@ -28,13 +28,8 @@ Poison-payload с oversize/битым inline, но с `resultKey`, не попа
 `ws_server.py` + тестами.
 
 **Acceptance Criteria:**
-- Dual-payload не обходит pre-relay validation / DLQ (поведение согласовано в Decisions).
+- Dual-payload (`inline`+`resultKey`) → malformed / permanent DLQ, не trust-ack large-path.
 - `make TEST=1 test-gateway` зелёный.
 
-**Open questions:**
-- Отклонять dual-payload как malformed (400 / permanent DLQ)?
-- Приоритет `resultKey` над `inline` (игнор inline, но валидировать его всё равно)?
-- Валидировать inline в любом случае, даже если выбран large-path?
-
 **Decisions:**
-- (пусто — решить на grooming)
+- (2026-08-03) Dual-payload (`inline` + `resultKey` вместе) = malformed: reject / permanent DLQ. Контракт — ровно одно из двух полей. Закрыть в `ws_server.py` + тесты.

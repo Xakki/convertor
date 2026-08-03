@@ -37,10 +37,7 @@ dev+test AI; усложняет cleanup (см. CNV-44).
 - Dev и test AI-тома изолированы по имени проекта.
 - Документирован путь миграции существующего кэша (или `external: true` decision).
 
-**Open questions:**
-- Делить кэш моделей между стендами намеренно (external shared) или
-  изолировать per-project (рекомендация: isolate)?
-- Кто делает volume rename на uBook / saFin — эта карта или CNV-44 follow-up?
-
 **Decisions:**
 - Filed from CNV-39 smoke log review (2026-08-02).
+- (2026-08-03) Кэш моделей — isolate per-project: `name: "${COMPOSE_PROJECT_NAME}-worker-ai-models"` / `…-worker-ai-data` (не shared external).
+- (2026-08-03) One-shot миграция volume (rename/copy) на uBook/saFin — в скоупе этой карточки + docs в Execution Log / docs.

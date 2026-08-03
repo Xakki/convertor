@@ -29,10 +29,6 @@ AC этой карточки. Возможно позже понадобится
 - Реализация + тесты, если принято в scope.
 - `make TEST=1 test-gateway` зелёный.
 
-**Open questions:**
-- Нужен ли retry на 429 с backoff уже сейчас?
-- 401/403 на internal relay — баг конфигурации (DLQ) или transient (retry)?
-
 **Decisions:**
-
-**Status:** grooming
+- (2026-08-03) Отложено до реальных инцидентов 401/403/429 на internal result-relay. Blanket 4xx→DLQ остаётся. Карточка → freeze/.
+- При разморозке: открыть заново вопросы про 401/403 (DLQ vs retry) и 429 (backoff).

@@ -50,9 +50,7 @@ history). CDN: `unpkg.com/alpinejs@3.x.x`.
 - Нет регрессии логина/квот/истории; `make cs-check` не требуется для twig-only,
   но browser re-smoke точечный.
 
-**Open questions:**
-- Чинить сразу все шаблоны одним PR или только dashboard/home сначала?
-- Оставляем magic `init()` (убрать `x-init`) или наоборот rename?
-
 **Decisions:**
 - (2026-08-02) Заведено из CNV-9 smoke; в рамках CNV-9 не чинили (oos smoke).
+- (2026-08-03) Механизм: убрать `x-init="init()"`, оставить Alpine 3 magic-method `init()`.
+- (2026-08-03) Скоуп: все затронутые шаблоны одним PR (dashboard, home/conversion, header, cookie-consent, admin).

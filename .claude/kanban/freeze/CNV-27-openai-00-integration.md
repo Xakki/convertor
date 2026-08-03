@@ -121,7 +121,11 @@ Live-цифры: из 76 working-провайдеров только 19 реал
 - **Q7.2 РАЗРЕШЁН ресёрчем (см. секцию ниже); остаются точечные scope-решения (a–f) перед переносом в todo**. The 4 interfaces are heterogeneous: STT/TTS = hosted alt-backend ; markitdown = new doc→md (overlaps OCR) ; text→image = NEW conversion category (absent from FileCategory).
 - Card endpoint nit: textToImage generation = POST /v1/images/generate (card's GET /images/{f} is retrieval).
 
-**Status:** grooming — blocked on Q7.2 research. Rename intent: external-ai-worker.
+**Status:** freeze — отложено по решению grooming (2026-08-03). Rename intent: external-ai-worker.
+
+**Decisions (grooming 2026-08-03):**
+- Карточка целиком → `freeze/` до явного размораживания; scope (a–f) и эпик-нарезка не закрывались.
+- При разморозке: продолжить grooming с блока Q1–Q3 (worker/stream, secrets, epic) → markitdown/text2img/models.
 
 ## Ресёрч Q7.2 (2026-07-17) — возможности внешнего endpoint
 
