@@ -6,7 +6,7 @@
    id="toggle" — якорь боковой навигации. Гранулярность — по паре (from→to):
    отключение режет пару независимо от ocr-флага. #}
 <section id="toggle" class="mt-8" aria-labelledby="toggle-heading"
-         x-data="adminToggle()" x-init="init()">
+         x-data="adminToggle()">
     <div class="flex items-center justify-between">
         <h2 id="toggle-heading" class="text-lg font-semibold text-white">Конвертации</h2>
         <button @click="reload()"

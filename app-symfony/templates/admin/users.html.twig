@@ -4,7 +4,7 @@
    app-front/admin/index.html. Секретов в разметке нет — всё из gated JSON-API
    /api/v1/admin/users. id="users" — якорь боковой навигации. #}
 <section id="users" class="mt-8" aria-labelledby="users-heading"
-         x-data="adminUsers()" x-init="init()">
+         x-data="adminUsers()">
     <div class="flex items-center justify-between">
         <h2 id="users-heading" class="text-lg font-semibold text-white">Пользователи</h2>
         <button @click="reload()"

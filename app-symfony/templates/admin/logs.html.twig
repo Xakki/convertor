@@ -5,7 +5,7 @@
    (стектрейсы) в БД нет — линк-аут в Graylog по conversion id. Секретов в
    разметке нет. id="logs" — якорь боковой навигации. #}
 <section id="logs" class="mt-8" aria-labelledby="logs-heading"
-         x-data="adminLogs()" x-init="init()">
+         x-data="adminLogs()">
     <div class="flex items-center justify-between">
         <h2 id="logs-heading" class="text-lg font-semibold text-white">Логи конвертаций</h2>
         <button @click="reload()"

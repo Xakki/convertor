@@ -4,7 +4,7 @@
    app-front/admin/index.html. Секретов в разметке нет — всё из gated JSON-API
    GET /api/v1/admin/stats. id="overview" — якорь боковой навигации. #}
 <section id="overview" class="mt-8" aria-labelledby="stats-heading"
-         x-data="adminStats()" x-init="init()">
+         x-data="adminStats()">
     <div class="flex items-center justify-between">
         <h2 id="stats-heading" class="text-lg font-semibold text-white">Статистика</h2>
         <button @click="reload()"

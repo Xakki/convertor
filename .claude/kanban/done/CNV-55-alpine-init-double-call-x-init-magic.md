@@ -54,3 +54,14 @@ history). CDN: `unpkg.com/alpinejs@3.x.x`.
 - (2026-08-02) Заведено из CNV-9 smoke; в рамках CNV-9 не чинили (oos smoke).
 - (2026-08-03) Механизм: убрать `x-init="init()"`, оставить Alpine 3 magic-method `init()`.
 - (2026-08-03) Скоуп: все затронутые шаблоны одним PR (dashboard, home/conversion, header, cookie-consent, admin).
+- (2026-08-03) В тот же PR включён `pricing/index.html.twig` (тот же баг, не был в исходном списке).
+- (2026-08-03) `app-front/` и `workers/ai/devserver/` — вне скоупа CNV-55 (не Symfony Twig); оставить на отдельную карточку при необходимости.
+
+**Execution Log:**
+- Started: branch task/CNV-55
+- (2026-08-03) Frontend: removed 13× `x-init="init()"` from Symfony Twig; keep magic `init()`.
+  Files: dashboard/index, conversion/index+pair, pricing/index, partials/_header,
+  partials/_cookie_consent, admin/{users,workers,examples,queues,logs,stats,toggle}.
+- (2026-08-03) Leftovers fixed same branch: `app-front/index.html`,
+  `app-front/admin/index.html`, `workers/ai/devserver/static/index.html` (3×).
+- (2026-08-03) Review APPROVE_WITH_NITS; leftovers (app-front + ai-devserver) fixed in fa762b9; Twig-only QA N/A for cs; browser smoke deferred to user/ready gate.
