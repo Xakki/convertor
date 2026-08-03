@@ -623,6 +623,33 @@ async def test_malformed_result_neither_field_goes_to_dlq():
 
 
 @pytest.mark.asyncio
+async def test_malformed_result_both_inline_and_resultkey_goes_to_dlq():
+    """inline + resultKey вместе → DLQ (malformed), НЕ trust-ack large-path (CNV-53)."""
+    over = _b64(101)  # oversize inline — без dual-reject ушёл бы в large-path
+    job1 = {"conversionId": 1, "targetFormat": "txt"}
+    job2 = {"conversionId": 2, "targetFormat": "txt"}
+    fake = FakeKeyDb(new_entries=[("1-0", job1), ("2-0", job2)])
+    rec = RelayRecorder(status=200)
+    async with _server(fake, rec, inline_max=100) as port:
+        async with connect(f"ws://localhost:{port}", additional_headers=_auth()) as c:
+            await c.send(_ready(worker_id="img-1", worker_type="image", slots=1))
+            await _recv_job(c)
+            await c.send(json.dumps({
+                "type": "result",
+                "jobId": "1-0",
+                "inline": over,
+                "resultKey": "jobs/1-0/result",
+            }))
+            second = await _recv_job(c)
+            assert second["jobId"] == "2-0"
+
+    assert rec.requests == []  # relay не вызывался
+    assert fake.acks == []  # trust-ack large-path НЕ сработал
+    assert len(fake.dlq_writes) == 1
+    assert "both inline and resultKey" in fake.dlq_writes[0]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_malformed_result_inline_not_string_goes_to_dlq():
     """inline не строка → немедленный DLQ (malformed, permanent)."""
     job1 = {"conversionId": 1, "targetFormat": "txt"}

@@ -33,3 +33,13 @@ Poison-payload с oversize/битым inline, но с `resultKey`, не попа
 
 **Decisions:**
 - (2026-08-03) Dual-payload (`inline` + `resultKey` вместе) = malformed: reject / permanent DLQ. Контракт — ровно одно из двух полей. Закрыть в `ws_server.py` + тесты.
+
+## Execution Log
+
+- (2026-08-03) Started; branch `task/CNV-53`.
+- (2026-08-03) Dual-payload reject: `workers/gateway/ws_server.py` `_handle_result` —
+  оба `inline`+`resultKey` → `_to_dlq_and_release` (permanent DLQ) **до** large-path
+  trust-ack; больше не очищает `inline` и не идёт в ack-на-доверии.
+- (2026-08-03) Тест: `test_malformed_result_both_inline_and_resultkey_goes_to_dlq` в
+  `workers/tests/test_gateway_relay.py` (oversize inline + resultKey → DLQ, без ack/relay).
+- (2026-08-03) Review APPROVE (Grok); AC met; tests 195 passed / 1 skipped; awaiting user approval for done/.

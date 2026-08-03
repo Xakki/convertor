@@ -567,22 +567,28 @@ class WsGateway:
 
         result_key = frame.get("resultKey")
         inline = frame.get("inline")
+        processing_ms = frame.get("processingMs")
+
+        # Dual-payload (CNV-53): ровно одно из inline|resultKey. Оба сразу —
+        # malformed → permanent DLQ ДО large-path trust-ack (иначе обход
+        # pre-relay cap/decode из CNV-37 через прикреплённый resultKey).
         if result_key and inline is not None:
-            # Оба поля — нарушение протокола: детерминированно берём большой путь
-            # (resultKey) и логируем; reader не падает.
             logger.warning(
-                "result frame has both inline and resultKey — treating as large",
+                "result frame has both inline and resultKey → DLQ",
                 extra={"jobId": job_id},
             )
-            inline = None
+            await self._to_dlq_and_release(
+                session, credits, job_id,
+                "result frame has both inline and resultKey",
+                processing_ms,
+            )
+            return
 
         if result_key:
             # Большой путь: файл воркер POST'нул сам, payload через gateway не шёл →
             # ack на доверии к WS-сообщению (§5).
             await self._ack_and_release(session, credits, job_id, "result")
             return
-
-        processing_ms = frame.get("processingMs")
 
         # Permanent pre-relay (CNV-37): malformed / oversize / decode → DLQ сразу
         # через общий `_to_dlq_and_release` (симметрия с post-relay 4xx). Иначе
