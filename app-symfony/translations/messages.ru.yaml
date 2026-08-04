@@ -96,6 +96,8 @@ home:
     error_expired: 'Срок хранения результата истёк'
     error_failed: 'Конвертация не удалась'
     history_heading: 'Мои конвертации'
+    # CNV-61: кнопка/ссылка рядом с «Конвертировать» → /history.
+    history_link: 'Мои конвертации'
     # home-12: заголовок/подпись гостевой истории (без входа) — отдельная
     # формулировка, честно объясняющая, что это НЕ синхронизированная
     # серверная история пользователя, а cookie-scoped список на этом
@@ -108,10 +110,6 @@ home:
     duration_prefix: 'за '
     preview_title: 'Предпросмотр результата'
     preview_truncated: 'Показаны первые 64 КБ — скачайте целиком.'
-    # home-05: инлайн audio/video плеер — подпись тумблера меняется в рантайме.
-    viewer:
-        show_player: 'Показать плеер'
-        hide_player: 'Скрыть плеер'
     status:
         pending: 'В очереди'
         processing: 'Обработка'
@@ -149,6 +147,19 @@ home:
         mb: 'МБ'
         ms: 'мс'
         sec: 'с'
+
+# CNV-61-preview: общая модалка предпросмотра файла (source/result) —
+# _file_preview_modal.html.twig + _file_preview_script.html.twig, переиспользуется
+# /history, только что завершённой job (`/`) и логом конвертаций админки.
+preview:
+    source_label: 'Исходник'
+    result_label: 'Результат'
+    unavailable: 'Предпросмотр недоступен'
+    failed: 'Не удалось загрузить предпросмотр'
+    network: 'Сетевая ошибка при загрузке предпросмотра'
+    gone: 'Файл больше не доступен — срок хранения истёк'
+    not_ready: 'Конвертация ещё не завершена'
+    unsupported: 'Этот файл нельзя предпросмотреть'
 
 # Личный кабинет (dashboard-page-01), только просмотр: templates/dashboard/
 # index.html.twig + partials/_dashboard_app_script.html.twig. Переиспользует

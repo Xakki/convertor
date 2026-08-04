@@ -485,7 +485,7 @@ class WsGateway:
 
                 ftype = frame.get("type")
                 if ftype == "ping":
-                    await self._handle_ping(ws, session, frame)
+                    await self._handle_ping(ws, session, credits, frame)
                 elif ftype == "result":
                     await self._handle_result(session, credits, frame)
                 elif ftype == "fail":
@@ -529,7 +529,7 @@ class WsGateway:
             )
 
     async def _handle_ping(
-        self, ws: ServerConnection, session: WorkerSession, frame: dict
+        self, ws: ServerConnection, session: WorkerSession, credits: Credits, frame: dict
     ) -> None:
         """`ping{cpu,mem,load}` → `pong` по тому же WS (liveness, §4/§6.6).
 
@@ -537,7 +537,11 @@ class WsGateway:
         (s1-08); сервер лишь отвечает `pong`. Кредит НЕ занимается, stream НЕ
         читается, XACK нет. registry-06: cpu/mem/load теперь ЕЩЁ и агрегируются
         по `(workerType, instanceId)` для периодического push в PHP — см.
-        `workers/gateway/liveness.py`; сам ping/pong-путь этим не меняется."""
+        `workers/gateway/liveness.py`; сам ping/pong-путь этим не меняется.
+        CNV-61: `credits.inflight` (та же связка, что держит кредитный учёт
+        §4/§5) отдаём агрегатору как `len(inflight)` — сколько job'ов инстанс
+        держит прямо сейчас; может быть > slots на resumed PEL (см. Credits) —
+        репортим как есть, не клэмпим."""
         logger.debug(
             "ping telemetry (accepted, not consumed)",
             extra={"cpu": frame.get("cpu"), "mem": frame.get("mem"),
@@ -546,6 +550,7 @@ class WsGateway:
         self._liveness.record_ping(
             session.worker_type, session.instance_id,
             _as_float(frame.get("cpu")), _as_float(frame.get("mem")), _as_float(frame.get("load")),
+            inflight=len(credits.inflight),
         )
         await ws.send(json.dumps({"type": "pong"}))
 

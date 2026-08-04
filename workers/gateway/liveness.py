@@ -26,7 +26,9 @@ implementation — see registry-06 card; envelope keys added by registry-09):
     POST /api/v1/internal/worker/liveness
     {"instances": [{"workerType": "...", "instanceId": "...", "status": "alive"
                      | "disconnected", "lastSeenAt": "<ISO-8601 UTC>",
-                     "metrics": {"cpu": ..., "mem": ..., "load": ...} | omitted}],
+                     "metrics": {"cpu": ..., "mem": ..., "load": ...} | omitted,
+                     "inflight": <int> | omitted}],  # CNV-61: omitted = unknown,
+                     # never negative; PHP treats missing/None as "unknown"
      "snapshot": true,            # `instances` holds the FULL alive-set
      "authoritative": true|false, # false = gateway still warming up, do NOT sweep
      "gatewayId": "..."}          # diagnostic only, never a state key
@@ -111,6 +113,12 @@ class _Instance:
     cpu: float | None = None
     mem: float | None = None
     load: float | None = None
+    # inflight (CNV-61): len(Credits.inflight) at the moment of the last ping —
+    # how many jobs this instance currently holds in-flight. None = unknown
+    # (never pinged with credits available yet, or ping arrived off a path
+    # with no Credits in scope) — kept distinct from 0 (genuinely idle) so PHP
+    # doesn't mistake "we don't know" for "this worker is empty".
+    inflight: int | None = None
     last_seen_at: str = field(default_factory=_now_iso)
 
     def to_payload(self) -> dict:
@@ -122,6 +130,10 @@ class _Instance:
         }
         if self.cpu is not None or self.mem is not None or self.load is not None:
             payload["metrics"] = {"cpu": self.cpu, "mem": self.mem, "load": self.load}
+        # Optional on the wire (see module docstring) — omitted entirely rather
+        # than sent as null, matching the existing `metrics` convention above.
+        if self.inflight is not None:
+            payload["inflight"] = self.inflight
         return payload
 
 
@@ -173,10 +185,17 @@ class LivenessAggregator:
         cpu: float | None,
         mem: float | None,
         load: float | None,
+        inflight: int | None = None,
     ) -> None:
         """Update latest metrics + lastSeenAt for an already-connected instance.
         Silently ignored (no per-ping log spam — already warned at connect) if
-        the key is invalid/missing."""
+        the key is invalid/missing.
+
+        `inflight` (CNV-61): caller passes `len(Credits.inflight)` from the
+        ping path where credits are in scope; left `None` (default) when the
+        caller has no Credits to read — kept `None` rather than coerced to 0
+        so "unknown" stays distinguishable from "genuinely idle" (never clamp
+        a real count, but never fabricate one either)."""
         if not _valid_key(worker_type, instance_id):
             return
         key = (worker_type, instance_id)
@@ -189,6 +208,7 @@ class LivenessAggregator:
             self._alive[key] = inst
         inst.status = "alive"
         inst.cpu, inst.mem, inst.load = cpu, mem, load
+        inst.inflight = inflight
         inst.last_seen_at = _now_iso()
 
     def record_disconnect(self, worker_type: str | None, instance_id: str | None) -> None:
@@ -203,6 +223,12 @@ class LivenessAggregator:
         inst = self._alive.pop(key, None)
         if inst is None:
             inst = _Instance(worker_type=worker_type, instance_id=instance_id, status="disconnected")
+        # inflight (CNV-61): unlike cpu/mem/load (harmless "what it was doing"
+        # history), a stale in-flight count on a DISCONNECTED instance is
+        # actively misleading — those jobs get reclaimed elsewhere, so "still
+        # holding 2 jobs" on a dead host would read as a ghost/stuck worker.
+        # Reset to unknown rather than carrying the last-alive value forward.
+        inst.inflight = None
         inst.status = "disconnected"
         inst.last_seen_at = _now_iso()
         if key not in self._pending_disconnects and len(self._pending_disconnects) >= _MAX_PENDING_DISCONNECTS:

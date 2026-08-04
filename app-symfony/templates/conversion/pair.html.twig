@@ -193,8 +193,13 @@
        2026-07-21). ── #}
     {% include 'partials/_converter_viewer_modal.html.twig' %}
     {% include 'partials/_billing_topup_modal.html.twig' %}
+
+    {# ── CNV-61-preview: общая модалка предпросмотра source/result job — тот
+       же partial и позиция, что и на `/`. ── #}
+    {% include 'partials/_file_preview_modal.html.twig' %}
 </div>
 
 {% include 'partials/_billing_topup_script.html.twig' %}
+{% include 'partials/_file_preview_script.html.twig' %}
 {% include 'partials/_converter_app_script.html.twig' %}
 {% endblock %}

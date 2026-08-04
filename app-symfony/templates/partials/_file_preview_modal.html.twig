@@ -1,0 +1,76 @@
+{# ── CNV-61-preview: общая модалка предпросмотра файла (source/result).
+   Рендерится по filePreview.kind (filePreviewMixin(), см.
+   _file_preview_script.html.twig): 'image' → <img>, 'pdf' → <embed>,
+   'audio'/'video' → <audio|video controls>, 'text' → <pre x-text>; при
+   ошибке (filePreview.error — «недоступно»/410 gone/409 not_ready/415
+   unsupported/сеть) — текстовое сообщение вместо содержимого.
+
+   Include ОБЯЗАН быть ВНУТРИ x-data-скоупа компонента, подмешавшего
+   filePreviewMixin() (converterApp()/historyApp()/adminLogs()) — иначе
+   filePreview.* резолвится в пустом Alpine-скоупе (тот же класс бага, что и
+   у viewer.*/preview.* — см. _converter_viewer_modal.html.twig, home-05).
+
+   XSS-safety: objectUrl — ТОЛЬКО из URL.createObjectURL(blob) авторизованного
+   fetch (openFilePreview()), используется ТОЛЬКО как `:src` у
+   <img>/<audio>/<video>/<embed> — браузер декодирует байты как медиа/PDF,
+   НЕ как HTML-разметку. Текст — ТОЛЬКО через x-text. Ни innerHTML, ни
+   x-html здесь не участвуют.
+
+   variant: 'light' (home/history) | 'dark' (admin) — только тема панели. #}
+{% set variant = variant|default('light') %}
+{% set isDark = variant == 'dark' %}
+<div
+    x-show="filePreview.open"
+    x-cloak
+    @keydown.escape.window="closeFilePreview()"
+    class="fixed inset-0 z-50 flex items-center justify-center p-4"
+>
+    <div class="absolute inset-0 bg-slate-900/50" @click="closeFilePreview()"></div>
+    <div class="relative flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg shadow-xl {{ isDark ? 'border border-zinc-800 bg-zinc-900' : 'bg-white' }}">
+        <div class="flex items-center justify-between border-b px-4 py-3 {{ isDark ? 'border-zinc-800' : 'border-slate-200' }}">
+            <h3 class="text-sm font-semibold {{ isDark ? 'text-white' : 'text-slate-700' }}">{{ 'home.preview_title'|trans }}</h3>
+            <button
+                @click="closeFilePreview()"
+                class="rounded p-1 {{ isDark ? 'text-zinc-400 hover:bg-zinc-800 hover:text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600' }}"
+                aria-label="{{ 'common.close'|trans }}"
+            >✕</button>
+        </div>
+
+        <template x-if="filePreview.truncated">
+            <div class="border-b px-4 py-2 text-xs {{ isDark ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-amber-200 bg-amber-50 text-amber-800' }}">
+                {{ 'home.preview_truncated'|trans }}
+            </div>
+        </template>
+
+        <div class="min-h-0 flex-1 overflow-auto p-4">
+            <template x-if="filePreview.loading">
+                <p class="text-sm {{ isDark ? 'text-zinc-400' : 'text-slate-500' }}">{{ 'common.loading'|trans }}</p>
+            </template>
+            <template x-if="!filePreview.loading && filePreview.error">
+                <p class="text-sm {{ isDark ? 'text-red-400' : 'text-red-600' }}" x-text="filePreview.error"></p>
+            </template>
+            <template x-if="!filePreview.loading && !filePreview.error && filePreview.kind === 'image' && filePreview.objectUrl">
+                <img :src="filePreview.objectUrl" class="mx-auto max-h-[70vh] max-w-full" alt="">
+            </template>
+            <template x-if="!filePreview.loading && !filePreview.error && filePreview.kind === 'pdf' && filePreview.objectUrl">
+                <embed :src="filePreview.objectUrl" type="application/pdf" class="h-[70vh] w-full" />
+            </template>
+            <template x-if="!filePreview.loading && !filePreview.error && filePreview.kind === 'audio' && filePreview.objectUrl">
+                <audio :src="filePreview.objectUrl" controls class="w-full"></audio>
+            </template>
+            <template x-if="!filePreview.loading && !filePreview.error && filePreview.kind === 'video' && filePreview.objectUrl">
+                <video :src="filePreview.objectUrl" controls class="mx-auto max-h-[70vh] w-full"></video>
+            </template>
+            <template x-if="!filePreview.loading && !filePreview.error && filePreview.kind === 'text'">
+                <pre class="whitespace-pre-wrap break-words font-mono text-xs {{ isDark ? 'text-zinc-300' : 'text-slate-700' }}" x-text="filePreview.text"></pre>
+            </template>
+        </div>
+
+        <div class="flex justify-end gap-2 border-t px-4 py-3 {{ isDark ? 'border-zinc-800' : 'border-slate-200' }}">
+            <button
+                @click="closeFilePreview()"
+                class="rounded-lg border px-4 py-2 text-sm font-medium {{ isDark ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-800' : 'border-slate-300 text-slate-600 hover:bg-slate-100' }}"
+            >{{ 'common.close'|trans }}</button>
+        </div>
+    </div>
+</div>

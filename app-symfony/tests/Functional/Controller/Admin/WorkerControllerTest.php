@@ -26,6 +26,12 @@ final class WorkerControllerTest extends WebTestCase
 
     private const TEST_INSTANCE_ID = 'admin-workers-test';
 
+    /** Общий префикс instanceId-фикстур для тестов `/workers/hosts` и `?host=`. */
+    private const HOST_TEST_INSTANCE_PREFIX = 'admin-workers-hosts-';
+
+    /** Общий префикс instanceId-фикстур для тестов `DELETE /workers/stale` (CNV-61). */
+    private const STALE_TEST_INSTANCE_PREFIX = 'admin-workers-stale-';
+
     /** @var list<int> */
     private array $createdUserIds = [];
 
@@ -47,6 +53,14 @@ final class WorkerControllerTest extends WebTestCase
         $em->getConnection()->executeStatement(
             'DELETE FROM worker_capabilities WHERE worker_type = :wt AND instance_id = :id',
             ['wt' => self::TEST_WORKER_TYPE, 'id' => self::TEST_INSTANCE_ID],
+        );
+        $em->getConnection()->executeStatement(
+            'DELETE FROM worker_capabilities WHERE worker_type = :wt AND instance_id LIKE :prefix',
+            ['wt' => self::TEST_WORKER_TYPE, 'prefix' => self::HOST_TEST_INSTANCE_PREFIX . '%'],
+        );
+        $em->getConnection()->executeStatement(
+            'DELETE FROM worker_capabilities WHERE worker_type = :wt AND instance_id LIKE :prefix',
+            ['wt' => self::TEST_WORKER_TYPE, 'prefix' => self::STALE_TEST_INSTANCE_PREFIX . '%'],
         );
 
         parent::tearDown();
@@ -262,6 +276,307 @@ final class WorkerControllerTest extends WebTestCase
 
         self::assertNotNull($row);
         self::assertNull($row['host']);
+    }
+
+    /**
+     * CNV-61: `/workers/hosts` groups the SAME rows `/workers` returns by
+     * `host` — a real host with a partially-known `inflight`, a real host
+     * with NO worker reporting `inflight` at all (`inflightKnown: false`,
+     * not a misleading 0), and the legacy `host IS NULL` bucket (already
+     * populated by the registry-03 seed rows, no extra fixture needed for it).
+     */
+    public function testWorkersHostsAggregatesPerHostIncludingNullBucketAndUnknownInflight(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $hostA1 = self::HOST_TEST_INSTANCE_PREFIX . 'a1';
+        $hostA2 = self::HOST_TEST_INSTANCE_PREFIX . 'a2';
+        $hostB1 = self::HOST_TEST_INSTANCE_PREFIX . 'b1';
+
+        $repo->upsert(self::TEST_WORKER_TYPE, $hostA1, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []], 'hosts-test-a');
+        $repo->upsert(self::TEST_WORKER_TYPE, $hostA2, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []], 'hosts-test-a');
+        $repo->upsert(self::TEST_WORKER_TYPE, $hostB1, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []], 'hosts-test-b');
+
+        // Only ONE instance on "hosts-test-a" reports `inflight`; "hosts-test-b"
+        // reports none at all.
+        $repo->updateLiveness([[
+            'workerType' => self::TEST_WORKER_TYPE,
+            'instanceId' => $hostA1,
+            'status'     => WorkerLivenessStatus::Alive,
+            'lastSeenAt' => new \DateTimeImmutable(),
+            'inflight'   => 4,
+        ]]);
+        // updateLiveness() writes via native SQL and does NOT refresh managed
+        // entities (unlike upsert()) — clear the identity map so the read
+        // below re-queries instead of returning the stale in-memory instance
+        // from the upsert() calls above (same pattern as
+        // testWorkersSurfacesMetricsFromLivenessPush).
+        static::getContainer()->get(EntityManagerInterface::class)->clear();
+
+        $client->request('GET', '/api/v1/admin/workers/hosts', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertIsArray($data);
+        self::assertArrayHasKey('ttlHours', $data);
+        self::assertIsInt($data['ttlHours']);
+        self::assertArrayHasKey('hosts', $data);
+
+        $byHost = [];
+        foreach ($data['hosts'] as $entry) {
+            $byHost[$entry['host'] ?? '__null__'] = $entry;
+        }
+
+        self::assertArrayHasKey('hosts-test-a', $byHost);
+        $hostA = $byHost['hosts-test-a'];
+        self::assertSame(2, $hostA['workers']);
+        self::assertSame(4, $hostA['inflight'], 'sum across workers, unknown treated as 0');
+        self::assertTrue($hostA['inflightKnown']);
+
+        self::assertArrayHasKey('hosts-test-b', $byHost);
+        $hostB = $byHost['hosts-test-b'];
+        self::assertSame(1, $hostB['workers']);
+        self::assertSame(0, $hostB['inflight']);
+        self::assertFalse($hostB['inflightKnown'], 'no worker on this host ever reported inflight');
+
+        // Legacy null-host bucket — always present (registry-03 seed rows have
+        // no host) and sorted LAST.
+        self::assertArrayHasKey('__null__', $byHost, 'null-host bucket must be present');
+        self::assertNull($byHost['__null__']['host']);
+        self::assertSame(null, $data['hosts'][array_key_last($data['hosts'])]['host'], 'null bucket sorted last');
+    }
+
+    public function testWorkersHostsForbiddenForRegularUser(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(false));
+
+        $client->request('GET', '/api/v1/admin/workers/hosts', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertSame(403, $client->getResponse()->getStatusCode());
+    }
+
+    /**
+     * `?host=<name>` — only workers on that host. Additive: absent-param
+     * behaviour ({@see testWorkersReturnsStructuredJsonForAdmin}) stays exact.
+     */
+    public function testWorkersHostFilterReturnsOnlyThatHostsWorkers(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $hostA = self::HOST_TEST_INSTANCE_PREFIX . 'filter-a';
+        $hostB = self::HOST_TEST_INSTANCE_PREFIX . 'filter-b';
+        $repo->upsert(self::TEST_WORKER_TYPE, $hostA, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []], 'filter-host-a');
+        $repo->upsert(self::TEST_WORKER_TYPE, $hostB, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []], 'filter-host-b');
+
+        $client->request('GET', '/api/v1/admin/workers?host=filter-host-a', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertNotEmpty($data['workers']);
+        foreach ($data['workers'] as $row) {
+            self::assertSame('filter-host-a', $row['host']);
+        }
+        $instanceIds = array_column($data['workers'], 'instanceId');
+        self::assertContains($hostA, $instanceIds);
+        self::assertNotContains($hostB, $instanceIds);
+    }
+
+    /**
+     * `?hostNull=1` — the legacy `host IS NULL` bucket (CNV-61 review, finding
+     * #2). Replaced the old `?host=__none__` sentinel, which collided with a
+     * real host literally named `__none__`.
+     */
+    public function testWorkersHostNullFilterReturnsLegacyNullBucket(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+
+        $client->request(
+            'GET',
+            '/api/v1/admin/workers?hostNull=1',
+            server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"],
+        );
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertNotEmpty($data['workers'], 'registry-03 seed rows have no host — this bucket is never empty');
+        foreach ($data['workers'] as $row) {
+            self::assertNull($row['host']);
+        }
+    }
+
+    /**
+     * A REAL host literally named `__none__` is just a normal name now — no
+     * longer a collision-prone sentinel (CNV-61 review, finding #2).
+     */
+    public function testWorkersHostFilterReachesRealHostLiterallyNamedNoneSentinel(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $instanceId = self::HOST_TEST_INSTANCE_PREFIX . 'literal-none';
+        $repo->upsert(self::TEST_WORKER_TYPE, $instanceId, [
+            'isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => [],
+        ], '__none__');
+
+        $client->request(
+            'GET',
+            '/api/v1/admin/workers?host=' . rawurlencode('__none__'),
+            server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"],
+        );
+        self::assertResponseIsSuccessful();
+
+        $data        = json_decode((string) $client->getResponse()->getContent(), true);
+        $instanceIds = array_column($data['workers'], 'instanceId');
+        self::assertContains($instanceId, $instanceIds, 'a host literally named __none__ must be reachable via ?host=__none__');
+        foreach ($data['workers'] as $row) {
+            self::assertSame('__none__', $row['host']);
+        }
+    }
+
+    /**
+     * Passing both `host` and `hostNull` at once is a client error — the two
+     * filters are mutually exclusive (CNV-61 review, finding #2).
+     */
+    public function testWorkersRejectsBothHostAndHostNullFilters(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+
+        $client->request(
+            'GET',
+            '/api/v1/admin/workers?host=some-host&hostNull=1',
+            server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"],
+        );
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+    }
+
+    public function testDeleteStaleForbiddenForRegularUser(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(false));
+
+        $client->request('DELETE', '/api/v1/admin/workers/stale', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertSame(403, $client->getResponse()->getStatusCode());
+    }
+
+    public function testDeleteStaleReturnsZeroWhenNothingMatches(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+
+        // No disconnected/unknown non-seed rows exist at this point — the
+        // registry-03 seed rows ARE status=unknown but are excluded by the
+        // repository, so a clean run must report an honest zero, not error.
+        $client->request('DELETE', '/api/v1/admin/workers/stale', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame(['deleted' => 0], $data);
+    }
+
+    /**
+     * Happy path (CNV-61): a `disconnected` row and a `unknown` non-seed row
+     * are both removed, the endpoint reports their count.
+     */
+    public function testDeleteStaleRemovesDisconnectedAndUnknownRows(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $em     = static::getContainer()->get(EntityManagerInterface::class);
+
+        $disconnectedId = self::STALE_TEST_INSTANCE_PREFIX . 'disconnected';
+        $unknownId      = self::STALE_TEST_INSTANCE_PREFIX . 'unknown';
+
+        $repo->upsert(self::TEST_WORKER_TYPE, $disconnectedId, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []]);
+        $repo->upsert(self::TEST_WORKER_TYPE, $unknownId, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []]);
+        $repo->updateLiveness([[
+            'workerType' => self::TEST_WORKER_TYPE,
+            'instanceId' => $disconnectedId,
+            'status'     => WorkerLivenessStatus::Disconnected,
+            'lastSeenAt' => new \DateTimeImmutable(),
+        ]]);
+        // `unknown` never comes from updateLiveness() on a real known row (see
+        // WorkerLivenessStatus doc — it's a DB-column DEFAULT for seed rows
+        // only); the repository's delete predicate matches on the raw column
+        // value regardless of how it got there, so a direct UPDATE is a fair
+        // way to fabricate a non-seed row in that state for this test.
+        $em->getConnection()->executeStatement(
+            'UPDATE worker_capabilities SET status = :status WHERE worker_type = :wt AND instance_id = :id',
+            ['status' => WorkerLivenessStatus::Unknown->value, 'wt' => self::TEST_WORKER_TYPE, 'id' => $unknownId],
+        );
+
+        $client->request('DELETE', '/api/v1/admin/workers/stale', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertIsArray($data);
+        self::assertArrayHasKey('deleted', $data);
+        // >=2, not ===2: other suites may leave their own disconnected/unknown
+        // fixtures around in a shared test DB — the two rows this test created
+        // being gone (assertion below) is the load-bearing proof.
+        self::assertGreaterThanOrEqual(2, $data['deleted']);
+
+        $remaining = $em->getConnection()->fetchAllAssociative(
+            'SELECT instance_id FROM worker_capabilities WHERE worker_type = :wt AND instance_id IN (:d, :u)',
+            ['wt' => self::TEST_WORKER_TYPE, 'd' => $disconnectedId, 'u' => $unknownId],
+        );
+        self::assertSame([], $remaining, 'both rows must be gone');
+    }
+
+    /**
+     * The single most important correctness constraint of CNV-61: seed rows
+     * (`instance_id='__seed__'`, status=unknown by DB default) must survive —
+     * without this exclusion the button would wipe the canonical format matrix.
+     */
+    public function testDeleteStaleExcludesSeedRows(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+        $em     = static::getContainer()->get(EntityManagerInterface::class);
+
+        $seedCountBefore = (int) $em->getConnection()->fetchOne(
+            "SELECT COUNT(*) FROM worker_capabilities WHERE instance_id = '__seed__'",
+        );
+        self::assertGreaterThan(0, $seedCountBefore, 'registry-03 seeds a __seed__ row per canonical worker type');
+
+        $client->request('DELETE', '/api/v1/admin/workers/stale', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $seedCountAfter = (int) $em->getConnection()->fetchOne(
+            "SELECT COUNT(*) FROM worker_capabilities WHERE instance_id = '__seed__'",
+        );
+        self::assertSame($seedCountBefore, $seedCountAfter, 'seed rows must never be touched by this endpoint');
+    }
+
+    /**
+     * `alive` rows are untouched — only `disconnected`/`unknown` match the
+     * delete predicate.
+     */
+    public function testDeleteStaleKeepsAliveRows(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(true));
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $em     = static::getContainer()->get(EntityManagerInterface::class);
+
+        $aliveId = self::STALE_TEST_INSTANCE_PREFIX . 'alive';
+        $repo->upsert(self::TEST_WORKER_TYPE, $aliveId, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []]);
+
+        $client->request('DELETE', '/api/v1/admin/workers/stale', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertResponseIsSuccessful();
+
+        $status = $em->getConnection()->fetchOne(
+            'SELECT status FROM worker_capabilities WHERE worker_type = :wt AND instance_id = :id',
+            ['wt' => self::TEST_WORKER_TYPE, 'id' => $aliveId],
+        );
+        self::assertSame('alive', $status, 'alive row must survive');
     }
 
     private function persistUser(bool $admin): User

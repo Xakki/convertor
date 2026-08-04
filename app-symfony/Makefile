@@ -55,9 +55,9 @@ composer: ## Run composer command (make composer CMD="require vendor/package")
 ##@ PHP / Quality
 
 .PHONY: test-php
-test-php: ## Run PHPUnit (в php-контейнере тест-стенда; phpunit форсит APP_ENV=test)
+test-php: ## Run PHPUnit (в php-контейнере тест-стенда; phpunit форсит APP_ENV=test). FILTER=<regex> — сузить до совпадающих тестов
 	$(REQUIRE_TEST)
-	$(PHP_EXEC) php vendor/bin/phpunit
+	$(PHP_EXEC) php vendor/bin/phpunit $(if $(FILTER),--filter="$(FILTER)")
 
 .PHONY: test-php-unit
 test-php-unit: ## Fast PHPUnit: only tests/Unit (no test-stand/DB)

@@ -8,9 +8,13 @@ use App\Entity\Conversion;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Repository\ConversionRepository;
+use App\Service\Storage\S3Storage;
+use AsyncAws\S3\Exception\NoSuchKeyException;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Security\Http\Attribute\IsGranted;
 
@@ -30,6 +34,7 @@ class ConversionLogController extends AbstractController
 
     public function __construct(
         private readonly ConversionRepository $conversions,
+        private readonly S3Storage $s3,
         // Базовый URL веб-интерфейса Graylog для линк-аута из UI. Пусто по
         // умолчанию (плейсхолдер, не секрет) → в API meta отдаём пустую строку,
         // UI прячет ссылку. Задаётся env GRAYLOG_URL.
@@ -68,6 +73,43 @@ class ConversionLogController extends AbstractController
             // Конфигурируемый база-URL Graylog (пусто = ссылка скрыта в UI).
             'graylogUrl' => $this->graylogUrl,
         ]);
+    }
+
+    /**
+     * Стриминг сырых байт входного/выходного файла конверсии для admin-превью
+     * (media/архив). `attachment`, НЕ `inline` — фронт всегда читает это как blob
+     * (fetch + createObjectURL), attachment-диспозиция не даёт недоверенным
+     * HTML/SVG отрендериться in-origin, даже если ссылку открыть напрямую.
+     * Аудит-лог для admin-доступа к файлу намеренно НЕ ведётся (решение продукта).
+     */
+    #[Route('/conversions/{id}/file', name: 'admin_api_conversion_file', methods: ['GET'])]
+    public function fileContent(int $id, Request $request): Response
+    {
+        $side = $request->query->get('side', '');
+        if ($side !== 'source' && $side !== 'result') {
+            return $this->json(['error' => 'bad_request', 'message' => 'side must be "source" or "result"'], Response::HTTP_BAD_REQUEST);
+        }
+
+        $conversion = $this->conversions->find($id);
+        if ($conversion === null) {
+            throw new NotFoundHttpException('Conversion not found');
+        }
+
+        $file   = $side === 'source' ? $conversion->getInputFile() : $conversion->getOutputFile();
+        $bucket = $side === 'source' ? $this->s3->inputsBucket() : $this->s3->resultsBucket();
+
+        if ($file === null) {
+            throw new NotFoundHttpException('File not available');
+        }
+
+        try {
+            return $this->s3->attachmentResponse($bucket, $file->getStoragePath(), $file->getOriginalName(), $file->getMimeType());
+        } catch (NoSuchKeyException) {
+            return $this->json(
+                ['error' => 'gone', 'message' => 'File expired or no longer available'],
+                Response::HTTP_GONE,
+            );
+        }
     }
 
     /** Непустая trim'нутая строка либо null. */
@@ -112,6 +154,7 @@ class ConversionLogController extends AbstractController
     private function serialize(Conversion $conversion): array
     {
         $user   = $conversion->getUser();
+        $input  = $conversion->getInputFile();
         $output = $conversion->getOutputFile();
 
         return [
@@ -127,10 +170,19 @@ class ConversionLogController extends AbstractController
             // errorMessage присутствует в каждой строке (не только у Failed) —
             // тумблер «только ошибки» = фильтр status=failed.
             'errorMessage' => $conversion->getErrorMessage(),
-            'inputKey'     => $conversion->getInputFile()->getStoragePath(),
+            'inputKey'     => $input->getStoragePath(),
             'outputKey'    => $output?->getStoragePath(),
-            'createdAt'    => $conversion->getCreatedAt()->format(\DateTimeInterface::ATOM),
-            'updatedAt'    => $conversion->getUpdatedAt()->format(\DateTimeInterface::ATOM),
+            // Для admin-превью (media/архив по обеим сторонам) — inputFile
+            // non-nullable relation (см. Conversion::$inputFile), outputFile
+            // null до завершения/при failed → соответствующие outputXxx null.
+            'inputMime'  => $input->getMimeType(),
+            'outputMime' => $output?->getMimeType(),
+            'inputName'  => $input->getOriginalName(),
+            'outputName' => $output?->getOriginalName(),
+            'inputSize'  => $input->getSizeBytes(),
+            'outputSize' => $output?->getSizeBytes(),
+            'createdAt'  => $conversion->getCreatedAt()->format(\DateTimeInterface::ATOM),
+            'updatedAt'  => $conversion->getUpdatedAt()->format(\DateTimeInterface::ATOM),
         ];
     }
 }

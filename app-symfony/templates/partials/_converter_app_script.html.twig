@@ -63,13 +63,6 @@
             previewFailed: '{{ 'home.error.preview_failed'|trans|e('js') }}',
             previewNetwork: '{{ 'home.error.preview_network'|trans|e('js') }}',
         },
-        // home-05: инлайн-вьюеры результата (audio/video/image/pdf) — динамическая
-        // подпись тумблера плеера (единственная строка, реально меняющаяся в рантайме;
-        // остальные подписи вьюера — статичный Twig-текст прямо в разметке).
-        viewer: {
-            showPlayer: '{{ 'home.viewer.show_player'|trans|e('js') }}',
-            hidePlayer: '{{ 'home.viewer.hide_player'|trans|e('js') }}',
-        },
         // home-13: виджет квот у формы — подписи плана из GET /api/v1/quota
         // (значения plan ограничены сидом plans-таблицы + форс-override 'guest'
         // для анонима, см. ConversionController::quota()).
@@ -118,14 +111,9 @@
     const TEXTUAL_SOURCE_FORMATS = [
         'txt', 'md', 'html', 'csv', 'json', 'xml', 'yaml', 'toml',
     ];
-    // home-05: клиентское зеркало ConversionController::PREVIEWABLE_FORMATS —
-    // целевые форматы, чей результат сервер считает текстовым превью (см. isPreviewable()
-    // в app-symfony/src/Controller/Api/ConversionController.php). Используется ТОЛЬКО как
-    // эвристика для только что завершённой задачи (job), у которой ещё нет серверного
-    // флага `previewable` (тот появляется в истории после loadHistory()) — история и
-    // примеры всегда используют настоящий серверный флаг, не эту эвристику. Меняешь
-    // список тут — синхронно меняй и на бэкенде.
-    const PREVIEWABLE_TARGET_FORMATS = ['md', 'txt', 'json', 'csv', 'html'];
+    // home-05/CNV-61: A/V/image-вьюер и текстовая эвристика PREVIEWABLE_TARGET_FORMATS
+    // переехали в общий _file_preview_script.html.twig (FILE_PREVIEW_*, CNV-61-preview) —
+    // единственный источник теперь и для истории, и для админ-лога, не только job/примеров.
     // home-03: сколько представительных from→to пар показывать в карточке
     // категории витрины (остаток — счётчиком "и ещё N").
     const SHOWCASE_PAIRS_PER_CATEGORY = 4;
@@ -179,10 +167,9 @@
                 loaded: false,
             },
             quotaTierOrder: QUOTA_TIER_ORDER,
-            conversions: [],    // история конвертаций залогиненного пользователя
-            downloadingId: null, // id строки истории, которая сейчас качается
-            sourceLoadingId: null, // id строки, чей исходник сейчас качается
-            sourceGone: {},     // id → true, когда исходник удалён (410 Gone)
+            // CNV-61: список истории на /history; downloadingId — для downloadConversion
+            // из модалки текстового превью (downloadPreview).
+            downloadingId: null,
             preview: { open: false, id: null, text: '', truncated: false, loading: false, toFormat: null },
             // home-05: попап-вьюер image/pdf. objectUrl — либо Blob-URL (собственный
             // результат, авторизованный fetch), либо публичный example-URL напрямую
@@ -213,37 +200,13 @@
                     history.replaceState(null, '', location.pathname);
                 }
 
-                // home-12: реактивный мост от cookie-баннера (partials/
-                // _cookie_consent.html.twig → setConsent()) — если гость кликает
-                // «Принять»/«Отклонить» ПОСЛЕ первой загрузки страницы (без F5),
-                // гостевая история подгружается/скрывается сразу же, без
-                // перезагрузки. Для залогиненного (auth.token уже есть) событие
-                // игнорируем — его история не гейтится этой cookie.
-                window.addEventListener('cookie-consent-changed', (e) => {
-                    if (this.auth.token) return;
-                    if (e.detail.value === 'accepted') {
-                        this.loadHistory();
-                    } else {
-                        this.conversions = [];
-                    }
-                });
-
                 // Определяем залогиненное состояние по refresh-cookie: после 302 с
                 // /callback localStorage пуст, но refresh-cookie выставлена. Гость
                 // всегда получит 401 здесь — это норма, уходим в анонимный UI.
                 // Профиль (имя/аватар) показывает шапка (partials/_header.html.twig
                 // → headerNav(), свой независимый вызов /api/v1/me).
+                // CNV-61: история перенесена на /history — здесь loadHistory не зовём.
                 this.tryRefresh().then((ok) => {
-                    if (ok) {
-                        // Токен восстановлен → история грузится с Bearer (иначе 401).
-                        this.loadHistory();
-                    } else if (this.readConsent() === 'accepted') {
-                        // home-12: гость БЕЗ JWT — история грузится по guest-cookie
-                        // (authFetch() шлёт credentials:'include' сама), но ТОЛЬКО
-                        // если гость явно согласился в cookie-баннере. Без согласия
-                        // (declined/ещё не выбрано) — не запрашиваем и не показываем.
-                        this.loadHistory();
-                    }
                     // home-13: квота — ПОСЛЕ tryRefresh(), иначе auth.token ещё
                     // пуст и authFetch() ушёл бы гостевым запросом даже для
                     // залогиненного (guest-cookie аутентифицирует, но план/лимиты
@@ -279,15 +242,6 @@
                         this.examples = list;
                     })
                     .catch(() => { /* примеры не критичны — просто не покажем */ });
-            },
-
-            // home-12: читает cookie `cookie_consent`, которую ставит
-            // partials/_cookie_consent.html.twig (клиентски, document.cookie —
-            // не подписана, серверу не нужна). 'accepted'|'declined'|null
-            // (кука ещё не выставлена — баннер ещё не решён).
-            readConsent() {
-                const m = document.cookie.match(/(?:^|; )cookie_consent=([^;]*)/);
-                return m ? decodeURIComponent(m[1]) : null;
             },
 
             isActive(s) { return ACTIVE_STATUSES.includes(s); },
@@ -524,33 +478,21 @@
                 return hit ? hit.category : null;
             },
 
-            // home-05 (D4, LIGHT MVP): выбор типа вьюера по целевому формату/категории.
-            // Порядок ветвей — по спецификации карточки: текст (наивысший приоритет —
-            // текстовые форматы вроде md/html технически лежат в category='document',
-            // но должны попасть в x-text-попап, а не «download only»), затем pdf
-            // (тоже category='document', НО у него есть браузерный inline-рендерер),
-            // затем audio/video/image по категории. Всё остальное — null (только
-            // кнопка «Скачать», без инлайн-рендера — docx/xlsx/pptx/odt/…).
-            // `previewable` — серверный флаг (история/примеры); для job (ещё нет в
-            // истории) передаём null → используется клиентская эвристика
-            // PREVIEWABLE_TARGET_FORMATS.
-            resolveViewerType(toFormat, category, previewable) {
-                const fmt = (toFormat || '').toLowerCase();
-                const isTextPreviewable = previewable != null
-                    ? previewable
-                    : PREVIEWABLE_TARGET_FORMATS.includes(fmt);
-                if (isTextPreviewable) return 'text';
-                if (fmt === 'pdf') return 'pdf';
-                if (category === 'audio') return 'audio';
-                if (category === 'video') return 'video';
-                if (category === 'image') return 'image';
-                return null;
+            // CNV-61-preview: то же самое для ИСХОДНОГО формата job (ищет по
+            // `from`, не `to`) — нужна для jobSourceIconKey()/jobPreviewIcon('source'),
+            // у которых нет отдельного серверного category (job знает только
+            // this.fromFormat, category приходит из той же матрицы /api/v1/formats).
+            categoryForSourceFormat(fromFormat) {
+                const hit = this.formats.find((f) => f.from === fromFormat);
+                return hit ? hit.category : null;
             },
 
-            // Тип вьюера для строки истории — использует настоящий серверный флаг
-            // c.previewable (ConversionController::serializeHistoryItem), не эвристику.
-            viewerTypeForHistory(c) {
-                return this.resolveViewerType(c.to_format, this.categoryForFormat(c.to_format), c.previewable);
+            // home-05 (D4, LIGHT MVP) + CNV-61: тип вьюера по целевому формату —
+            // тонкая обёртка над общим filePreviewViewerType() (CNV-61-preview,
+            // _file_preview_script.html.twig), сохранена как метод ради обратной
+            // совместимости вызовов ниже (exampleViewerType/exampleSourceViewerType).
+            resolveViewerType(toFormat, category, previewable, resultMime) {
+                return filePreviewViewerType(toFormat, category, previewable, resultMime);
             },
 
             // Тип вьюера для карточки примера (home-04) — category/previewable уже
@@ -561,29 +503,17 @@
 
             // home-10: тип вьюера для ИСХОДНОГО файла примера. Сервер не присылает
             // отдельный `previewable` для source (только для результата) — передаём
-            // null → клиентская эвристика PREVIEWABLE_TARGET_FORMATS, которая уже
-            // корректно покрывает все source-форматы каталога (txt/csv/md → 'text',
-            // png/wav/mp4 → по category, как и раньше).
+            // null → клиентская эвристика PREVIEWABLE_TARGET_FORMATS; A/V/image
+            // — по расширению (CNV-61), category — fallback.
             exampleSourceViewerType(ex) {
                 return this.resolveViewerType(ex.from, ex.category, null);
             },
 
-            // home-10: ключ иконки файла по (format, category) — используется ТОЛЬКО
-            // как значение для x-if-сравнения с фиксированной строкой в
-            // _converter_example_icons.html.twig (см. macro icon()); сам format/
-            // category НИКОГДА не вставляется в разметку — иконки статичный SVG.
+            // home-10: ключ иконки файла по (format, category) — тонкая обёртка
+            // над общим filePreviewIconKey() (CNV-61-preview, _file_preview_script.html.twig);
+            // сам format/category НИКОГДА не вставляется в разметку — иконки статичный SVG.
             exampleIconKey(format, category) {
-                const fmt = (format || '').toLowerCase();
-                if (fmt === 'pdf') return 'pdf';
-                if (fmt === 'json') return 'json';
-                if (fmt === 'csv') return 'csv';
-                if (['md', 'txt', 'html'].includes(fmt)) return 'text';
-                if (category === 'image') return 'image';
-                if (category === 'audio') return 'audio';
-                if (category === 'video') return 'video';
-                if (category === 'document') return 'document';
-                if (category === 'data') return 'data';
-                return 'generic';
+                return filePreviewIconKey(format, category);
             },
             sourceIconKey(ex) { return this.exampleIconKey(ex.from, ex.category); },
             resultIconKey(ex) { return this.exampleIconKey(ex.to, ex.category); },
@@ -619,7 +549,7 @@
 
             // home-10: скачивание ПУБЛИЧНОГО example-URL (source/result) — эндпоинт
             // не требует Bearer/cookie, поэтому плейн <a download> справляется сам
-            // (в отличие от saveResult()/downloadSource() ниже, которым нужен
+            // (в отличие от saveResult() ниже, которым нужен
             // authFetch → blob для авторизованных эндпоинтов).
             downloadPublicUrl(url, name) {
                 const a = document.createElement('a');
@@ -631,11 +561,29 @@
                 a.remove();
             },
 
-            // Тип вьюера для только что завершённой задачи (job) — единственное
-            // место без серверного `previewable`, отсюда previewable=null (эвристика).
-            get jobViewerType() {
-                if (this.job.status !== 'completed') return null;
-                return this.resolveViewerType(this.toFormat, this.categoryForFormat(this.toFormat), null);
+            // CNV-61-preview: ключи иконок источника/результата ЗАВЕРШЁННОЙ job —
+            // рендерятся в _converter_job_status.html.twig тем же macro icon(),
+            // что и история/примеры (см. _file_preview_icon_button.html.twig).
+            jobSourceIconKey() {
+                return filePreviewIconKey(this.fromFormat, this.categoryForSourceFormat(this.fromFormat));
+            },
+            jobResultIconKey() {
+                return filePreviewIconKey(this.toFormat, this.categoryForFormat(this.toFormat));
+            },
+
+            // CNV-61-preview: клик по иконке источника/результата job — тот же
+            // openFilePreview() (filePreviewMixin(), общая модалка), что и у
+            // истории/админ-лога, просто URL строится из job.id. У job нет
+            // серверного previewable/mime → null (клиентская эвристика
+            // FILE_PREVIEW_PREVIEWABLE_FORMATS, как раньше у jobViewerType).
+            jobPreviewIcon(side) {
+                const isSource = side === 'source';
+                const fmt = isSource ? this.fromFormat : this.toFormat;
+                const category = isSource ? this.categoryForSourceFormat(this.fromFormat) : this.categoryForFormat(this.toFormat);
+                const type = filePreviewViewerType(fmt, category, null, null);
+                const base = '/api/v1/convert/' + this.job.id + (isSource ? '/source' : '/download');
+                const url = type === 'text' ? ('/api/v1/convert/' + this.job.id + '/preview?side=' + side) : base;
+                return this.openFilePreview(type, url, (u) => this.authFetch(u));
             },
 
             // home-05: попап-вьюер для image/pdf. isPublic=true (пример) — src это
@@ -884,10 +832,6 @@
                 if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
                 this._pollTries = 0;
                 this._pollGen++;    // инвалидирует любой in-flight цикл предыдущей задачи
-                // home-05: отзываем object URL инлайн-плеера предыдущей задачи — иначе
-                // при повторном сабмите он остаётся висеть в памяти вкладки (утечка).
-                if (this.players['job']?.objectUrl) URL.revokeObjectURL(this.players['job'].objectUrl);
-                delete this.players['job'];
                 this.job = { id: null, status: null, error: null };
             },
 
@@ -919,13 +863,8 @@
                         this.job.status = d.status;
                         this.job.error = d.error;
                         if (this.isTerminal(d.status)) {
-                            // Завершённая задача появляется в истории без ручного F5 —
-                            // но только если история вообще показывается: залогинен,
-                            // либо гость с явным согласием (home-12). Без согласия
-                            // гостя не подгружаем и не накапливаем историю в фоне.
-                            if (this.auth.token || this.readConsent() === 'accepted') {
-                                this.loadHistory();
-                            }
+                            // CNV-61: история на /history — после завершения только
+                            // обновляем квоту на главной (список здесь не грузим).
                             // home-13: счётчики квоты должны обновиться вживую сразу
                             // после того, как конвертация реально списала квоту
                             // (charge() на бэке происходит ДО ответа /convert, так что
@@ -948,9 +887,8 @@
                 }
             },
 
-            // Скачивание строки истории: свой per-row флаг (downloadingId), чтобы
-            // спиннер горел только на нажатой кнопке. Fallback-имя — из to_format
-            // этой строки, а не из текущей формы.
+            // Скачивание результата по id (модалка превью downloadPreview).
+            // Per-id флаг downloadingId — спиннер на нажатой кнопке.
             async downloadConversion(id, toFormat) {
                 if (this.downloadingId) return;
                 this.downloadingId = id;
@@ -980,28 +918,6 @@
                 }
             },
 
-            // Скачивание исходника строки истории. 410 Gone = исходник авто-удалён
-            // через 24ч → помечаем sourceGone[id] (кнопка прячется, показываем текст),
-            // а не общую ошибку. Свой per-row флаг sourceLoadingId для спиннера.
-            async downloadSource(id, sourceName) {
-                if (this.sourceLoadingId) return;
-                this.sourceLoadingId = id;
-                try {
-                    const res = await this.authFetch('/api/v1/convert/' + id + '/source');
-                    if (res.status === 401) return;
-                    if (res.status === 410) { this.sourceGone[id] = true; return; }
-                    if (!res.ok) { this.error = I18N.errors.sourceDownloadFailed; return; }
-                    const blob = await res.blob();
-                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
-                        || (sourceName || 'source');
-                    this.downloadBlob(blob, name);
-                } catch (e) {
-                    this.error = I18N.errors.sourceDownloadNetwork;
-                } finally {
-                    this.sourceLoadingId = null;
-                }
-            },
-
             // Общий триггер скачивания blob через временный <a download> (плейн
             // <a href> не несёт Bearer/credentials, потому качаем fetch→blob).
             downloadBlob(blob, name) {
@@ -1013,18 +929,6 @@
                 a.click();
                 a.remove();
                 URL.revokeObjectURL(url);
-            },
-
-            // История залогиненного пользователя. Гость/аноним → 401, оставляем
-            // пусто (authFetch не делает refresh без токена). Тихий фейл: история —
-            // вспомогательный блок, не критична для конвертации.
-            async loadHistory() {
-                try {
-                    const res = await this.authFetch('/api/v1/convert/history');
-                    if (!res.ok) return;
-                    const d = await res.json();
-                    this.conversions = d.items || [];
-                } catch (e) { /* сеть моргнула — покажем при следующем обновлении */ }
             },
 
             // home-13: виджет квот у формы — GET /api/v1/quota работает и для
@@ -1132,6 +1036,6 @@
                 this.auth = { token: null, username: null };
                 localStorage.removeItem('jwt');
             },
-        }, billingTopUpMixin());
+        }, billingTopUpMixin(), filePreviewMixin());
     }
 </script>

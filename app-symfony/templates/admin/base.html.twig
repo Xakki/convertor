@@ -41,21 +41,37 @@
         </div>
     </header>
 
+    {# Единый список разделов: path-ссылки (роуты подключит pages-dev). #}
+    {% set nav_active = block('nav_active')|trim %}
+    {% set nav_items = [
+        { key: 'stats',    href: '/admin',            label: 'Обзор' },
+        { key: 'users',    href: '/admin/users',      label: 'Пользователи' },
+        { key: 'queues',   href: '/admin/queues',     label: 'Очереди' },
+        { key: 'workers',  href: '/admin/workers',    label: 'Воркеры' },
+        { key: 'logs',     href: '/admin/logs',       label: 'Логи' },
+        { key: 'toggle',   href: '/admin/conversions', label: 'Конвертации' },
+        { key: 'examples', href: '/admin/examples',   label: 'Примеры' },
+    ] %}
+
+    {# Мобильная навигация (AC 4A): sidebar скрыт до lg — select показывает
+       текущий раздел и уводит по path. Без Alpine/JS-меню — меньше кода. #}
+    <div class="border-b border-zinc-800 px-4 py-3 lg:hidden">
+        <label for="admin-nav-mobile" class="mb-1 block text-xs font-medium text-zinc-500">Раздел</label>
+        <select id="admin-nav-mobile"
+                class="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                aria-label="Навигация администратора"
+                onchange="if (this.value) { window.location.href = this.value; }">
+            {% for item in nav_items %}
+                <option value="{{ item.href }}" {{ nav_active == item.key ? 'selected' : '' }}>{{ item.label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
     <div class="flex">
-        {# Боковая навигация. Ссылки — на будущие панели эпика admin-panel. #}
+        {# Боковая навигация (desktop lg+). #}
         <nav class="hidden w-56 shrink-0 lg:block" aria-label="Навигация администратора">
             <div class="sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto border-r border-zinc-800 py-6">
                 <ul class="space-y-1 px-3" role="list">
-                    {% set nav_active = block('nav_active') %}
-                    {% set nav_items = [
-                        { key: 'stats',   href: '#overview',  label: 'Обзор' },
-                        { key: 'users',   href: '#users',     label: 'Пользователи' },
-                        { key: 'queues',  href: '#queues',    label: 'Очереди' },
-                        { key: 'workers', href: '#workers',   label: 'Воркеры' },
-                        { key: 'logs',    href: '#logs',      label: 'Логи' },
-                        { key: 'toggle',  href: '#toggle',    label: 'Конвертации' },
-                        { key: 'examples', href: '#examples', label: 'Примеры' },
-                    ] %}
                     {% for item in nav_items %}
                         <li>
                             <a href="{{ item.href }}"

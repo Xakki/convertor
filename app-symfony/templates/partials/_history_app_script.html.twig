@@ -1,0 +1,273 @@
+<script>
+    // CNV-61: Alpine historyApp() для /history — подмножество dashboardApp()
+    // (история + preview + auth/consent), без кабинета/квот/retry/delete/billing.
+    // Контракт загрузки истории тот же, что был на `/`: JWT всегда; гость —
+    // только при cookie_consent=accepted.
+    // CNV-61-preview: текстовый preview.*/openPreview() заменён общим
+    // filePreviewMixin() (_file_preview_script.html.twig) — см. Object.assign
+    // ниже и historySourceIconKey()/historyResultIconKey()/historyPreviewIcon().
+    const I18N = {
+        errors: {
+            sessionExpired: '{{ 'home.error.session_expired'|trans|e('js') }}',
+            downloadFailed: '{{ 'home.error.download_failed'|trans|e('js') }}',
+            downloadNetwork: '{{ 'home.error.download_network'|trans|e('js') }}',
+            sourceDownloadFailed: '{{ 'home.error.source_download_failed'|trans|e('js') }}',
+            sourceDownloadNetwork: '{{ 'home.error.source_download_network'|trans|e('js') }}',
+        },
+        status: {
+            pending: '{{ 'home.status.pending'|trans|e('js') }}',
+            processing: '{{ 'home.status.processing'|trans|e('js') }}',
+            completed: '{{ 'home.status.completed'|trans|e('js') }}',
+            failed: '{{ 'home.status.failed'|trans|e('js') }}',
+            expired: '{{ 'home.status.expired'|trans|e('js') }}',
+        },
+        units: {
+            bytes: '{{ 'home.units.bytes'|trans|e('js') }}',
+            kb: '{{ 'home.units.kb'|trans|e('js') }}',
+            mb: '{{ 'home.units.mb'|trans|e('js') }}',
+            ms: '{{ 'home.units.ms'|trans|e('js') }}',
+            sec: '{{ 'home.units.sec'|trans|e('js') }}',
+        },
+        durationPrefix: '{{ 'home.duration_prefix'|trans|e('js') }}',
+    };
+    const ACTIVE_STATUSES = ['pending', 'processing'];
+    const FAILED_STATUSES = ['failed', 'expired'];
+
+    function historyApp() {
+        return Object.assign({
+            auth: { token: null },
+            error: '',
+            authResolved: false,
+            loggedIn: false,
+
+            conversions: [],
+            historyLoading: true,
+            historyLoadingMore: false,
+            historyOffset: 0,
+            historyLimit: 20,
+            historyMore: false,
+            downloadingId: null,
+            sourceLoadingId: null,
+            sourceGone: {},
+
+            init() {
+                this.tryRefresh().then(async (ok) => {
+                    if (ok) {
+                        await this.loadMe();
+                        await this.loadHistory(true);
+                    } else if (this.readConsent() === 'accepted') {
+                        await this.loadHistory(true);
+                    } else {
+                        this.historyLoading = false;
+                    }
+                    this.authResolved = true;
+                });
+
+                window.addEventListener('cookie-consent-changed', (e) => {
+                    if (this.auth.token) return;
+                    if (e.detail.value === 'accepted') {
+                        this.loadHistory(true);
+                    } else {
+                        this.conversions = [];
+                        this.historyMore = false;
+                        this.historyLoading = false;
+                    }
+                });
+            },
+
+            readConsent() {
+                const m = document.cookie.match(/(?:^|; )cookie_consent=([^;]*)/);
+                return m ? decodeURIComponent(m[1]) : null;
+            },
+
+            async loadMe() {
+                try {
+                    const res = await this.authFetch('/api/v1/me');
+                    if (!res.ok) return;
+                    this.loggedIn = true;
+                } catch (e) { /* сеть — остаёмся guest/anonymous */ }
+            },
+
+            humanSize(bytes) {
+                if (bytes == null) return '';
+                if (bytes < 1024) return bytes + ' ' + I18N.units.bytes;
+                if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' ' + I18N.units.kb;
+                return (bytes / 1048576).toFixed(1) + ' ' + I18N.units.mb;
+            },
+
+            formatDate(iso) {
+                if (!iso) return '';
+                const d = new Date(iso);
+                return isNaN(d) ? iso : d.toLocaleString();
+            },
+
+            formatDuration(ms) {
+                if (ms == null) return '';
+                if (ms < 1000) return Math.round(ms) + ' ' + I18N.units.ms;
+                return (ms / 1000).toFixed(1) + ' ' + I18N.units.sec;
+            },
+
+            statusLabel(s) { return I18N.status[s] || s; },
+            isActive(s) { return ACTIVE_STATUSES.includes(s); },
+            isFailed(s) { return FAILED_STATUSES.includes(s); },
+
+            async loadHistory(reset) {
+                if (reset) {
+                    this.historyOffset = 0;
+                    this.conversions = [];
+                    this.historyMore = false;
+                }
+                const loadingKey = reset ? 'historyLoading' : 'historyLoadingMore';
+                this[loadingKey] = true;
+                try {
+                    const res = await this.authFetch(
+                        '/api/v1/convert/history?limit=' + this.historyLimit + '&offset=' + this.historyOffset,
+                    );
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    const items = d.items || [];
+                    this.conversions = this.conversions.concat(items);
+                    this.historyOffset += items.length;
+                    this.historyMore = items.length === this.historyLimit;
+                } catch (e) {
+                    /* тихий фейл */
+                } finally {
+                    this[loadingKey] = false;
+                }
+            },
+
+            async downloadConversion(id, toFormat) {
+                if (this.downloadingId) return;
+                this.downloadingId = id;
+                try {
+                    await this.saveResult(id, toFormat);
+                } finally {
+                    this.downloadingId = null;
+                }
+            },
+
+            async saveResult(id, toFormat) {
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/download');
+                    if (res.status === 401) return;
+                    if (!res.ok) { this.error = I18N.errors.downloadFailed; return; }
+                    const blob = await res.blob();
+                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
+                        || ('result.' + (toFormat || 'bin'));
+                    this.downloadBlob(blob, name);
+                } catch (e) {
+                    this.error = I18N.errors.downloadNetwork;
+                }
+            },
+
+            async downloadSource(id, sourceName) {
+                if (this.sourceLoadingId) return;
+                this.sourceLoadingId = id;
+                try {
+                    const res = await this.authFetch('/api/v1/convert/' + id + '/source');
+                    if (res.status === 401) return;
+                    if (res.status === 410) { this.sourceGone[id] = true; return; }
+                    if (!res.ok) { this.error = I18N.errors.sourceDownloadFailed; return; }
+                    const blob = await res.blob();
+                    const name = this.filenameFrom(res.headers.get('Content-Disposition'))
+                        || (sourceName || 'source');
+                    this.downloadBlob(blob, name);
+                } catch (e) {
+                    this.error = I18N.errors.sourceDownloadNetwork;
+                } finally {
+                    this.sourceLoadingId = null;
+                }
+            },
+
+            downloadBlob(blob, name) {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            },
+
+            // CNV-61-preview: ключи иконок источника/результата строки истории —
+            // рендерятся macro icon() (_file_preview_icon_button.html.twig) в
+            // _conversion_history.html.twig. source_mime/result_mime — из
+            // GET /api/v1/convert/history (CNV-61-preview API contract).
+            historySourceIconKey(c) {
+                return filePreviewIconKey(c.from_format, c.category, c.source_mime);
+            },
+            historyResultIconKey(c) {
+                return filePreviewIconKey(c.to_format, c.category, c.result_mime);
+            },
+
+            // CNV-61-preview: клик по иконке источника/результата строки —
+            // openFilePreview() (filePreviewMixin(), общая модалка). Текстовый
+            // тип идёт через /preview?side=..., иначе — байтовые эндпоинты
+            // /source (source) / /download (result). Источник, уже известный
+            // как gone (см. downloadSource() 410 handling), не бьёт по сети
+            // повторно — сразу показывает «файл больше не доступен».
+            historyPreviewIcon(c, side) {
+                const isSource = side === 'source';
+                if (isSource && this.sourceGone[c.id]) {
+                    this.filePreview = { open: true, kind: null, objectUrl: null, text: '', truncated: false, loading: false, error: FILE_PREVIEW_I18N.gone };
+                    return;
+                }
+                const fmt = isSource ? c.from_format : c.to_format;
+                const mime = isSource ? c.source_mime : c.result_mime;
+                const previewable = isSource ? c.source_previewable : c.previewable;
+                const type = filePreviewViewerType(fmt, c.category, previewable ?? null, mime);
+                const url = type === 'text'
+                    ? ('/api/v1/convert/' + c.id + '/preview?side=' + side)
+                    : ('/api/v1/convert/' + c.id + (isSource ? '/source' : '/download'));
+                return this.openFilePreview(type, url, (u) => this.authFetch(u), {
+                    onGone: isSource ? () => { this.sourceGone[c.id] = true; } : undefined,
+                });
+            },
+
+            filenameFrom(disposition) {
+                if (!disposition) return '';
+                const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+                if (utf) { try { return decodeURIComponent(utf[1]); } catch (e) {} }
+                const m = disposition.match(/filename="?([^";]+)"?/i);
+                return m ? m[1] : '';
+            },
+
+            async authFetch(url, opts = {}) {
+                const withAuth = (o) => {
+                    const headers = { ...(o.headers || {}) };
+                    if (this.auth.token) headers['Authorization'] = 'Bearer ' + this.auth.token;
+                    return { ...o, headers, credentials: 'include' };
+                };
+                const hadToken = !!this.auth.token;
+                let res = await fetch(url, withAuth(opts));
+                if (res.status !== 401 || !hadToken) return res;
+
+                const refreshed = await this.tryRefresh();
+                if (!refreshed) {
+                    this.sessionExpired();
+                    return res;
+                }
+                return fetch(url, withAuth(opts));
+            },
+
+            async tryRefresh() {
+                try {
+                    const { ok, token } = await window.sharedAuthRefresh();
+                    if (!ok || !token) return false;
+                    this.auth.token = token;
+                    localStorage.setItem('jwt', token);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            sessionExpired() {
+                this.auth = { token: null };
+                this.loggedIn = false;
+                this.error = I18N.errors.sessionExpired;
+            },
+        }, filePreviewMixin());
+    }
+</script>

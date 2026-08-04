@@ -99,6 +99,8 @@ home:
     error_expired: 'The result has expired'
     error_failed: 'Conversion failed'
     history_heading: 'My conversions'
+    # CNV-61: button/link next to Convert → /history.
+    history_link: 'My conversions'
     # home-12: guest (not signed in) history heading/note — distinct wording,
     # honestly explains it's NOT a synced server-side account history but a
     # cookie-scoped list on this device/browser (only shown while
@@ -111,10 +113,6 @@ home:
     duration_prefix: ''
     preview_title: 'Result preview'
     preview_truncated: 'Showing the first 64 KB — download to see the full file.'
-    # home-05: inline audio/video player — the toggle label changes at runtime.
-    viewer:
-        show_player: 'Show player'
-        hide_player: 'Hide player'
     status:
         pending: 'Queued'
         processing: 'Processing'
@@ -152,6 +150,19 @@ home:
         mb: 'MB'
         ms: 'ms'
         sec: 's'
+
+# CNV-61-preview: shared file preview modal (source/result) —
+# _file_preview_modal.html.twig + _file_preview_script.html.twig, reused by
+# /history, the just-finished job on `/`, and the admin conversions log.
+preview:
+    source_label: 'Source'
+    result_label: 'Result'
+    unavailable: 'Preview unavailable'
+    failed: 'Failed to load the preview'
+    network: 'Network error while loading the preview'
+    gone: 'File is no longer available — it has expired'
+    not_ready: 'This conversion is not completed yet'
+    unsupported: 'This file cannot be previewed'
 
 # Личный кабинет (dashboard-page-01), view-only: templates/dashboard/index.html.twig
 # + partials/_dashboard_app_script.html.twig. Reuses home.quota.*/home.units.*/

@@ -731,6 +731,74 @@ final class InternalWorkerControllerTest extends WebTestCase
     }
 
     /**
+     * CNV-61: `inflight` on its own (no `metrics` in the push) must still
+     * persist inside the `metrics` JSON blob — cpu/mem/load null (genuinely
+     * absent this ping), `inflight` set — never dropped just because the
+     * sibling metrics object was omitted.
+     */
+    public function testLivenessPersistsInflightWithoutMetrics(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'liveness-inflight-only');
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode([
+                'instances' => [[
+                    'workerType' => $cap->getWorkerType(),
+                    'instanceId' => $cap->getInstanceId(),
+                    'status'     => 'alive',
+                    'lastSeenAt' => '2099-06-15T12:00:00Z',
+                    'inflight'   => 3,
+                ]],
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+
+        $reloaded = $this->reload($repo, $cap);
+        self::assertSame(
+            ['cpu' => null, 'mem' => null, 'load' => null, 'inflight' => 3],
+            $reloaded->getMetrics(),
+        );
+    }
+
+    /**
+     * CNV-61: `inflight` rejects the WHOLE batch when malformed (negative or
+     * non-integer) — same all-or-nothing malformed-batch policy as `status`/
+     * `metrics` above.
+     */
+    public function testLivenessRejectsNegativeInflight(): void
+    {
+        $client = static::createClient();
+        $cap    = $this->registerCapability('gc-test-fixture', 'liveness-negative-inflight');
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/liveness',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode([
+                'instances' => [[
+                    'workerType' => $cap->getWorkerType(),
+                    'instanceId' => $cap->getInstanceId(),
+                    'status'     => 'alive',
+                    'lastSeenAt' => '2099-06-15T12:00:00Z',
+                    'inflight'   => -1,
+                ]],
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+    }
+
+    /**
      * Idempotent-retry regression guard (review finding): `updateLiveness()`
      * is deliberately SELECT-based, not affected-rows-based, because
      * MySQL/MariaDB's default affected-rows semantics count CHANGED rows,

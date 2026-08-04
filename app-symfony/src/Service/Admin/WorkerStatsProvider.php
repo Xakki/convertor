@@ -50,6 +50,14 @@ final readonly class WorkerStatsProvider
 {
     private const string SEED_INSTANCE_ID = '__seed__';
 
+    /**
+     * Внутренний sentinel для группировки легacy-строк (`host IS NULL`) в
+     * {@see collectHosts()} — просто читаемее на диффе, чем buckets[null].
+     * Никогда не пересекается с реальным именем хоста (NUL-байт невалиден в
+     * строке-хосте, приходящей от gateway/воркера).
+     */
+    private const string NULL_HOST_BUCKET_KEY = "\0__none__";
+
     public function __construct(
         private WorkerCapabilityRepository $repository,
         private int $ttlHours,
@@ -75,7 +83,8 @@ final readonly class WorkerStatsProvider
      *         routingKeys: list<string>,
      *         matrix_categories: array<string, string>,
      *         metrics: array{cpu: float|null, mem: float|null, load: float|null}|null,
-     *         host: string|null
+     *         host: string|null,
+     *         inflight: int|null
      *     }>
      * }
      */
@@ -103,6 +112,200 @@ final readonly class WorkerStatsProvider
     }
 
     /**
+     * Per-host агрегат для `/admin/workers/hosts` (CNV-61) — ленивая загрузка
+     * host-списка, детальный список воркеров хоста подгружается отдельно
+     * (`?host=` на {@see \App\Controller\Admin\Api\WorkerController::workers()}).
+     *
+     * Намеренно СВЕРНУТО В PHP над готовым выводом {@see collect()}/{@see toRow()},
+     * НЕ отдельным GROUP BY SQL-запросом: `status` — продукт реконсайлера
+     * (registry-09), `stale` — TTL-сравнение через {@see WorkerLivenessTtl} — обе
+     * формулы уже единожды выражены в `toRow()`; повторный вывод той же логики
+     * на SQL гарантированно рассинхронизировался бы с ней при следующей правке
+     * одной из сторон. Таблица крохотная (десятки строк) — цена PHP-свёртки
+     * нулевая.
+     *
+     * @return array{
+     *     ttlHours: int,
+     *     hosts: list<array{
+     *         host: string|null, workers: int,
+     *         alive: int, disconnected: int, unknown: int, stale: int,
+     *         lastSeen: string|null,
+     *         inflight: int, inflightKnown: bool,
+     *         cpu: array{avg: float, max: float}|null,
+     *         mem: array{avg: float, max: float}|null,
+     *         load: array{avg: float, max: float}|null,
+     *         images: list<string>, versions: list<string>,
+     *         hasAi: bool, hasSeed: bool
+     *     }>
+     * }
+     */
+    public function collectHosts(): array
+    {
+        $collected = $this->collect();
+
+        // Реальные хосты — строка; легacy-бакет `host IS NULL` группируем под
+        // внутренним sentinel'ом (сам null не годится ключом ассоц-массива по
+        // смыслу групп — используем как есть, PHP это разрешает, но явный
+        // sentinel читаемее на диффе).
+        $buckets = [];
+        foreach ($collected['workers'] as $row) {
+            $key             = $row['host'] ?? self::NULL_HOST_BUCKET_KEY;
+            $buckets[$key][] = $row;
+        }
+
+        $hosts = [];
+        foreach ($buckets as $key => $rows) {
+            $hosts[] = $this->aggregateHost($key === self::NULL_HOST_BUCKET_KEY ? null : $key, $rows);
+        }
+
+        // По имени хоста asc, null-бакет (легacy-строки без host) — последним.
+        usort($hosts, static function (array $a, array $b): int {
+            if ($a['host'] === null) {
+                return $b['host'] === null ? 0 : 1;
+            }
+            if ($b['host'] === null) {
+                return -1;
+            }
+
+            return $a['host'] <=> $b['host'];
+        });
+
+        return ['ttlHours' => $collected['ttlHours'], 'hosts' => $hosts];
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows строки {@see toRow()} для ОДНОГО хоста
+     * @return array{
+     *     host: string|null, workers: int,
+     *     alive: int, disconnected: int, unknown: int, stale: int,
+     *     lastSeen: string|null,
+     *     inflight: int, inflightKnown: bool,
+     *     cpu: array{avg: float, max: float}|null,
+     *     mem: array{avg: float, max: float}|null,
+     *     load: array{avg: float, max: float}|null,
+     *     images: list<string>, versions: list<string>,
+     *     hasAi: bool, hasSeed: bool
+     * }
+     */
+    private function aggregateHost(?string $host, array $rows): array
+    {
+        $alive        = 0;
+        $disconnected = 0;
+        $unknown      = 0;
+        $stale        = 0;
+        $lastSeen     = null;
+        // inflightKnown=false ⇔ НИ ОДИН воркер хоста не отдал inflight — тогда
+        // sum=0 было бы неотличимо от "все реально idle"; UI должен показать
+        // "—", а не лживый 0 (контракт CNV-61, ttlHours-сосед по форме ответа).
+        $inflightSum   = 0;
+        $inflightKnown = false;
+        $cpuValues     = [];
+        $memValues     = [];
+        $loadValues    = [];
+        $images        = [];
+        $versions      = [];
+        $hasAi         = false;
+        $hasSeed       = false;
+
+        foreach ($rows as $row) {
+            match ($row['status']) {
+                'alive'        => $alive++,
+                'disconnected' => $disconnected++,
+                default        => $unknown++,
+            };
+            if ($row['stale']) {
+                ++$stale;
+            }
+
+            $rowLastSeen = new \DateTimeImmutable($row['lastSeen']);
+            if ($lastSeen === null || $rowLastSeen > $lastSeen) {
+                $lastSeen = $rowLastSeen;
+            }
+
+            if ($row['inflight'] !== null) {
+                $inflightKnown = true;
+                $inflightSum += $row['inflight'];
+            }
+
+            $metrics = $row['metrics'];
+            if ($metrics !== null) {
+                if ($metrics['cpu'] !== null) {
+                    $cpuValues[] = $metrics['cpu'];
+                }
+                if ($metrics['mem'] !== null) {
+                    $memValues[] = $metrics['mem'];
+                }
+                if ($metrics['load'] !== null) {
+                    $loadValues[] = $metrics['load'];
+                }
+            }
+
+            if (is_string($row['image']) && $row['image'] !== '') {
+                $images[] = $row['image'];
+            }
+            if (is_string($row['version']) && $row['version'] !== '') {
+                $versions[] = $row['version'];
+            }
+            if ($row['isAi']) {
+                $hasAi = true;
+            }
+            if ($row['isSeed']) {
+                $hasSeed = true;
+            }
+        }
+
+        $images = array_values(array_unique($images));
+        sort($images);
+        $versions = array_values(array_unique($versions));
+        sort($versions);
+
+        return [
+            'host'          => $host,
+            'workers'       => count($rows),
+            'alive'         => $alive,
+            'disconnected'  => $disconnected,
+            'unknown'       => $unknown,
+            'stale'         => $stale,
+            'lastSeen'      => $lastSeen?->format(\DateTimeInterface::ATOM),
+            'inflight'      => $inflightSum,
+            'inflightKnown' => $inflightKnown,
+            'cpu'           => $this->avgMax($cpuValues),
+            'mem'           => $this->avgMax($memValues),
+            'load'          => $this->avgMax($loadValues),
+            'images'        => $images,
+            'versions'      => $versions,
+            'hasAi'         => $hasAi,
+            'hasSeed'       => $hasSeed,
+        ];
+    }
+
+    /**
+     * cpu/mem/load здесь — та же доля 0..1, что и в `toRow()['metrics']`
+     * (см. `workers/common/ws_client.py::_load_snapshot`) — PHP-слой НЕ
+     * пересчитывает в проценты, это осознанно (CNV-61 review): единица
+     * должна совпадать с per-worker строкой, иначе один и тот же хост
+     * читался бы по-разному в двух местах UI. Percent-вид строит Twig
+     * (`fmtHostStat()`/`fmtMetric()` в `workers.html.twig`) на этой же
+     * доле — здесь же округляем до 4 знаков (а не до 1, как выглядело бы
+     * естественно для процента), иначе 1-знаковое округление ДОЛИ съедало
+     * бы почти всю значащую точность до того, как Twig умножит на 100.
+     *
+     * @param list<float> $values
+     * @return array{avg: float, max: float}|null null, когда ни один воркер хоста не отдал эту метрику
+     */
+    private function avgMax(array $values): ?array
+    {
+        if ($values === []) {
+            return null;
+        }
+
+        return [
+            'avg' => round(array_sum($values) / count($values), 4),
+            'max' => round(max($values), 4),
+        ];
+    }
+
+    /**
      * @return array{
      *     workerType: string, instanceId: string, isSeed: bool,
      *     image: string|null, version: string|null, lastSeen: string,
@@ -111,12 +314,32 @@ final readonly class WorkerStatsProvider
      *     isAi: bool, streams: list<string>, routingKeys: list<string>,
      *     matrix_categories: array<string, string>,
      *     metrics: array{cpu: float|null, mem: float|null, load: float|null}|null,
-     *     host: string|null
+     *     host: string|null,
+     *     inflight: int|null
      * }
      */
     private function toRow(WorkerCapability $cap, \DateTimeImmutable $staleThreshold): array
     {
         $blob = $cap->getCapabilities();
+
+        // `inflight` (CNV-61) живёт ВНУТРИ того же JSON-блоба `metrics`
+        // (см. {@see WorkerCapabilityRepository::updateLiveness()}), но наружу
+        // отдаётся ОТДЕЛЬНЫМ top-level полем — `metrics` для потребителей
+        // остаётся ровно {cpu, mem, load} | null, как было до CNV-61.
+        //
+        // Пуш только `inflight` (без cpu/mem/load — реальный кейс,
+        // `liveness.py::_Instance.to_payload()` крепит `metrics` независимо
+        // от `inflight`) пишет блоб `{cpu:null,mem:null,load:null,inflight:N}`
+        // — из null ПО ВСЕМ трём ключам нельзя заключить "метрик не было",
+        // поэтому здесь та же проверка, что раньше давал сам факт null-блоба.
+        $rawMetrics = $cap->getMetrics();
+        $inflight   = $rawMetrics['inflight'] ?? null;
+        $cpu        = $rawMetrics['cpu']      ?? null;
+        $mem        = $rawMetrics['mem']      ?? null;
+        $load       = $rawMetrics['load']     ?? null;
+        $metrics    = $cpu === null && $mem === null && $load === null
+            ? null
+            : ['cpu' => $cpu, 'mem' => $mem, 'load' => $load];
 
         /** @var array<string, list<string>> $matrix */
         $matrix = $blob['matrix'] ?? [];
@@ -148,8 +371,9 @@ final readonly class WorkerStatsProvider
             'streams'           => $streams,
             'routingKeys'       => $routingKeys,
             'matrix_categories' => $matrixCategories,
-            'metrics'           => $cap->getMetrics(),
+            'metrics'           => $metrics,
             'host'              => $cap->getHost(),
+            'inflight'          => $inflight,
         ];
     }
 }

@@ -105,12 +105,54 @@ final class UserSearchRepositoryTest extends KernelTestCase
         self::assertLessThanOrEqual(20, \count($res['items']));
     }
 
+    public function testDefaultExcludesGuests(): void
+    {
+        $reg   = $this->persistUser($this->marker . '-reg@example.test');
+        $guest = $this->persistGuest();
+
+        $byRegId = $this->users->searchPaginated((string) $reg->getId(), 20, 0);
+        $regIds  = array_map(static fn (User $x): int => $x->getId(), $byRegId['items']);
+        self::assertContains($reg->getId(), $regIds);
+        self::assertNotContains($guest->getId(), $regIds);
+
+        $byGuestId = $this->users->searchPaginated((string) $guest->getId(), 20, 0);
+        $guestIds  = array_map(static fn (User $x): int => $x->getId(), $byGuestId['items']);
+        self::assertNotContains($guest->getId(), $guestIds, 'дефолт (guestOnly=false) скрывает анонимов');
+    }
+
+    public function testGuestOnlyReturnsOnlyGuests(): void
+    {
+        $reg   = $this->persistUser($this->marker . '-reg2@example.test');
+        $guest = $this->persistGuest();
+
+        $guests = $this->users->searchPaginated((string) $guest->getId(), 20, 0, true);
+        $ids    = array_map(static fn (User $x): int => $x->getId(), $guests['items']);
+        self::assertContains($guest->getId(), $ids);
+        self::assertTrue($guests['items'][0]->isGuest());
+
+        $regs = $this->users->searchPaginated((string) $reg->getId(), 20, 0, true);
+        $rIds = array_map(static fn (User $x): int => $x->getId(), $regs['items']);
+        self::assertNotContains($reg->getId(), $rIds, 'guestOnly=true скрывает зарегистрированных');
+    }
+
     private function persistUser(string $email, ?string $telegramId = null): User
     {
         $user = (new User())->setEmail($email);
         if ($telegramId !== null) {
             $user->setTelegramId($telegramId);
         }
+        $this->em->persist($user);
+        $this->em->flush();
+        $this->toRemove[] = $user;
+
+        return $user;
+    }
+
+    private function persistGuest(): User
+    {
+        $user = (new User())
+            ->setIsGuest(true)
+            ->setGuestId('usrsrch-g-' . bin2hex(random_bytes(8)));
         $this->em->persist($user);
         $this->em->flush();
         $this->toRemove[] = $user;

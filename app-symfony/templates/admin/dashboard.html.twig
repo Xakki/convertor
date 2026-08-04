@@ -1,30 +1,21 @@
 {% extends 'admin/base.html.twig' %}
 
-{% block title %}Панель администратора — Convertor{% endblock %}
+{% block title %}Обзор — Convertor{% endblock %}
 {% block nav_active %}stats{% endblock %}
 
-{# Chart.js — только на dashboard-странице (графики секции статистики). #}
+{# Chart.js — только на обзоре (графики секции статистики). #}
 {% block head_scripts %}
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 {% endblock %}
 
 {% block body %}
     <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold text-white">Панель администратора</h1>
+        <h1 class="text-2xl font-bold text-white">Обзор</h1>
         <div class="flex items-center gap-2 text-sm text-zinc-500">
             <div class="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div>
             Онлайн
         </div>
     </div>
 
-    {# Панели эпика admin-panel. Каждая несёт свой <section id="..."> с якорем
-       боковой навигации (#overview/#users/#queues/#logs/#toggle) и свой
-       Alpine-компонент; данные — client-side через shared window.admin.fetch. #}
-    {% include 'admin/stats.html.twig' %}    {# #overview — статистика #}
-    {% include 'admin/users.html.twig' %}    {# #users — пользователи #}
-    {% include 'admin/queues.html.twig' %}   {# #queues — очереди #}
-    {% include 'admin/workers.html.twig' %}  {# #workers — воркеры (registry-07) #}
-    {% include 'admin/logs.html.twig' %}     {# #logs — логи конвертаций #}
-    {% include 'admin/toggle.html.twig' %}   {# #toggle — тумблер конвертаций #}
-    {% include 'admin/examples.html.twig' %} {# #examples — живые примеры лендинга #}
+    {% include 'admin/stats.html.twig' %}
 {% endblock %}

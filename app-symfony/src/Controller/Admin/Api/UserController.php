@@ -45,8 +45,10 @@ class UserController extends AbstractController
         $q      = is_string($q) ? $q : null;
         $page   = max(1, (int) $request->query->get('page', '1'));
         $offset = ($page - 1) * self::PAGE_SIZE;
+        // guest=0|omit → только зарегистрированные; guest=1 → только анонимы.
+        $guestOnly = $request->query->getBoolean('guest');
 
-        $result = $this->users->searchPaginated($q, self::PAGE_SIZE, $offset);
+        $result = $this->users->searchPaginated($q, self::PAGE_SIZE, $offset, $guestOnly);
         $total  = $result['total'];
 
         return $this->json([

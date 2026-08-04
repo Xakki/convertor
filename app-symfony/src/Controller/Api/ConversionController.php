@@ -349,28 +349,54 @@ class ConversionController extends AbstractController
 
     #[Route('/convert/{id}/preview', methods: ['GET'])]
     #[OA\Tag(name: 'Conversion')]
-    #[OA\Get(summary: 'Inline текстовое превью результата (первые 64 KiB)')]
+    #[OA\Get(summary: 'Inline текстовое превью результата или исходника (первые 64 KiB)')]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID задачи', schema: new OA\Schema(type: 'integer'))]
+    #[OA\Parameter(name: 'side', in: 'query', required: false, description: '`result` (по умолчанию) — превью результата; `source` — превью исходника', schema: new OA\Schema(type: 'string', default: 'result', enum: ['result', 'source']))]
     #[OA\Response(
         response: 200,
-        description: 'Текст результата (усечён до 64 KiB; заголовок X-Preview-Truncated при усечении)',
+        description: 'Текст результата/исходника (усечён до 64 KiB; заголовок X-Preview-Truncated при усечении)',
         content: new OA\MediaType(mediaType: 'text/plain', schema: new OA\Schema(type: 'string')),
     )]
+    #[OA\Response(response: 400, description: 'Некорректное значение `side`')]
     #[OA\Response(response: 401, description: 'Требуется аутентификация')]
     #[OA\Response(response: 404, description: 'Задача/результат не найдены')]
-    #[OA\Response(response: 409, description: 'Конвертация ещё не завершена')]
-    #[OA\Response(response: 410, description: 'Результат удалён по ретеншену')]
-    #[OA\Response(response: 415, description: 'Результат не является текстом для превью')]
-    public function preview(int $id, #[CurrentUser] ?User $user): Response
+    #[OA\Response(response: 409, description: 'Конвертация ещё не завершена (только side=result)')]
+    #[OA\Response(response: 410, description: 'Файл удалён по ретеншену')]
+    #[OA\Response(response: 415, description: 'Файл не является текстом для превью')]
+    public function preview(int $id, Request $request, #[CurrentUser] ?User $user): Response
     {
         if ($user === null) {
             return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
+        }
+
+        $side = $request->query->get('side', 'result');
+        if ($side !== 'result' && $side !== 'source') {
+            return $this->json(
+                ['error' => 'bad_request', 'message' => 'side must be "result" or "source"'],
+                Response::HTTP_BAD_REQUEST,
+            );
         }
 
         $conversion = $this->conversionRepository->find($id);
 
         if ($conversion === null || $conversion->getUser()->getId() !== $user->getId()) {
             throw new NotFoundHttpException('Conversion not found');
+        }
+
+        if ($side === 'source') {
+            // Исходник существует с момента создания задачи — превью доступно
+            // ДАЖЕ для pending/failed конверсии (в отличие от result-ветки ниже),
+            // поэтому здесь намеренно НЕТ гейта по статусу.
+            $inputFile = $conversion->getInputFile();
+
+            if (! self::isPreviewable($inputFile, $conversion->getFromFormat())) {
+                return $this->json(
+                    ['error' => 'unsupported', 'message' => 'Source is not text-previewable'],
+                    Response::HTTP_UNSUPPORTED_MEDIA_TYPE,
+                );
+            }
+
+            return $this->readPreviewResponse($inputFile, $this->s3->inputsBucket(), 'Source expired or no longer available');
         }
 
         if ($conversion->getStatus() !== ConversionStatus::Completed) {
@@ -392,22 +418,26 @@ class ConversionController extends AbstractController
             );
         }
 
-        // Пустой (0-байт) результат: Range `bytes=0-…` на нём отдаёт 416 (не
+        return $this->readPreviewResponse($outputFile, $this->s3->resultsBucket(), 'Result expired or no longer available');
+    }
+
+    /**
+     * Общий хвост preview(): читает НЕ БОЛЕЕ PREVIEW_MAX_BYTES объекта из указанного
+     * бакета и отдаёт его как text/plain inline. Используется ОБЕИМИ ветками
+     * preview() (result и source) — единая логика 0-байтового short-circuit,
+     * усечения и 410 на истёкший объект.
+     */
+    private function readPreviewResponse(FileStorage $file, string $bucket, string $goneMessage): Response
+    {
+        // Пустой (0-байт) файл: Range `bytes=0-…` на нём отдаёт 416 (не
         // NoSuchKey) → был бы 500. Отдаём пустое превью, не дёргая S3.
-        if ($outputFile->getSizeBytes() === 0) {
+        if ($file->getSizeBytes() === 0) {
             $bytes = '';
         } else {
             try {
-                $bytes = $this->s3->readCapped(
-                    $this->s3->resultsBucket(),
-                    $outputFile->getStoragePath(),
-                    self::PREVIEW_MAX_BYTES,
-                );
+                $bytes = $this->s3->readCapped($bucket, $file->getStoragePath(), self::PREVIEW_MAX_BYTES);
             } catch (NoSuchKeyException) {
-                return $this->json(
-                    ['error' => 'gone', 'message' => 'Result expired or no longer available'],
-                    Response::HTTP_GONE,
-                );
+                return $this->json(['error' => 'gone', 'message' => $goneMessage], Response::HTTP_GONE);
             }
         }
 
@@ -416,14 +446,14 @@ class ConversionController extends AbstractController
         $response = new Response($bytes, Response::HTTP_OK, [
             'Content-Type'        => 'text/plain; charset=utf-8',
             'Content-Disposition' => S3Storage::contentDisposition(
-                $outputFile->getOriginalName(),
+                $file->getOriginalName(),
                 HeaderUtils::DISPOSITION_INLINE,
             ),
-            // Не даём браузеру MIME-sniff'ить недоверенные байты результата в HTML (defense-in-depth на XSS).
+            // Не даём браузеру MIME-sniff'ить недоверенные байты в HTML (defense-in-depth на XSS).
             'X-Content-Type-Options' => 'nosniff',
         ]);
 
-        if ($outputFile->getSizeBytes() > self::PREVIEW_MAX_BYTES) {
+        if ($file->getSizeBytes() > self::PREVIEW_MAX_BYTES) {
             $response->headers->set('X-Preview-Truncated', '1');
         }
 
@@ -447,8 +477,11 @@ class ConversionController extends AbstractController
                 new OA\Property(property: 'is_ai', type: 'boolean'),
                 new OA\Property(property: 'created_at', type: 'string', format: 'date-time'),
                 new OA\Property(property: 'processing_ms', type: 'integer', nullable: true),
+                new OA\Property(property: 'category', type: 'string', example: 'document'),
                 new OA\Property(property: 'source_name', type: 'string'),
                 new OA\Property(property: 'source_size', type: 'integer'),
+                new OA\Property(property: 'source_mime', type: 'string', nullable: true),
+                new OA\Property(property: 'source_previewable', type: 'boolean'),
                 new OA\Property(property: 'result_size', type: 'integer', nullable: true),
                 new OA\Property(property: 'result_mime', type: 'string', nullable: true),
                 new OA\Property(property: 'previewable', type: 'boolean'),
@@ -580,10 +613,17 @@ class ConversionController extends AbstractController
             'is_ai'         => $c->isAi(),
             'created_at'    => $c->getCreatedAt()->format(\DateTimeInterface::ATOM),
             'processing_ms' => $c->getProcessingMs(),
+            'category'      => $c->getCategory()->value,
             'source_name'   => $input->getOriginalName(),
             'source_size'   => $input->getSizeBytes(),
-            'result_size'   => $output?->getSizeBytes(),
-            'result_mime'   => $output?->getMimeType(),
+            'source_mime'   => $input->getMimeType(),
+            // inputFile — non-nullable relation (см. Conversion::$inputFile), поэтому
+            // «исходник существует» верно всегда; критерий тут чисто format-based —
+            // тот же isPreviewable(), что и в 415-гейте preview(side=source), и БЕЗ
+            // требования к статусу (source-превью доступно и для pending/failed).
+            'source_previewable' => self::isPreviewable($input, $c->getFromFormat()),
+            'result_size'        => $output?->getSizeBytes(),
+            'result_mime'        => $output?->getMimeType(),
             // previewable требует ЕЩЁ и status===completed: preview() отдаёт 409 для
             // незавершённой конвертации, даже если формат текстовый — флаг в истории
             // должен отражать это (hardening-09/nit-3), а не только format-критерий
@@ -595,22 +635,25 @@ class ConversionController extends AbstractController
     }
 
     /**
-     * Результат ФОРМАТОМ пригоден к текстовому превью: любой `text/*`, либо
-     * application/json, либо целевой формат из {md,txt,json,csv,html}. Это
-     * только format-критерий — НЕ включает статус конвертации. Используется:
-     *  - в 415-гейте preview() (там completed уже проверен отдельным условием
-     *    ДО вызова этого метода);
-     *  - в serializeHistoryItem() для флага `previewable`, но там результат
-     *    дополнительно AND'ится с `status === Completed` на вызывающей стороне.
+     * Файл (результат ИЛИ исходник) ФОРМАТОМ пригоден к текстовому превью: любой
+     * `text/*`, либо application/json, либо соответствующий формат (to_format для
+     * результата, from_format для исходника) из {md,txt,json,csv,html}. Это только
+     * format-критерий — НЕ включает статус конвертации. Используется:
+     *  - в 415-гейте preview() для обеих сторон (side=result требует completed —
+     *    проверено отдельным условием ДО вызова этого метода; side=source статус
+     *    не проверяет вовсе);
+     *  - в serializeHistoryItem() для флагов `previewable` (доп. AND со
+     *    status===Completed на вызывающей стороне) и `source_previewable`
+     *    (без доп. условия — как и side=source в preview()).
      */
-    private static function isPreviewable(?FileStorage $output, string $toFormat): bool
+    private static function isPreviewable(?FileStorage $file, string $format): bool
     {
-        if ($output === null) {
+        if ($file === null) {
             return false;
         }
 
         // Отсекаем возможные параметры (`text/plain; charset=utf-8`).
-        $mime = strtolower(trim(explode(';', $output->getMimeType())[0]));
+        $mime = strtolower(trim(explode(';', $file->getMimeType())[0]));
 
         if (str_starts_with($mime, 'text/')) {
             return true;
@@ -620,7 +663,7 @@ class ConversionController extends AbstractController
             return true;
         }
 
-        return in_array(strtolower($toFormat), self::PREVIEWABLE_FORMATS, true);
+        return in_array(strtolower($format), self::PREVIEWABLE_FORMATS, true);
     }
 
     #[Route('/formats', methods: ['GET'])]

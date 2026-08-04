@@ -19,9 +19,10 @@ use Symfony\Component\HttpClient\Response\MockResponse;
 
 /**
  * Функциональные тесты обогащённой истории и двух owner-scoped file-эндпоинтов:
- *  - GET /convert/history — новые ключи (processing_ms, source_*, result_*, previewable);
+ *  - GET /convert/history — новые ключи (processing_ms, category, source_*, result_*, previewable);
  *  - GET /convert/{id}/source — стрим входного файла, 410 при удалённом объекте;
- *  - GET /convert/{id}/preview — inline текстовое превью (415 для бинаря, text/plain для текста).
+ *  - GET /convert/{id}/preview — inline текстовое превью side=result (по умолчанию, 415 для
+ *    бинаря, text/plain для текста) и side=source (CNV-61: превью исходника, без гейта по статусу).
  *
  * Owner-scope: чужая/несуществующая конвертация — 404 (не 403), не палим существование.
  * S3Storage (класс final) подменяется реальным поверх S3Client на MockHttpClient —
@@ -60,6 +61,7 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
         $token  = $this->jwtFor($owner);
 
         // md-результат (text/markdown) → previewable=true, с processing_ms и размерами.
+        // Исходник — docx с application/octet-stream (дефолт хелпера) → source_previewable=false.
         $mdConv = $this->seedConversion(
             $owner,
             'docx',
@@ -70,13 +72,14 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
             processingMs: 1234,
         );
 
-        // png-результат (image/png) → previewable=false.
+        // png-результат (image/png) → previewable=false; исходник — текстовый csv
+        // (text/csv) → source_previewable=true (независимо от previewable результата).
         $pngConv = $this->seedConversion(
             $owner,
-            'jpg',
+            'csv',
             'png',
             ConversionStatus::Completed,
-            input: ['name' => 'photo.jpg', 'size' => 8192],
+            input: ['name' => 'photo.csv', 'size' => 8192, 'mime' => 'text/csv'],
             output: ['name' => 'photo.png', 'mime' => 'image/png', 'size' => 9000],
             processingMs: 500,
         );
@@ -99,8 +102,9 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
         $md = $byId[$mdConv->getId()] ?? null;
         self::assertNotNull($md, 'md-конвертация должна быть в истории');
         foreach (
-            ['id', 'from_format', 'to_format', 'status', 'is_ai', 'created_at',
-                'processing_ms', 'source_name', 'source_size', 'result_size', 'result_mime', 'previewable'] as $key
+            ['id', 'from_format', 'to_format', 'status', 'is_ai', 'created_at', 'category',
+                'processing_ms', 'source_name', 'source_size', 'source_mime', 'source_previewable',
+                'result_size', 'result_mime', 'previewable'] as $key
         ) {
             self::assertArrayHasKey($key, $md, $key);
         }
@@ -109,17 +113,23 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
         self::assertSame('completed', $md['status']);
         self::assertFalse($md['is_ai']);
         self::assertSame(1234, $md['processing_ms']);
+        self::assertSame('document', $md['category']);
         self::assertSame('договор.docx', $md['source_name']);
         self::assertSame(4096, $md['source_size']);
+        self::assertSame('application/octet-stream', $md['source_mime']);
+        self::assertFalse($md['source_previewable'], 'docx/octet-stream исходник не previewable');
         self::assertSame(321, $md['result_size']);
         self::assertSame('text/markdown', $md['result_mime']);
         self::assertTrue($md['previewable'], 'md-результат должен быть previewable');
 
-        // png-строка: previewable=false.
+        // png-строка: previewable=false (результат бинарный), но source_previewable=true
+        // (текстовый csv-исходник) — два независимых флага для разных сторон.
         $png = $byId[$pngConv->getId()] ?? null;
         self::assertNotNull($png);
         self::assertSame('image/png', $png['result_mime']);
         self::assertFalse($png['previewable'], 'png-результат не previewable');
+        self::assertSame('text/csv', $png['source_mime']);
+        self::assertTrue($png['source_previewable'], 'csv-исходник должен быть source_previewable');
     }
 
     public function testHistoryPendingConversionHasNullResultFieldsAndNotPreviewable(): void
@@ -130,10 +140,10 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
 
         $conv = $this->seedConversion(
             $owner,
-            'docx',
+            'txt',
             'pdf',
             ConversionStatus::Pending,
-            input: ['name' => 'draft.docx', 'size' => 100],
+            input: ['name' => 'draft.txt', 'size' => 100, 'mime' => 'text/plain'],
             output: null,
             processingMs: null,
         );
@@ -154,8 +164,12 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
         self::assertNull($item['result_size']);
         self::assertNull($item['result_mime']);
         self::assertFalse($item['previewable']);
-        self::assertSame('draft.docx', $item['source_name']);
+        self::assertSame('draft.txt', $item['source_name']);
         self::assertSame(100, $item['source_size']);
+        self::assertSame('text/plain', $item['source_mime']);
+        // pending (не completed) — но source_previewable БЕЗ гейта по статусу: текстовый
+        // исходник previewable даже до завершения конвертации.
+        self::assertTrue($item['source_previewable'], 'text-исходник previewable даже для pending-конверсии');
     }
 
     /**
@@ -415,6 +429,157 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
     }
 
     // -------------------------------------------------------------------------
+    // preview?side=source (CNV-61)
+    // -------------------------------------------------------------------------
+
+    public function testPreviewBadSideReturns400(): void
+    {
+        $client = static::createClient();
+        $owner  = $this->persistUser();
+        $token  = $this->jwtFor($owner);
+
+        $conv = $this->seedConversion(
+            $owner,
+            'csv',
+            'json',
+            ConversionStatus::Completed,
+            input: ['name' => 'in.csv', 'size' => 10, 'mime' => 'text/csv'],
+            output: ['name' => 'out.json', 'mime' => 'application/json', 'size' => 11],
+        );
+        static::getContainer()->get(EntityManagerInterface::class)->flush();
+
+        $client->request('GET', "/api/v1/convert/{$conv->getId()}/preview?side=bogus", server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame('bad_request', $data['error']);
+    }
+
+    public function testPreviewSourceReturnsTextPlainForTextSource(): void
+    {
+        $client = static::createClient();
+        $owner  = $this->persistUser();
+        $token  = $this->jwtFor($owner);
+
+        $conv = $this->seedConversion(
+            $owner,
+            'csv',
+            'pdf',
+            ConversionStatus::Completed,
+            input: ['name' => 'data.csv', 'size' => 10, 'mime' => 'text/csv'],
+            output: ['name' => 'out.pdf', 'mime' => 'application/pdf', 'size' => 20],
+        );
+        static::getContainer()->get(EntityManagerInterface::class)->flush();
+
+        $this->overrideS3(206, 'a,b,c');
+
+        $client->request('GET', "/api/v1/convert/{$conv->getId()}/preview?side=source", server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+
+        $response = $client->getResponse();
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('text/plain; charset=utf-8', $response->headers->get('Content-Type'));
+        self::assertStringStartsWith('inline', (string) $response->headers->get('Content-Disposition'));
+        self::assertSame('a,b,c', $response->getContent());
+    }
+
+    public function testPreviewSourceReturns415ForBinarySource(): void
+    {
+        $client = static::createClient();
+        $owner  = $this->persistUser();
+        $token  = $this->jwtFor($owner);
+
+        // Бинарный исходник (jpg, application/octet-stream по умолчанию хелпера) — не текст.
+        $conv = $this->seedConversion(
+            $owner,
+            'jpg',
+            'png',
+            ConversionStatus::Completed,
+            input: ['name' => 'photo.jpg', 'size' => 8192],
+            output: ['name' => 'photo.png', 'mime' => 'image/png', 'size' => 9000],
+        );
+        static::getContainer()->get(EntityManagerInterface::class)->flush();
+
+        $client->request('GET', "/api/v1/convert/{$conv->getId()}/preview?side=source", server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+
+        self::assertSame(415, $client->getResponse()->getStatusCode());
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame('unsupported', $data['error']);
+    }
+
+    public function testPreviewSourceReturns410WhenInputObjectMissing(): void
+    {
+        $client = static::createClient();
+        $owner  = $this->persistUser();
+        $token  = $this->jwtFor($owner);
+
+        $conv = $this->seedConversion(
+            $owner,
+            'csv',
+            'json',
+            ConversionStatus::Completed,
+            input: ['name' => 'gone.csv', 'size' => 10, 'mime' => 'text/csv'],
+            output: ['name' => 'gone.json', 'mime' => 'application/json', 'size' => 20],
+        );
+        static::getContainer()->get(EntityManagerInterface::class)->flush();
+
+        $this->overrideS3(404, '<?xml version="1.0"?><Error><Code>NoSuchKey</Code><Message>no</Message></Error>');
+
+        $client->request('GET', "/api/v1/convert/{$conv->getId()}/preview?side=source", server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+
+        self::assertSame(410, $client->getResponse()->getStatusCode());
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame('gone', $data['error']);
+    }
+
+    public function testPreviewSourceWorksForNonCompletedConversion(): void
+    {
+        $client = static::createClient();
+        $owner  = $this->persistUser();
+        $token  = $this->jwtFor($owner);
+
+        // Исходник существует с момента создания задачи — превью доступно даже
+        // до завершения конвертации (в отличие от side=result, который даёт 409).
+        $conv = $this->seedConversion(
+            $owner,
+            'csv',
+            'json',
+            ConversionStatus::Processing,
+            input: ['name' => 'in.csv', 'size' => 10, 'mime' => 'text/csv'],
+            output: null,
+        );
+        static::getContainer()->get(EntityManagerInterface::class)->flush();
+
+        $this->overrideS3(206, 'x,y,z');
+
+        $client->request('GET', "/api/v1/convert/{$conv->getId()}/preview?side=source", server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+
+        $response = $client->getResponse();
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('x,y,z', $response->getContent());
+    }
+
+    public function testPreviewSourceReturns404ForNonOwner(): void
+    {
+        $client = static::createClient();
+        $owner  = $this->persistUser();
+        $other  = $this->persistUser();
+        $token  = $this->jwtFor($other);
+
+        $conv = $this->seedConversion(
+            $owner,
+            'csv',
+            'json',
+            ConversionStatus::Completed,
+            input: ['name' => 'in.csv', 'size' => 10, 'mime' => 'text/csv'],
+            output: ['name' => 'out.json', 'mime' => 'application/json', 'size' => 11],
+        );
+        static::getContainer()->get(EntityManagerInterface::class)->flush();
+
+        $client->request('GET', "/api/v1/convert/{$conv->getId()}/preview?side=source", server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
+        self::assertSame(404, $client->getResponse()->getStatusCode());
+    }
+
+    // -------------------------------------------------------------------------
     // helpers
     // -------------------------------------------------------------------------
 
@@ -444,7 +609,7 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
     }
 
     /**
-     * @param array{name: string, size: int}                 $input
+     * @param array{name: string, size: int, mime?: string}   $input
      * @param array{name: string, mime: string, size: int}|null $output
      */
     private function seedConversion(
@@ -461,7 +626,7 @@ final class ConversionHistoryFileControllerTest extends WebTestCase
         $inputFile = (new FileStorage())
             ->setOriginalName($input['name'])
             ->setStoragePath('inputs/test/' . bin2hex(random_bytes(8)) . '.' . $from)
-            ->setMimeType('application/octet-stream')
+            ->setMimeType($input['mime'] ?? 'application/octet-stream')
             ->setSizeBytes($input['size']);
         $em->persist($inputFile);
         $this->toRemove[] = $inputFile;

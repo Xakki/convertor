@@ -198,16 +198,22 @@
                 {{ 'home.ocr_label'|trans }}
             </label>
 
-            {# Кнопка отправки #}
-            <div class="mt-6">
+            {# Кнопка отправки + ссылка на историю (CNV-61) #}
+            <div class="mt-6 flex flex-wrap items-stretch gap-3">
                 <button
+                    type="button"
                     @click="submit()"
                     :disabled="!canSubmit"
-                    class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    class="min-w-0 flex-1 rounded-lg bg-indigo-600 px-4 py-2.5 font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                     <span x-show="!submitting">{{ 'home.submit_button'|trans }}</span>
                     <span x-show="submitting" x-cloak>{{ 'home.submit_sending'|trans }}</span>
                 </button>
+                <a
+                    href="{{ path('app_history') }}"
+                    data-testid="home-history-link"
+                    class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-medium text-slate-700 transition hover:bg-slate-100 hover:border-slate-400"
+                >{{ 'home.history_link'|trans }}</a>
             </div>
 
             {# Ошибка отправки #}
@@ -366,132 +372,6 @@
             </div>
             <p class="mt-2 text-xs text-slate-400">{{ 'home.limits.proposal_note'|trans }}</p>
         </section>
-
-        {# ── История конвертаций. Залогиненный — грузится по JWT (tryRefresh),
-           не гейтится cookie-согласием. Гость (home-12) — грузится ТОЛЬКО при
-           cookie_consent=accepted (см. init()/readConsent() в
-           _converter_app_script.html.twig); conversions остаётся [] и секция
-           не рендерится, если согласия нет — отдельный запрос сюда не нужен. ── #}
-        <template x-if="conversions.length > 0">
-            <section class="mt-8">
-                <template x-if="auth.token">
-                    <h2 class="mb-3 text-sm font-semibold text-slate-600">{{ 'home.history_heading'|trans }}</h2>
-                </template>
-                <template x-if="!auth.token">
-                    <div class="mb-3">
-                        <h2 class="text-sm font-semibold text-slate-600">{{ 'home.history_heading_guest'|trans }}</h2>
-                        <p class="mt-0.5 text-xs text-slate-400">{{ 'home.history_guest_note'|trans }}</p>
-                    </div>
-                </template>
-                <div class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm">
-                    <template x-for="c in conversions" :key="c.id">
-                        <div class="px-4 py-3">
-                        <div class="flex flex-wrap items-center justify-between gap-3">
-                            <div class="min-w-0">
-                                <p class="text-sm font-medium text-slate-700">
-                                    <span x-text="c.from_format || '—'"></span>
-                                    <span class="text-slate-400"> → </span>
-                                    <span x-text="c.to_format"></span>
-                                </p>
-                                {# Исходник: имя + размер. Ссылка качается через
-                                   authFetch→blob (Bearer). 410 → «исходник удалён». #}
-                                <p class="truncate text-xs text-slate-500">
-                                    <span x-text="c.source_name"></span>
-                                    <span class="text-slate-400" x-text="'· ' + humanSize(c.source_size)"></span>
-                                    <template x-if="c.result_size != null">
-                                        <span class="text-slate-400" x-text="'→ ' + humanSize(c.result_size)"></span>
-                                    </template>
-                                </p>
-                                <p class="text-xs text-slate-400">
-                                    <span x-text="formatDate(c.created_at)"></span>
-                                    <template x-if="c.processing_ms != null">
-                                        <span x-text="'· ' + I18N.durationPrefix + formatDuration(c.processing_ms)"></span>
-                                    </template>
-                                </p>
-                            </div>
-                            <div class="flex flex-wrap items-center justify-end gap-2">
-                                <span
-                                    class="rounded-full px-3 py-1 text-xs font-medium"
-                                    :class="{
-                                        'bg-slate-100 text-slate-600': isActive(c.status),
-                                        'bg-green-100 text-green-700': c.status === 'completed',
-                                        'bg-red-100 text-red-700': isFailed(c.status),
-                                    }"
-                                    x-text="statusLabel(c.status)"
-                                ></span>
-                                {# Скачать исходник — прячется после 410 (исходник удалён). #}
-                                <template x-if="!sourceGone[c.id]">
-                                    <button
-                                        @click="downloadSource(c.id, c.source_name)"
-                                        :disabled="sourceLoadingId === c.id"
-                                        class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
-                                    >
-                                        <span x-show="sourceLoadingId !== c.id">{{ 'home.history_source'|trans }}</span>
-                                        <span x-show="sourceLoadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
-                                    </button>
-                                </template>
-                                <template x-if="sourceGone[c.id]">
-                                    <span class="text-xs text-slate-400">{{ 'home.history_source_gone'|trans }}</span>
-                                </template>
-                                {# home-05: тип вьюера по формату/категории (D4 LIGHT MVP) —
-                                   text/image/pdf открывают попап, audio/video — инлайн-плеер ниже. #}
-                                <template x-if="c.status === 'completed' && viewerTypeForHistory(c) === 'text'">
-                                    <button
-                                        @click="openPreview(c.id, c.to_format)"
-                                        class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
-                                    >{{ 'home.history_preview'|trans }}</button>
-                                </template>
-                                <template x-if="c.status === 'completed' && (viewerTypeForHistory(c) === 'image' || viewerTypeForHistory(c) === 'pdf')">
-                                    <button
-                                        @click="openViewer(viewerTypeForHistory(c), '/api/v1/convert/' + c.id + '/download', false)"
-                                        class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
-                                    >{{ 'home.history_preview'|trans }}</button>
-                                </template>
-                                <template x-if="c.status === 'completed' && (viewerTypeForHistory(c) === 'audio' || viewerTypeForHistory(c) === 'video')">
-                                    <button
-                                        @click="togglePlayer('h' + c.id, viewerTypeForHistory(c), '/api/v1/convert/' + c.id + '/download', false)"
-                                        class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
-                                    >
-                                        <span x-text="players['h' + c.id] ? I18N.viewer.hidePlayer : I18N.viewer.showPlayer"></span>
-                                    </button>
-                                </template>
-                                <template x-if="c.status === 'completed'">
-                                    <button
-                                        @click="downloadConversion(c.id, c.to_format)"
-                                        :disabled="downloadingId === c.id"
-                                        class="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:bg-slate-300"
-                                    >
-                                        <span x-show="downloadingId !== c.id">{{ 'common.download'|trans }}</span>
-                                        <span x-show="downloadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
-                                    </button>
-                                </template>
-                            </div>
-                        </div>
-                        {# home-05: инлайн audio/video плеер строки истории — вне flex-строки
-                           выше, чтобы плеер занимал всю ширину карточки. #}
-                        <template x-if="players['h' + c.id]">
-                            <div class="mt-2">
-                                <template x-if="players['h' + c.id].loading">
-                                    <p class="text-xs text-slate-400">{{ 'common.loading'|trans }}</p>
-                                </template>
-                                <template x-if="players['h' + c.id].error">
-                                    <p class="text-xs text-red-600" x-text="players['h' + c.id].error"></p>
-                                </template>
-                                <template x-if="players['h' + c.id].objectUrl && players['h' + c.id].type === 'audio'">
-                                    {# object URL — источник для <audio>, НЕ HTML-контент (см. модалку вьюера выше). #}
-                                    <audio :src="players['h' + c.id].objectUrl" controls class="w-full"></audio>
-                                </template>
-                                <template x-if="players['h' + c.id].objectUrl && players['h' + c.id].type === 'video'">
-                                    {# object URL — источник для <video>, НЕ HTML-контент. #}
-                                    <video :src="players['h' + c.id].objectUrl" controls class="max-h-96 w-full"></video>
-                                </template>
-                            </div>
-                        </template>
-                        </div>
-                    </template>
-                </div>
-            </section>
-        </template>
     </main>
 
     {# ── Модалки предпросмотра (текст) — partial (home-09), ВНУТРИ x-data,
@@ -505,9 +385,16 @@
        позиции. ── #}
     {% include 'partials/_converter_viewer_modal.html.twig' %}
     {% include 'partials/_billing_topup_modal.html.twig' %}
+
+    {# ── CNV-61-preview: общая модалка предпросмотра source/result job (иконки
+       у кнопки «Скачать результат» — partials/_converter_job_status.html.twig).
+       ДОЛЖНА быть ВНУТРИ x-data — тот же принцип, что и у вьюера выше. ── #}
+    {% include 'partials/_file_preview_modal.html.twig' %}
 </div>
 
-{# CNV-59: billing mixin → затем converterApp(). #}
+{# CNV-59: billing mixin → затем converterApp(). CNV-61-preview: file-preview
+   helpers/mixin — ДО converterApp() (тот подмешивает filePreviewMixin()). #}
 {% include 'partials/_billing_topup_script.html.twig' %}
+{% include 'partials/_file_preview_script.html.twig' %}
 {% include 'partials/_converter_app_script.html.twig' %}
 {% endblock %}

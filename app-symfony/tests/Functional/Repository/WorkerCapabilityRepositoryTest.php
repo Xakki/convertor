@@ -151,6 +151,9 @@ final class WorkerCapabilityRepositoryTest extends KernelTestCase
         $em->clear();
         $reloaded = $repo->find($cap->getId());
         self::assertNotNull($reloaded);
+        // CNV-61: `inflight` lives in the same blob, but a push that omits it
+        // must NOT fabricate a stored `inflight: null` — the shape stays
+        // exactly {cpu,mem,load} when only cpu/mem/load were pushed.
         self::assertSame(['cpu' => 0.42, 'mem' => 0.31, 'load' => 0.1], $reloaded->getMetrics());
     }
 
@@ -178,6 +181,88 @@ final class WorkerCapabilityRepositoryTest extends KernelTestCase
         $reloaded = $repo->find($cap->getId());
         self::assertNotNull($reloaded);
         self::assertNull($reloaded->getMetrics());
+    }
+
+    /**
+     * CNV-61 review, finding #3: `metrics` (cpu/mem/load) и `inflight` — два
+     * независимых компонента одного JSON-блоба, обновляются read-modify-write
+     * мержем. Direction A: первый пуш несёт полные metrics, ВТОРОЙ несёт
+     * ТОЛЬКО inflight — cpu/mem/load из первого пуша должны сохраниться, не
+     * стереться null'ами.
+     */
+    public function testUpdateLivenessInflightOnlyPushPreservesPreviouslyStoredMetrics(): void
+    {
+        self::bootKernel();
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $em   = static::getContainer()->get(EntityManagerInterface::class);
+
+        $cap              = $repo->upsert('test-wc-merge-a', 'host-a', ['isAi' => false, 'matrix' => []]);
+        $this->toRemove[] = $cap;
+
+        $repo->updateLiveness([[
+            'workerType' => 'test-wc-merge-a',
+            'instanceId' => 'host-a',
+            'status'     => WorkerLivenessStatus::Alive,
+            'lastSeenAt' => new \DateTimeImmutable('2099-01-01T00:00:00Z'),
+            'metrics'    => ['cpu' => 0.4, 'mem' => 0.3, 'load' => 0.2],
+        ]]);
+
+        $repo->updateLiveness([[
+            'workerType' => 'test-wc-merge-a',
+            'instanceId' => 'host-a',
+            'status'     => WorkerLivenessStatus::Alive,
+            'lastSeenAt' => new \DateTimeImmutable('2099-01-01T00:00:05Z'),
+            'inflight'   => 9,
+        ]]);
+
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame(
+            ['cpu' => 0.4, 'mem' => 0.3, 'load' => 0.2, 'inflight' => 9],
+            $reloaded->getMetrics(),
+            'an inflight-only push must not wipe out previously stored cpu/mem/load',
+        );
+    }
+
+    /**
+     * CNV-61 review, finding #3, direction B: первый пуш несёт ТОЛЬКО
+     * inflight, второй — ТОЛЬКО metrics — ранее сохранённый inflight должен
+     * сохраниться, не потеряться из-за отсутствия ключа во втором пуше.
+     */
+    public function testUpdateLivenessMetricsOnlyPushPreservesPreviouslyStoredInflight(): void
+    {
+        self::bootKernel();
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $em   = static::getContainer()->get(EntityManagerInterface::class);
+
+        $cap              = $repo->upsert('test-wc-merge-b', 'host-a', ['isAi' => false, 'matrix' => []]);
+        $this->toRemove[] = $cap;
+
+        $repo->updateLiveness([[
+            'workerType' => 'test-wc-merge-b',
+            'instanceId' => 'host-a',
+            'status'     => WorkerLivenessStatus::Alive,
+            'lastSeenAt' => new \DateTimeImmutable('2099-01-01T00:00:00Z'),
+            'inflight'   => 5,
+        ]]);
+
+        $repo->updateLiveness([[
+            'workerType' => 'test-wc-merge-b',
+            'instanceId' => 'host-a',
+            'status'     => WorkerLivenessStatus::Alive,
+            'lastSeenAt' => new \DateTimeImmutable('2099-01-01T00:00:05Z'),
+            'metrics'    => ['cpu' => 0.6, 'mem' => 0.5, 'load' => 0.4],
+        ]]);
+
+        $em->clear();
+        $reloaded = $repo->find($cap->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame(
+            ['cpu' => 0.6, 'mem' => 0.5, 'load' => 0.4, 'inflight' => 5],
+            $reloaded->getMetrics(),
+            'a metrics-only push must not wipe out a previously stored inflight',
+        );
     }
 
     /**

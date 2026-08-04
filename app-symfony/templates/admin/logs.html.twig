@@ -3,7 +3,15 @@
    shared-хелпер window.admin.fetch (Bearer + refresh/redirect) из gated JSON-API
    /api/v1/admin/conversions и рендерятся Alpine. Рантайм-логи воркеров
    (стектрейсы) в БД нет — линк-аут в Graylog по conversion id. Секретов в
-   разметке нет. id="logs" — якорь боковой навигации. #}
+   разметке нет. id="logs" — якорь боковой навигации.
+
+   CNV-61-preview: колонка «Файлы» — иконки source/result (adminSourceIconKey()/
+   adminResultIconKey()/adminPreviewIcon(), см. adminLogs() ниже), открывают
+   общую модалку filePreview (filePreviewMixin(), _file_preview_modal.html.twig,
+   variant='dark'). Байты — GET /api/v1/admin/conversions/{id}/file?side=,
+   через window.admin.fetch (тот же Bearer+refresh транспорт, что и список). #}
+{% import 'partials/_file_preview_icon_button.html.twig' as fpBtn %}
+{% import 'partials/_converter_example_icons.html.twig' as fpIcons %}
 <section id="logs" class="mt-8" aria-labelledby="logs-heading"
          x-data="adminLogs()">
     <div class="flex items-center justify-between">
@@ -100,6 +108,7 @@
                     <th class="px-4 py-3">Пользователь</th>
                     <th class="px-4 py-3">Конвертация</th>
                     <th class="px-4 py-3">Категория</th>
+                    <th class="px-4 py-3">Файлы</th>
                     <th class="px-4 py-3">Статус</th>
                     <th class="px-4 py-3">Время</th>
                     <th class="px-4 py-3">Создано</th>
@@ -129,6 +138,14 @@
                         </td>
                         <td class="px-4 py-3 text-zinc-400" x-text="c.category"></td>
                         <td class="px-4 py-3">
+                            <div class="flex items-center gap-1.5">
+                                {{ fpBtn.button(fpIcons.icon('adminSourceIconKey(c)'), "adminPreviewIcon(c, 'source')", "FILE_PREVIEW_I18N.sourceLabel", 'dark') }}
+                                <span x-show="c.status === 'completed'" x-cloak>
+                                    {{ fpBtn.button(fpIcons.icon('adminResultIconKey(c)'), "adminPreviewIcon(c, 'result')", "FILE_PREVIEW_I18N.resultLabel", 'dark') }}
+                                </span>
+                            </div>
+                        </td>
+                        <td class="px-4 py-3">
                             <span class="rounded-full px-2.5 py-0.5 text-xs" :class="statusClass(c.status)"
                                   x-text="statusLabel(c.status)"></span>
                         </td>
@@ -142,7 +159,7 @@
                     </tr>
                 </template>
                 <tr x-show="!loading && items.length === 0" x-cloak>
-                    <td colspan="8" class="px-4 py-6 text-center text-sm text-zinc-500">Ничего не найдено</td>
+                    <td colspan="9" class="px-4 py-6 text-center text-sm text-zinc-500">Ничего не найдено</td>
                 </tr>
             </tbody>
         </table>
@@ -159,8 +176,13 @@
                     class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs transition-colors hover:bg-zinc-800 disabled:opacity-40">Вперёд →</button>
         </div>
     </div>
+
+    {# CNV-61-preview: общая модалка предпросмотра source/result (иконки в
+       колонке «Файлы» выше). ДОЛЖНА быть ВНУТРИ x-data="adminLogs()". #}
+    {% include 'partials/_file_preview_modal.html.twig' with {variant: 'dark'} %}
 </section>
 
+{% include 'partials/_file_preview_script.html.twig' %}
 <script>
     // Alpine-компонент секции логов. Все запросы — через shared
     // window.admin.fetch (Bearer + refresh/redirect). Определён до deferred-Alpine.
@@ -172,7 +194,7 @@
             failed:     { label: 'Ошибка',    cls: 'bg-red-500/15 text-red-400' },
             expired:    { label: 'Истекло',   cls: 'bg-yellow-500/15 text-yellow-300' },
         };
-        return {
+        return Object.assign({
             loading: true,
             error: '',
             page: 1,
@@ -301,6 +323,32 @@
                 const d = new Date(s);
                 return isNaN(d) ? s : d.toLocaleString('ru-RU');
             },
-        };
+
+            // CNV-61-preview: ключи иконок + клик по колонке «Файлы». Админ-лог
+            // не отдаёт previewable/source_previewable (только inputMime/
+            // outputMime, см. GET /api/v1/admin/conversions contract) — null →
+            // клиентская эвристика FILE_PREVIEW_PREVIEWABLE_FORMATS
+            // (filePreviewViewerType(), _file_preview_script.html.twig).
+            adminSourceIconKey(c) {
+                return filePreviewIconKey(c.fromFormat, c.category, c.inputMime);
+            },
+            adminResultIconKey(c) {
+                return filePreviewIconKey(c.toFormat, c.category, c.outputMime);
+            },
+            // Байты — GET /api/v1/admin/conversions/{id}/file?side=source|result
+            // (стримит attachment, никакого отдельного text/preview-эндпоинта для
+            // админки) через window.admin.fetch. maxTextBytes — клиентский кап
+            // текста: этот путь не идёт через readCapped()/X-Preview-Truncated
+            // бэкенда (тот — только у /convert/{id}/preview), поэтому cap
+            // здесь же (openFilePreview(), _file_preview_script.html.twig).
+            adminPreviewIcon(c, side) {
+                const isSource = side === 'source';
+                const fmt = isSource ? c.fromFormat : c.toFormat;
+                const mime = isSource ? c.inputMime : c.outputMime;
+                const type = filePreviewViewerType(fmt, c.category, null, mime);
+                const url = '/api/v1/admin/conversions/' + c.id + '/file?side=' + side;
+                return this.openFilePreview(type, url, (u) => window.admin.fetch(u), { maxTextBytes: 65536 });
+            },
+        }, filePreviewMixin());
     }
 </script>

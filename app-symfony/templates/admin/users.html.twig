@@ -7,13 +7,23 @@
          x-data="adminUsers()">
     <div class="flex items-center justify-between">
         <h2 id="users-heading" class="text-lg font-semibold text-white">Пользователи</h2>
-        <button @click="reload()"
-                class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                :disabled="loading"
-                aria-label="Обновить список">
-            <span x-show="!loading">Обновить</span>
-            <span x-show="loading" x-cloak>Загрузка…</span>
-        </button>
+        <div class="flex items-center gap-2">
+            <button type="button" @click="toggleGuests()"
+                    class="rounded-lg border px-3 py-1.5 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    :class="guestOnly
+                        ? 'border-indigo-500 bg-indigo-600/30 text-indigo-200'
+                        : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'"
+                    :aria-pressed="guestOnly.toString()"
+                    :disabled="loading"
+                    aria-label="Показать только анонимов">Анонимы</button>
+            <button @click="reload()"
+                    class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    :disabled="loading"
+                    aria-label="Обновить список">
+                <span x-show="!loading">Обновить</span>
+                <span x-show="loading" x-cloak>Загрузка…</span>
+            </button>
+        </div>
     </div>
 
     {# Поиск #}
@@ -46,7 +56,7 @@
                     <th class="px-4 py-3">Email / TG</th>
                     <th class="px-4 py-3">План</th>
                     <th class="px-4 py-3">Статус</th>
-                    <th class="px-4 py-3">Квота (тир × д/м)</th>
+                    <th class="px-4 py-3">Квота (д/м × тир)</th>
                     <th class="px-4 py-3">Регистрация</th>
                     <th class="px-4 py-3 text-right">Действия</th>
                 </tr>
@@ -71,18 +81,24 @@
                                 <thead>
                                     <tr class="text-zinc-600">
                                         <td></td>
-                                        <td class="text-right">д</td>
-                                        <td class="text-right">м</td>
+                                        <template x-for="tier in quotaTiers" :key="'h-' + tier.key">
+                                            <td class="text-right" x-text="tier.label"></td>
+                                        </template>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <template x-for="tier in quotaTiers" :key="tier.key">
-                                        <tr>
-                                            <td class="text-zinc-500" x-text="tier.label"></td>
+                                    <tr>
+                                        <td class="text-zinc-500">д</td>
+                                        <template x-for="tier in quotaTiers" :key="'d-' + tier.key">
                                             <td class="text-right text-zinc-300" x-text="quotaVal(u, tier.key, 'daily')"></td>
+                                        </template>
+                                    </tr>
+                                    <tr>
+                                        <td class="text-zinc-500">м</td>
+                                        <template x-for="tier in quotaTiers" :key="'m-' + tier.key">
                                             <td class="text-right text-zinc-300" x-text="quotaVal(u, tier.key, 'monthly')"></td>
-                                        </tr>
-                                    </template>
+                                        </template>
+                                    </tr>
                                 </tbody>
                             </table>
                         </td>
@@ -163,6 +179,7 @@
             pages: 1,
             total: 0,
             items: [],
+            guestOnly: false,
             planOptions: ['free', 'basic', 'pro'],
             planModal: { open: false, userId: null, plan: 'free' },
             quotaTiers: [
@@ -185,6 +202,12 @@
                 return this.reload();
             },
 
+            toggleGuests() {
+                this.guestOnly = !this.guestOnly;
+                this.page = 1;
+                return this.reload();
+            },
+
             goto(p) {
                 if (p < 1 || p > this.pages || p === this.page) {
                     return;
@@ -198,7 +221,9 @@
                 this.error = '';
                 this.notice = '';
                 try {
-                    const url = '/api/v1/admin/users?q=' + encodeURIComponent(this.q) + '&page=' + this.page;
+                    const url = '/api/v1/admin/users?q=' + encodeURIComponent(this.q)
+                        + '&page=' + this.page
+                        + '&guest=' + (this.guestOnly ? '1' : '0');
                     const res = await window.admin.fetch(url);
                     if (!res.ok) {
                         this.error = 'Не удалось загрузить пользователей (' + res.status + ')';

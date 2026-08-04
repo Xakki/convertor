@@ -1,0 +1,112 @@
+{# ── Список истории конвертаций (CNV-61).
+   Читает Alpine-скоуп historyApp() / совместимый: conversions, historyLoading,
+   historyMore, sourceGone, download*.
+   Retry/delete намеренно НЕ здесь — остаются только в /dashboard.
+
+   CNV-61-preview: две кликабельные иконки файла на строку — источник
+   (historySourceIconKey/historyPreviewIcon('source')) и результат
+   (historyResultIconKey/historyPreviewIcon('result')), обе открывают общую
+   модалку filePreview (filePreviewMixin(), _file_preview_modal.html.twig).
+   Заменяет прежнюю текстовую кнопку «Просмотр» (только для previewable
+   результата) — теперь превью доступно и для источника, иконка всегда видна
+   (клик на непревьюабельном формате даёт «Предпросмотр недоступен», см.
+   openFilePreview()). ── #}
+{% import 'partials/_file_preview_icon_button.html.twig' as fpBtn %}
+{% import 'partials/_converter_example_icons.html.twig' as fpIcons %}
+
+<template x-if="historyLoading">
+    <p class="text-sm text-slate-500">{{ 'common.loading'|trans }}</p>
+</template>
+
+<template x-if="!historyLoading && conversions.length === 0">
+    <p class="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
+        {{ 'dashboard.history.empty'|trans }}
+    </p>
+</template>
+
+<template x-if="!historyLoading && conversions.length > 0">
+    <div>
+        <div class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm">
+            <template x-for="c in conversions" :key="c.id">
+                <div class="px-4 py-3">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <p class="text-sm font-medium text-slate-700">
+                                <span x-text="c.from_format || '—'"></span>
+                                <span class="text-slate-400"> → </span>
+                                <span x-text="c.to_format"></span>
+                            </p>
+                            <p class="truncate text-xs text-slate-500">
+                                <span x-text="c.source_name"></span>
+                                <span class="text-slate-400" x-text="'· ' + humanSize(c.source_size)"></span>
+                                <template x-if="c.result_size != null">
+                                    <span class="text-slate-400" x-text="'→ ' + humanSize(c.result_size)"></span>
+                                </template>
+                            </p>
+                            <p class="text-xs text-slate-400">
+                                <span x-text="formatDate(c.created_at)"></span>
+                                <template x-if="c.processing_ms != null">
+                                    <span x-text="'· ' + I18N.durationPrefix + formatDuration(c.processing_ms)"></span>
+                                </template>
+                            </p>
+                        </div>
+                        <div class="flex flex-wrap items-center justify-end gap-2">
+                            <span
+                                class="rounded-full px-3 py-1 text-xs font-medium"
+                                :class="{
+                                    'bg-slate-100 text-slate-600': isActive(c.status),
+                                    'bg-green-100 text-green-700': c.status === 'completed',
+                                    'bg-red-100 text-red-700': isFailed(c.status),
+                                }"
+                                x-text="statusLabel(c.status)"
+                            ></span>
+                            {{ fpBtn.button(fpIcons.icon('historySourceIconKey(c)'), "historyPreviewIcon(c, 'source')", "FILE_PREVIEW_I18N.sourceLabel") }}
+                            <template x-if="!sourceGone[c.id]">
+                                <button
+                                    type="button"
+                                    @click="downloadSource(c.id, c.source_name)"
+                                    :disabled="sourceLoadingId === c.id"
+                                    class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                                >
+                                    <span x-show="sourceLoadingId !== c.id">{{ 'home.history_source'|trans }}</span>
+                                    <span x-show="sourceLoadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
+                                </button>
+                            </template>
+                            <template x-if="sourceGone[c.id]">
+                                <span class="text-xs text-slate-400">{{ 'home.history_source_gone'|trans }}</span>
+                            </template>
+                            <template x-if="c.status === 'completed'">
+                                {{ fpBtn.button(fpIcons.icon('historyResultIconKey(c)'), "historyPreviewIcon(c, 'result')", "FILE_PREVIEW_I18N.resultLabel") }}
+                            </template>
+                            <template x-if="c.status === 'completed'">
+                                <button
+                                    type="button"
+                                    @click="downloadConversion(c.id, c.to_format)"
+                                    :disabled="downloadingId === c.id"
+                                    class="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:bg-slate-300"
+                                >
+                                    <span x-show="downloadingId !== c.id">{{ 'common.download'|trans }}</span>
+                                    <span x-show="downloadingId === c.id" x-cloak>{{ 'common.loading'|trans }}</span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <template x-if="historyMore">
+            <div class="mt-3 text-center">
+                <button
+                    type="button"
+                    @click="loadHistory(false)"
+                    :disabled="historyLoadingMore"
+                    class="rounded-lg border border-slate-300 px-4 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                >
+                    <span x-show="!historyLoadingMore">{{ 'dashboard.history.load_more'|trans }}</span>
+                    <span x-show="historyLoadingMore" x-cloak>{{ 'common.loading'|trans }}</span>
+                </button>
+            </div>
+        </template>
+    </div>
+</template>

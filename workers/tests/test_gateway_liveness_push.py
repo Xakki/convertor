@@ -72,6 +72,46 @@ def test_connect_without_ping_still_reports_alive_with_no_metrics():
     assert "metrics" not in payload
 
 
+def test_ping_with_inflight_count_is_carried_in_payload():
+    """CNV-61: `record_ping(..., inflight=N)` → `to_payload()["inflight"] == N`,
+    reflecting whatever the caller passed (gateway passes `len(Credits.inflight)`)."""
+    agg = LivenessAggregator()
+    agg.record_connect("image", "host-a:worker-1")
+    agg.record_ping("image", "host-a:worker-1", 0.4, 0.3, 1.1, inflight=3)
+    payload = agg.snapshot_batch()[0].to_payload()
+    assert payload["inflight"] == 3
+
+    # Next ping reflects an updated count (credits released/acquired since).
+    agg.record_ping("image", "host-a:worker-1", 0.4, 0.3, 1.1, inflight=0)
+    assert agg.snapshot_batch()[0].to_payload()["inflight"] == 0
+
+
+def test_ping_without_inflight_arg_omits_field_as_unknown():
+    """`inflight` defaults to `None` (unknown) when the caller has no Credits
+    to read — field must be OMITTED, not sent as 0/null, so PHP doesn't read
+    "unknown" as "idle" (contract: optional, missing = unknown)."""
+    agg = LivenessAggregator()
+    agg.record_connect("image", "host-b:worker-1")
+    agg.record_ping("image", "host-b:worker-1", 0.4, 0.3, 1.1)
+    payload = agg.snapshot_batch()[0].to_payload()
+    assert "inflight" not in payload
+
+
+def test_disconnect_resets_inflight_to_unknown_not_stale_value():
+    """A disconnected instance's last in-flight count is meaningless (those
+    jobs get reclaimed elsewhere) — carrying it forward would look like a
+    ghost/stuck worker on the admin page. Metrics (cpu/mem/load) are still
+    kept as "last known", only inflight is reset."""
+    agg = LivenessAggregator()
+    agg.record_connect("image", "i1")
+    agg.record_ping("image", "i1", 0.1, 0.2, 0.3, inflight=2)
+    agg.record_disconnect("image", "i1")
+    payload = agg.snapshot_batch()[0].to_payload()
+    assert payload["status"] == "disconnected"
+    assert payload["metrics"] == {"cpu": 0.1, "mem": 0.2, "load": 0.3}
+    assert "inflight" not in payload
+
+
 def test_disconnect_moves_instance_out_of_alive_into_pending():
     agg = LivenessAggregator()
     agg.record_connect("image", "i1")
@@ -345,6 +385,12 @@ async def test_ws_ready_with_instance_id_tracks_and_ping_updates_metrics():
             await c.send(json.dumps({"type": "ping", "cpu": 0.7, "mem": 0.2, "load": 0.9}))
             reply = await _recv_non_ready_ack(c)
             assert reply == {"type": "pong"}
+            # CNV-61: dummy KeyDbGateway never hands out a job → credits.inflight
+            # is empty at ping time → wired through as 0 (not omitted/None): the
+            # gateway DOES have Credits in scope on this path, so "unknown"
+            # would be wrong here.
+            alive_payload = agg.snapshot_batch()[0].to_payload()
+            assert alive_payload["inflight"] == 0
         await asyncio.sleep(0.05)  # let handle()'s finally run record_disconnect
 
     batch = agg.snapshot_batch()
@@ -354,6 +400,9 @@ async def test_ws_ready_with_instance_id_tracks_and_ping_updates_metrics():
     assert payload["status"] == "disconnected"
     # The ping's metrics were recorded before disconnect (last known values kept).
     assert payload["metrics"] == {"cpu": 0.7, "mem": 0.2, "load": 0.9}
+    # CNV-61: unlike metrics, inflight is reset to unknown on disconnect — a
+    # stale in-flight count on a dead host would read as a ghost/stuck worker.
+    assert "inflight" not in payload
 
 
 @pytest.mark.asyncio

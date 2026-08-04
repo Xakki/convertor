@@ -132,15 +132,29 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
      * влияет на маршрутизацию: {@see \App\Service\Conversion\ConversionRegistry}
      * читает только `capabilities`, это поле никогда не трогает.
      *
-     * `metrics` (cpu/mem/load, Phase 1 "дешёвые победы") персистится тем же
-     * batched CASE — NULL для записей без `metrics` в батче (не трогаем
-     * ранее сохранённое значение стиранием на пустой объект: CASE ELSE
-     * оставляет текущее значение колонки для строк ВНЕ этого батча, а сама
-     * запись батча пишет ровно то, что пришло — null включительно, т.к.
-     * отсутствие метрик в текущем пинге тоже честный факт, не повод хранить
-     * протухшие данные с прошлого пинга).
+     * `metrics` (cpu/mem/load, Phase 1 "дешёвые победы") и `inflight` (CNV-61,
+     * ЖИВЁТ В ТОМ ЖЕ JSON-блобе `metrics`, без миграции/нового столбца) — два
+     * НЕЗАВИСИМЫХ компонента одного блоба, персистятся genuine read-modify-write
+     * мержем над уже сохранённой строкой (CNV-61 review, finding #3): батч,
+     * принёсший ТОЛЬКО `inflight` (без `metrics`), не стирает ранее сохранённые
+     * cpu/mem/load — и наоборот, батч с ТОЛЬКО `metrics` не стирает ранее
+     * сохранённый `inflight`. Раньше блоб перезаписывался ЦЕЛИКОМ из текущего
+     * пинга — сегодня это латентно безопасно лишь потому, что
+     * `ws_client.py::_load_snapshot()` всегда прикладывает `metrics` к каждому
+     * пушу (см. `liveness.py`), но эта безопасность держалась на Python-side
+     * инварианте, ничем не гарантированном на PHP-стороне.
      *
-     * @param list<array{workerType: string, instanceId: string, status: WorkerLivenessStatus, lastSeenAt: \DateTimeImmutable, metrics?: array{cpu: float|null, mem: float|null, load: float|null}|null}> $instances
+     * Компонент, отсутствующий в ТЕКУЩЕМ пуше, берётся из строки, уже
+     * прочитанной тем же SELECT, что определяет `existingKeys` ниже (второй
+     * столбец `metrics`) — отсюда `$existingMetricsByKey`. Если компонент
+     * отсутствует И в пуше, И в ранее сохранённой строке — итоговое значение
+     * остаётся null, как и было. Если оба компонента (metrics и inflight) в
+     * итоге null — блоб целиком пишется NULL (тот же "null-or-{cpu,mem,load}"
+     * контракт, что читает {@see \App\Service\Admin\WorkerStatsProvider::toRow()});
+     * `inflight`-ключ добавляется в блоб ТОЛЬКО когда он реально известен —
+     * отсутствующий `inflight` не фабрикует сохранённый `inflight: null`.
+     *
+     * @param list<array{workerType: string, instanceId: string, status: WorkerLivenessStatus, lastSeenAt: \DateTimeImmutable, metrics?: array{cpu: float|null, mem: float|null, load: float|null}|null, inflight?: int|null}> $instances
      * @return array{updated: int, unknown: list<array{workerType: string, instanceId: string}>}
      */
     public function updateLiveness(array $instances): array
@@ -159,14 +173,23 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
             $selectParams["sid{$i}"] = $instance['instanceId'];
         }
 
+        // `metrics` тоже читаем здесь (не только worker_type/instance_id) —
+        // read-modify-write мерж ниже нуждается в том, что УЖЕ сохранено по
+        // каждому ключу батча, чтобы не потерять компонент, отсутствующий в
+        // текущем пуше (finding #3).
         $existing = $conn->fetchAllAssociative(
-            'SELECT worker_type, instance_id FROM worker_capabilities WHERE ' . implode(' OR ', $selectWhere),
+            'SELECT worker_type, instance_id, metrics FROM worker_capabilities WHERE ' . implode(' OR ', $selectWhere),
             $selectParams,
         );
 
-        $existingKeys = [];
+        $existingKeys         = [];
+        $existingMetricsByKey = [];
         foreach ($existing as $row) {
-            $existingKeys[$row['worker_type'] . "\0" . $row['instance_id']] = true;
+            $key                        = $row['worker_type'] . "\0" . $row['instance_id'];
+            $existingKeys[$key]         = true;
+            $existingMetricsByKey[$key] = $row['metrics'] !== null
+                ? json_decode((string) $row['metrics'], true, flags: JSON_THROW_ON_ERROR)
+                : null;
         }
 
         $toUpdate = [];
@@ -195,8 +218,29 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
                 $updateParams["uid{$i}"] = $instance['instanceId'];
                 $updateParams["uts{$i}"] = $instance['lastSeenAt']->format('Y-m-d H:i:s');
                 $updateParams["ust{$i}"] = $instance['status']->value;
-                $metrics                 = $instance['metrics'] ?? null;
-                $updateParams["ume{$i}"] = $metrics !== null ? json_encode($metrics, JSON_THROW_ON_ERROR) : null;
+
+                $key            = $instance['workerType'] . "\0" . $instance['instanceId'];
+                $stored         = $existingMetricsByKey[$key] ?? null;
+                $pushedMetrics  = $instance['metrics']        ?? null;
+                $pushedInflight = $instance['inflight']       ?? null;
+
+                // Read-modify-write мерж (finding #3): компонент, отсутствующий
+                // в ЭТОМ пуше, берётся из уже сохранённого блоба, а не
+                // фабрикуется null'ом — metrics-группа (cpu/mem/load) и
+                // inflight мержатся НЕЗАВИСИМО друг от друга.
+                $cpu      = $pushedMetrics !== null ? $pushedMetrics['cpu'] : ($stored['cpu'] ?? null);
+                $mem      = $pushedMetrics !== null ? $pushedMetrics['mem'] : ($stored['mem'] ?? null);
+                $load     = $pushedMetrics !== null ? $pushedMetrics['load'] : ($stored['load'] ?? null);
+                $inflight = $pushedInflight ?? ($stored['inflight'] ?? null);
+
+                $mergedMetrics = $cpu === null && $mem === null && $load === null && $inflight === null
+                    ? null
+                    // `inflight` key ONLY added when actually known — an
+                    // omitted/never-known `inflight` must not fabricate a
+                    // stored `inflight: null`, same "no fabrication" rule as
+                    // cpu/mem/load already follow.
+                    : ['cpu' => $cpu, 'mem' => $mem, 'load' => $load] + ($inflight !== null ? ['inflight' => $inflight] : []);
+                $updateParams["ume{$i}"] = $mergedMetrics !== null ? json_encode($mergedMetrics, JSON_THROW_ON_ERROR) : null;
             }
 
             $conn->executeStatement(
@@ -261,5 +305,35 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
         }
 
         return (int) $conn->executeStatement($sql, $params);
+    }
+
+    /**
+     * CNV-61: ручное удаление ряда воркеров admin-панелью — по СТАТУСУ
+     * (`disconnected` или `unknown`), а не по возрасту `last_seen`, как
+     * {@see \App\Service\Worker\WorkerCapabilityGcService::run()} (эта GC
+     * остаётся отдельной, независимой операцией — эндпоинт её не заменяет и
+     * не меняет её расписание/поведение).
+     *
+     * `instance_id != '__seed__'` — то же исключение и по той же причине, что
+     * {@see markSilentDisconnected()} и `WorkerCapabilityGcService`: seed-строки
+     * статус имеют `unknown` (DB-default, никогда не получают liveness-пуш),
+     * поэтому без явного исключения кнопка снесла бы канонический seed-снимок
+     * матрицы (`registry-03`) — единственная страховка D1 «БД никогда не
+     * пуста» при отсутствии живых воркеров.
+     *
+     * @return int число удалённых строк
+     */
+    public function deleteStaleByStatus(): int
+    {
+        $conn = $this->getEntityManager()->getConnection();
+
+        return (int) $conn->executeStatement(
+            'DELETE FROM worker_capabilities WHERE status IN (:disconnected, :unknown) AND instance_id != :seedInstanceId',
+            [
+                'disconnected'   => WorkerLivenessStatus::Disconnected->value,
+                'unknown'        => WorkerLivenessStatus::Unknown->value,
+                'seedInstanceId' => self::SEED_INSTANCE_ID,
+            ],
+        );
     }
 }

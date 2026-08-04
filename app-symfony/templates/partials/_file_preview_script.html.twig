@@ -1,0 +1,167 @@
+{# ── CNV-61-preview: общий JS-слой для файловых иконок-превью + модалки
+   (source/result), переиспользуется converterApp() (`/`, /convert/{pair}),
+   historyApp() (/history) и adminLogs() (/admin/logs) — единая точка вместо
+   копипасты key-derivation/viewer-type хелперов в трёх местах.
+
+   Экспортирует (top-level, доступно всем <script> ниже на той же странице):
+     filePreviewIconKey(format, category, mime) — ключ для macro icon() из
+       _converter_example_icons.html.twig (тот же набор ключей: pdf/image/
+       audio/video/json/csv/text/document/data/generic). mime — опциональный
+       fallback (source_mime/result_mime/inputMime/outputMime из API).
+     filePreviewViewerType(format, category, previewable, mime) — тип содержимого
+       модалки: 'text'|'pdf'|'audio'|'video'|'image'|null (null = нет превью,
+       только «недоступно»).
+     filePreviewMixin() — Alpine-миксин (filePreview state + openFilePreview()/
+       closeFilePreview()), подмешивается через Object.assign(..., filePreviewMixin())
+       по прецеденту billingTopUpMixin() (_billing_topup_script.html.twig).
+
+   ВАЖНО: подключать ЭТОТ partial ДО скрипта, что использует
+   filePreviewIconKey/filePreviewViewerType/filePreviewMixin() внутри вызова
+   x-data (converterApp()/historyApp()/adminLogs()) — порядок <script>-тегов
+   в документе задаёт порядок объявления top-level const/function.
+
+   XSS-safety: тот же принцип, что и у существующих viewer/togglePlayer
+   (_converter_app_script.html.twig, home-05) — байты идут через
+   authenticated fetch → blob() → URL.createObjectURL(), связываются ТОЛЬКО
+   через `:src` у <img>/<audio>/<video> (_file_preview_modal.html.twig);
+   текст — ТОЛЬКО через x-text. Ни innerHTML, ни x-html здесь не участвуют. #}
+<script>
+    // Клиентские списки форматов по типу медиа — раньше жили как
+    // AUDIO_TARGET_FORMATS/VIDEO_TARGET_FORMATS/IMAGE_TARGET_FORMATS/
+    // PREVIEWABLE_TARGET_FORMATS в _converter_app_script.html.twig (home-05/
+    // CNV-61); теперь единственный источник для всех трёх Alpine-компонентов —
+    // меняешь тут, синхронно с бэкендом (ConversionRegistry).
+    const FILE_PREVIEW_AUDIO_FORMATS = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma', 'opus'];
+    const FILE_PREVIEW_VIDEO_FORMATS = ['mp4', 'avi', 'mkv', 'mov', 'webm', 'flv', 'wmv', '3gp'];
+    const FILE_PREVIEW_IMAGE_FORMATS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'svg', 'ico', 'heic', 'avif'];
+    // Клиентская эвристика «это текстовый превью-результат», когда сервер не
+    // прислал явный previewable-флаг (job на `/` и admin-лог) — 1:1 со
+    // старым PREVIEWABLE_TARGET_FORMATS / ConversionController::PREVIEWABLE_FORMATS.
+    const FILE_PREVIEW_PREVIEWABLE_FORMATS = ['md', 'txt', 'json', 'csv', 'html'];
+    // Отдельный (более узкий) список для ИКОНКИ файла — 1:1 со старым
+    // exampleIconKey(): именно эти форматы получают иконку 'text' (json/csv
+    // разруливаются отдельными ветками выше по format/mime).
+    const FILE_PREVIEW_ICON_TEXT_FORMATS = ['md', 'txt', 'html'];
+
+    // Ключ иконки файла по (format, category, mime) — используется ТОЛЬКО как
+    // значение для x-if-сравнения в macro icon() (_converter_example_icons.html.twig,
+    // exhaustive: pdf/image/audio/video/json/csv/text/document/data/generic).
+    // Формат/категория и так статичные значения из /api/v1/formats — mime
+    // добавлен как fallback (source_mime/result_mime и т.п.), сам НИКОГДА не
+    // вставляется в разметку.
+    function filePreviewIconKey(format, category, mime) {
+        const fmt = (format || '').toLowerCase();
+        const m = (mime || '').toLowerCase();
+        if (fmt === 'pdf' || m === 'application/pdf') return 'pdf';
+        if (fmt === 'json' || m === 'application/json') return 'json';
+        if (fmt === 'csv' || m === 'text/csv') return 'csv';
+        if (FILE_PREVIEW_ICON_TEXT_FORMATS.includes(fmt) || m.startsWith('text/')) return 'text';
+        if (category === 'image' || m.startsWith('image/')) return 'image';
+        if (category === 'audio' || m.startsWith('audio/')) return 'audio';
+        if (category === 'video' || m.startsWith('video/')) return 'video';
+        if (category === 'document') return 'document';
+        if (category === 'data') return 'data';
+        return 'generic';
+    }
+
+    // Тип содержимого модалки предпросмотра — 'text'|'pdf'|'audio'|'video'|
+    // 'image'|null (null → «Предпросмотр недоступен», см. filePreviewMixin()).
+    // previewable — серверный флаг, где он есть (history/job result); null →
+    // клиентская эвристика FILE_PREVIEW_PREVIEWABLE_FORMATS (admin-лог, любой
+    // source — сервер не отдаёт previewable для source отдельно от text-запроса).
+    function filePreviewViewerType(format, category, previewable, mime) {
+        const fmt = (format || '').toLowerCase();
+        const m = (mime || '').toLowerCase();
+        const isText = previewable != null ? previewable : FILE_PREVIEW_PREVIEWABLE_FORMATS.includes(fmt);
+        if (isText) return 'text';
+        if (fmt === 'pdf' || m === 'application/pdf') return 'pdf';
+        if (FILE_PREVIEW_AUDIO_FORMATS.includes(fmt) || m.startsWith('audio/') || category === 'audio') return 'audio';
+        if (FILE_PREVIEW_VIDEO_FORMATS.includes(fmt) || m.startsWith('video/') || category === 'video') return 'video';
+        if (FILE_PREVIEW_IMAGE_FORMATS.includes(fmt) || m.startsWith('image/') || category === 'image') return 'image';
+        return null;
+    }
+
+    // I18N для модалки — общий на все 3 страницы (home/history/admin),
+    // namespace preview.* (отдельно от home.error.* — те специфичны для
+    // существующих inline-состояний job/примеров).
+    const FILE_PREVIEW_I18N = {
+        sourceLabel: '{{ 'preview.source_label'|trans|e('js') }}',
+        resultLabel: '{{ 'preview.result_label'|trans|e('js') }}',
+        unavailable: '{{ 'preview.unavailable'|trans|e('js') }}',
+        failed: '{{ 'preview.failed'|trans|e('js') }}',
+        network: '{{ 'preview.network'|trans|e('js') }}',
+        gone: '{{ 'preview.gone'|trans|e('js') }}',
+        notReady: '{{ 'preview.not_ready'|trans|e('js') }}',
+        unsupported: '{{ 'preview.unsupported'|trans|e('js') }}',
+    };
+
+    // Alpine-миксин: подмешивается Object.assign({...}, filePreviewMixin()) —
+    // тот же паттерн, что billingTopUpMixin() (_billing_topup_script.html.twig).
+    // Один reactive modal-state (filePreview) на компонент — источник для
+    // <img>/<audio>/<video> (`:src`) и <pre x-text> в _file_preview_modal.html.twig.
+    function filePreviewMixin() {
+        return {
+            filePreview: { open: false, kind: null, objectUrl: null, text: '', truncated: false, loading: false, error: '' },
+            _filePreviewToken: 0,
+
+            // fetcher(url) — авторизованный транспорт компонента-хозяина
+            // (authFetch() у converterApp()/historyApp(), window.admin.fetch у
+            // adminLogs()); миксин не знает деталей auth, только вызывает его.
+            // opts.onGone() — коллбек при 410 (напр. история проставляет
+            // sourceGone[id], чтобы кнопка «Исходник» тоже отразила статус).
+            // opts.maxTextBytes — клиентский кап текста для путей БЕЗ
+            // серверного X-Preview-Truncated (admin file-эндпоинт стримит
+            // сырые байты без лимита/заголовка).
+            async openFilePreview(kind, url, fetcher, opts = {}) {
+                const token = ++this._filePreviewToken;
+                // Отзываем objectUrl ПРЕДЫДУЩЕГО превью до того, как перезапишем
+                // filePreview новым состоянием — иначе он теряется (утечка), т.к.
+                // apply()/closeFilePreview() ниже уже не видят старое значение.
+                if (this.filePreview.objectUrl) URL.revokeObjectURL(this.filePreview.objectUrl);
+                this.filePreview = { open: true, kind, objectUrl: null, text: '', truncated: false, loading: true, error: '' };
+                const apply = (patch) => {
+                    if (this._filePreviewToken !== token) {
+                        if (patch.objectUrl) URL.revokeObjectURL(patch.objectUrl);
+                        return;
+                    }
+                    this.filePreview = { open: true, kind, objectUrl: null, text: '', truncated: false, loading: false, error: '', ...patch };
+                };
+                if (!kind || !url) { apply({ error: FILE_PREVIEW_I18N.unavailable }); return; }
+                try {
+                    const res = await fetcher(url);
+                    if (res.status === 401) {
+                        if (this._filePreviewToken === token) this.filePreview.open = false;
+                        return;
+                    }
+                    if (res.status === 410) { opts.onGone?.(); apply({ error: FILE_PREVIEW_I18N.gone }); return; }
+                    if (res.status === 409) { apply({ error: FILE_PREVIEW_I18N.notReady }); return; }
+                    if (res.status === 415) { apply({ error: FILE_PREVIEW_I18N.unsupported }); return; }
+                    if (!res.ok) { apply({ error: FILE_PREVIEW_I18N.failed }); return; }
+                    if (kind === 'text') {
+                        const truncatedHeader = res.headers.get('X-Preview-Truncated') === '1';
+                        let blob = await res.blob();
+                        let truncated = truncatedHeader;
+                        if (opts.maxTextBytes && blob.size > opts.maxTextBytes) {
+                            blob = blob.slice(0, opts.maxTextBytes);
+                            truncated = true;
+                        }
+                        apply({ text: await blob.text(), truncated });
+                        return;
+                    }
+                    const blob = await res.blob();
+                    apply({ objectUrl: URL.createObjectURL(blob) });
+                } catch (e) {
+                    apply({ error: FILE_PREVIEW_I18N.network });
+                }
+            },
+
+            closeFilePreview() {
+                // Инкремент токена перекрывает любой ещё летящий fetch — тот же
+                // паттерн, что и openViewer()/togglePlayer() (home-05-viewer-proxy-fix).
+                this._filePreviewToken++;
+                if (this.filePreview.objectUrl) URL.revokeObjectURL(this.filePreview.objectUrl);
+                this.filePreview = { open: false, kind: null, objectUrl: null, text: '', truncated: false, loading: false, error: '' };
+            },
+        };
+    }
+</script>

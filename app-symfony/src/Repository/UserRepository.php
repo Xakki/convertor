@@ -54,11 +54,13 @@ class UserRepository extends ServiceEntityRepository
      *  - точное совпадение telegramId,
      *  - при числовом `$q` — ещё и точное совпадение id.
      * Пустой/`null` `$q` → весь список (пагинированный, свежие сверху).
+     * `$guestOnly=false` (дефолт) — только зарегистрированные (`isGuest=false`);
+     * `$guestOnly=true` — только анонимы (`isGuest=true`).
      * Все условия параметризованы. `total` считается по тем же условиям.
      *
      * @return array{items: list<User>, total: int}
      */
-    public function searchPaginated(?string $q, int $limit, int $offset): array
+    public function searchPaginated(?string $q, int $limit, int $offset, bool $guestOnly = false): array
     {
         $qb    = $this->createQueryBuilder('u');
         $query = $q !== null ? trim($q) : '';
@@ -78,6 +80,9 @@ class UserRepository extends ServiceEntityRepository
 
             $qb->where($or);
         }
+
+        $qb->andWhere('u.isGuest = :isGuest')
+            ->setParameter('isGuest', $guestOnly);
 
         $countQb = (clone $qb)->select('COUNT(u.id)');
         $total   = (int) $countQb->getQuery()->getSingleScalarResult();

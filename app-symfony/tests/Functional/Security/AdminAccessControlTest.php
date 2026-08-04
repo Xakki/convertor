@@ -7,6 +7,7 @@ namespace App\Tests\Functional\Security;
 use App\Entity\User;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 /**
@@ -70,14 +71,38 @@ final class AdminAccessControlTest extends WebTestCase
         self::assertResponseIsSuccessful();
 
         $html = (string) $client->getResponse()->getContent();
-        self::assertStringContainsString('Панель администратора', $html);
-        // Навигация на будущие панели + секции-заглушки.
-        self::assertStringContainsString('Пользователи', $html);
-        self::assertStringContainsString('Очереди', $html);
+        self::assertStringContainsString('Обзор', $html);
         self::assertStringContainsString('id="overview"', $html);
+        self::assertStringContainsString('chart.js', $html);
+        // Path-навигация (не hash-якоря монолита).
+        self::assertStringContainsString('href="/admin/users"', $html);
+        self::assertStringContainsString('href="/admin/queues"', $html);
+        self::assertStringContainsString('href="/admin/workers"', $html);
+        self::assertStringNotContainsString('href="#workers"', $html);
         // Client-guard-стаб присутствует (тянет JWT через refresh, редиректит не-админа).
         self::assertStringContainsString('/api/v1/auth/refresh', $html);
         self::assertStringContainsString('ROLE_ADMIN', $html);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function adminSectionPathProvider(): iterable
+    {
+        yield 'users' => ['/admin/users'];
+        yield 'queues' => ['/admin/queues'];
+        yield 'workers' => ['/admin/workers'];
+        yield 'logs' => ['/admin/logs'];
+        yield 'conversions' => ['/admin/conversions'];
+        yield 'examples' => ['/admin/examples'];
+    }
+
+    #[DataProvider('adminSectionPathProvider')]
+    public function testAdminSectionPagesAreOpenShellForAnonymous(string $path): void
+    {
+        $client = static::createClient();
+        $client->request('GET', $path);
+        self::assertResponseIsSuccessful();
     }
 
     public function testAdminPageOpenShellAlsoForRegularUser(): void

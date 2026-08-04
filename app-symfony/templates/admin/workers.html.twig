@@ -1,9 +1,34 @@
-{# Секция обзора воркеров admin-панели (registry-07, финальный шаг эпика
-   registry-00-self-registration). Данные тянутся клиентом через shared-хелпер
-   window.admin.fetch (Bearer + refresh/redirect) из gated JSON-API
-   /api/v1/admin/workers и рендерятся Alpine. Live-обновление — poll каждые
-   15 c (реже, чем очереди: список воркеров меняется медленнее, чем длина
-   стрима). Секретов в разметке нет. id="workers" — якорь боковой навигации.
+{# Секция обзора воркеров admin-панели (registry-07 → CNV-61 host-аккордеон).
+   Данные тянутся клиентом через shared-хелпер window.admin.fetch (Bearer +
+   refresh/redirect) из gated JSON-API. Секретов в разметке нет. id="workers"
+   — якорь боковой навигации.
+
+   Двухуровневый аккордеон:
+   — уровень 1 — сводка по хостам, GET /api/v1/admin/workers/hosts, грузится
+     сразу и обновляется поллом каждые 15 c;
+   — уровень 2 — список воркеров конкретного хоста, GET /api/v1/admin/workers
+     ?host=<name> (null-бакет — ?hostNull=1, CNV-61 review: заменил прежний
+     сентинел ?host=__none__, коллизионноопасный, если хост буквально назван
+     __none__), грузится ЛЕНИВО по кнопке разворота и в полле обновляется
+     ТОЛЬКО у уже развёрнутых хостов;
+   — уровень 3 — существующая (registry-07) детализация воркера: матрица
+     пар / streams / routingKeys / matrix_categories / метрики — без изменений
+     по содержимому, просто на один уровень вложенности глубже.
+
+   Merge-in-place при полле — ОБЯЗАТЕЛЬНО, иначе аккордеон схлопывается на
+   каждый тик: и hosts[], и host.workersList[] обновляются точечно по ключу
+   (host / workerType+'|'+instanceId) — существующие объекты мутируются
+   полями с бэка (mergeHosts/mergeHostWorkers), а expanded/loaded/loading/
+   error/workersList никогда не перезатираются целиком.
+
+   Вложенная <table> внутри expand-<td> хоста — осознанное решение, а не
+   недосмотр: Alpine x-for требует единственный корневой элемент шаблона
+   (cdn.min.js: "x-for templates require a single root element, additional
+   elements will be ignored") — пара <tr> summary+detail на воркер НЕ
+   помещается плоско в один <tbody> хоста без второго вложенного <tbody>
+   (что невалидный HTML и явно запрещено постановкой). Вложенная <table> —
+   валидный HTML5 (table внутри td — штатный кейс) и вдобавок у воркер-уровня
+   свой набор колонок, отличный от хост-уровня.
 
    Seed-строки (instanceId='__seed__', registry-03) — НЕ мёртвые воркеры, а
    статичный снимок матрицы; их lastSeen всегда старый (миграция применилась
@@ -32,9 +57,22 @@
             <button @click="reload()"
                     class="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     :disabled="loading"
-                    aria-label="Обновить воркеров">
+                    aria-label="Обновить хосты">
                 <span x-show="!loading">Обновить</span>
                 <span x-show="loading" x-cloak>Загрузка…</span>
+            </button>
+            {# CNV-61: одна глобальная кнопка удаления «застрявших» рядов по статусу
+               (disconnected/unknown), НЕ по возрасту — отдельная операция от
+               автоматического TTL-GC (WorkerCapabilityGcService), которую не трогаем.
+               Явно НЕ основное действие (красный outline, а не залитая кнопка) —
+               действие деструктивное и необратимое, поэтому ещё и confirm() перед
+               отправкой. #}
+            <button @click="deleteStale()"
+                    class="rounded-lg border border-red-500/40 px-3 py-1.5 text-xs text-red-400 transition-colors hover:bg-red-500/10 focus:outline-none focus:ring-2 focus:ring-red-400"
+                    :disabled="staleDeleting || loading"
+                    aria-label="Удалить отключённых воркеров">
+                <span x-show="!staleDeleting">Удалить отключённых</span>
+                <span x-show="staleDeleting" x-cloak>Удаление…</span>
             </button>
         </div>
     </div>
@@ -46,158 +84,283 @@
         </span>
         {# НЕ дублируем getCapabilityWarnings() — та логика и её вывод живут
            на /admin/queues, здесь только ссылка. #}
-        <a href="#queues" class="text-indigo-400 hover:text-indigo-300 hover:underline">
+        <a href="/admin/queues" class="text-indigo-400 hover:text-indigo-300 hover:underline">
             Предупреждения о matrix_categories — см. Очереди →
         </a>
     </div>
 
-    {# Ошибка #}
+    {# Ошибка уровня страницы (сводка по хостам). Ошибка конкретного хоста —
+       отдельная, живёт в его собственной строке и не гасит всю таблицу. #}
     <div x-show="error" x-cloak
          class="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
          role="alert" x-text="error"></div>
+
+    {# Результат/ошибка кнопки «Удалить отключённых» — отдельные от error/reload
+       выше баннеры (CNV-61): неудача удаления не должна гасить/путаться с
+       ошибкой обычного поллинга, и не должна опустошать уже отрисованную таблицу. #}
+    <div x-show="staleNotice" x-cloak
+         class="mt-4 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-300"
+         role="status" x-text="staleNotice"></div>
+    <div x-show="staleError" x-cloak
+         class="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+         role="alert" x-text="staleError"></div>
 
     <div class="mt-4 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900">
         <table class="min-w-full divide-y divide-zinc-800 text-sm">
             <thead>
                 <tr class="text-left text-xs uppercase tracking-wider text-zinc-500">
-                    <th class="px-4 py-3">Тип / инстанс</th>
                     <th class="px-4 py-3">Host</th>
-                    <th class="px-4 py-3">Статус</th>
+                    <th class="px-4 py-3">Воркеры</th>
                     <th class="px-4 py-3">Свежесть</th>
-                    <th class="px-4 py-3">Образ / версия</th>
-                    <th class="px-4 py-3">Виден</th>
-                    <th class="px-4 py-3 text-right">Пар</th>
-                    <th class="px-4 py-3"></th>
+                    <th class="px-4 py-3 text-right">In-flight</th>
+                    <th class="px-4 py-3">CPU / MEM / Load</th>
+                    <th class="px-4 py-3">Образы / версии</th>
+                    <th class="px-4 py-3">Флаги</th>
                 </tr>
             </thead>
-            <template x-for="w in workers" :key="w.workerType + '|' + w.instanceId">
-                <tbody x-data="{ expanded: false }" class="divide-y divide-zinc-800">
-                    <tr class="cursor-pointer text-zinc-300 transition-colors hover:bg-zinc-800/50"
-                        @click="expanded = !expanded">
+            <template x-for="host in hosts" :key="host.key">
+                <tbody class="divide-y divide-zinc-800">
+                    <tr class="text-zinc-300">
                         <td class="px-4 py-3">
-                            <div class="font-mono text-white" x-text="w.workerType"></div>
-                            <div class="flex items-center gap-1.5 text-xs text-zinc-500">
-                                <span x-show="w.isSeed" x-cloak
-                                      class="rounded-full bg-zinc-700 px-2 py-0.5 text-zinc-300"
-                                      title="Статичный снимок матрицы из registry-03 seed-миграции, не живой процесс">
-                                    Seed
-                                </span>
-                                <span x-show="w.isAi" x-cloak
-                                      class="rounded-full bg-indigo-500/15 px-2 py-0.5 text-indigo-300"
-                                      title="Воркер объявил isAi=true в capabilities">
-                                    AI
-                                </span>
-                                <span class="font-mono" x-text="w.instanceId"></span>
+                            <button type="button"
+                                    @click="toggleHost(host)"
+                                    :aria-expanded="host.expanded ? 'true' : 'false'"
+                                    :aria-controls="'host-panel-' + host.key"
+                                    class="flex items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-zinc-800/50 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <span class="inline-block text-zinc-500 transition-transform"
+                                      :class="host.expanded ? 'rotate-90' : ''"
+                                      aria-hidden="true">▶</span>
+                                <span class="font-mono text-white" x-text="host.host || 'Без хоста'"></span>
+                            </button>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                                <span class="font-mono text-zinc-300" x-text="host.workers"></span>
+                                <span class="rounded-full bg-green-500/15 px-2 py-0.5 text-green-400"
+                                      x-show="host.alive" x-cloak x-text="'на связи: ' + host.alive"></span>
+                                <span class="rounded-full bg-red-500/15 px-2 py-0.5 text-red-400"
+                                      x-show="host.disconnected" x-cloak x-text="'не подключено: ' + host.disconnected"></span>
+                                <span class="rounded-full bg-zinc-700 px-2 py-0.5 text-zinc-300"
+                                      x-show="host.unknown" x-cloak x-text="'нет данных: ' + host.unknown"></span>
+                                <span class="rounded-full bg-yellow-500/15 px-2 py-0.5 text-yellow-400"
+                                      x-show="host.stale" x-cloak x-text="'устарело: ' + host.stale"></span>
                             </div>
                         </td>
-                        {# host (registry-08): явный host/node-идентификатор из register-payload'а.
-                           null у строк, зарегистрированных до этого поля / старым Python-билдом
-                           — честный прочерк, не выдумываем значение. #}
-                        <td class="px-4 py-3 font-mono text-xs text-zinc-400" x-text="w.host || '—'"></td>
-                        <td class="px-4 py-3">
-                            {# Факт №1: liveness-статус (alive/disconnected/unknown) —
-                               НЕ то же самое, что свежесть lastSeen (соседняя колонка). #}
-                            <template x-if="w.isSeed">
-                                <span class="rounded-full bg-zinc-700 px-2.5 py-0.5 text-xs text-zinc-300">
-                                    не отслеживается (seed)
-                                </span>
-                            </template>
-                            <template x-if="!w.isSeed">
-                                <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs"
-                                      :class="statusClass(w.status)">
-                                    <span class="h-1.5 w-1.5 rounded-full" :class="statusDotClass(w.status)"></span>
-                                    <span x-text="statusLabel(w.status)"></span>
-                                </span>
-                            </template>
-                        </td>
-                        <td class="px-4 py-3">
-                            {# Факт №2: возраст lastSeen относительно GC-TTL. Для seed —
-                               дата seed-миграции, без alive/stale-тревоги (не воркер). #}
-                            <template x-if="w.isSeed">
-                                <span class="text-xs text-zinc-500" x-text="fmtDate(w.lastSeen)"></span>
-                            </template>
-                            <template x-if="!w.isSeed">
-                                <div>
-                                    <span class="rounded-full px-2.5 py-0.5 text-xs"
-                                          :class="w.stale ? 'bg-red-500/15 text-red-400' : 'bg-green-500/15 text-green-400'"
-                                          x-text="w.stale ? 'устарел' : 'свежий'"></span>
-                                    <div class="mt-1 text-xs text-zinc-500" x-text="fmtDate(w.lastSeen)"></div>
-                                </div>
-                            </template>
+                        <td class="px-4 py-3 text-xs text-zinc-500" x-text="fmtDate(host.lastSeen)"></td>
+                        <td class="px-4 py-3 text-right font-mono text-xs" x-text="fmtInflight(host.inflightKnown, host.inflight)"></td>
+                        <td class="px-4 py-3 text-xs text-zinc-400">
+                            <div>CPU: <span class="font-mono" x-text="fmtHostStat(host.cpu)"></span></div>
+                            <div>MEM: <span class="font-mono" x-text="fmtHostStat(host.mem)"></span></div>
+                            <div>Load: <span class="font-mono" x-text="fmtHostStat(host.load)"></span></div>
                         </td>
                         <td class="px-4 py-3 text-xs">
-                            <div class="font-mono text-zinc-300" x-text="w.version || '—'"></div>
-                            <div class="font-mono text-zinc-600" x-text="w.image || ''"></div>
+                            <div class="font-mono text-zinc-300" x-text="(host.versions || []).join(', ') || '—'"></div>
+                            <div class="font-mono text-zinc-600" x-text="(host.images || []).join(', ')"></div>
+                            {# Массивы versions/images приходят именно за этим — сигнал
+                               разнобоя, если на хосте одновременно живут разные билды. #}
+                            <span x-show="hasVersionDrift(host)" x-cloak
+                                  class="mt-1 inline-block rounded-full bg-yellow-500/15 px-2 py-0.5 text-yellow-400"
+                                  title="Хост отдаёт больше одной версии/образа одновременно">
+                                разнобой версий
+                            </span>
                         </td>
-                        <td class="px-4 py-3 text-xs text-zinc-500">
-                            <span x-text="w.isSeed ? 'из seed-миграции' : 'из register()'"></span>
-                        </td>
-                        <td class="px-4 py-3 text-right font-mono" x-text="w.pairCount"></td>
-                        <td class="px-4 py-3 text-right text-zinc-500">
-                            <span x-text="expanded ? '▲' : '▼'" aria-hidden="true"></span>
+                        <td class="px-4 py-3">
+                            <div class="flex items-center gap-1.5 text-xs">
+                                <span x-show="host.hasAi" x-cloak class="rounded-full bg-indigo-500/15 px-2 py-0.5 text-indigo-300">AI</span>
+                                <span x-show="host.hasSeed" x-cloak class="rounded-full bg-zinc-700 px-2 py-0.5 text-zinc-300">Seed</span>
+                            </div>
                         </td>
                     </tr>
-                    <tr x-show="expanded" x-cloak>
-                        <td colspan="8" class="bg-zinc-950/40 px-4 py-4">
-                            <h4 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                                Матрица пар (source → target)
-                            </h4>
-                            <div class="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-                                <template x-for="(targets, from) in w.matrix" :key="from">
-                                    <div class="rounded-lg bg-zinc-800/60 px-2.5 py-1.5 text-xs">
-                                        <span class="font-mono text-white" x-text="from"></span>
-                                        <span class="text-zinc-600">→</span>
-                                        <span class="font-mono text-zinc-300" x-text="targets.join(', ')"></span>
-                                    </div>
-                                </template>
+                    {# CNV-61 review, finding #1: таблица гейтится на host.loaded
+                       (ЕДИНОЖДЫ true после первого успеха — навсегда), НЕ на
+                       !loading&&!error. Фоновый полл (refreshExpandedHosts()
+                       каждые 15с) больше не пересоздаёт/скрывает уже смонтированную
+                       таблицу — ни спиннером (host.loading во время рефреша не
+                       трогается, см. loadHostWorkers()), ни заменой на error-баннер:
+                       неудача уже загруженного хоста — неразрушающая плашка РЯДОМ с
+                       данными (третий блок ниже), не вместо них. #}
+                    <tr x-show="host.expanded" x-cloak :id="'host-panel-' + host.key">
+                        <td colspan="7" class="bg-zinc-950/40 px-4 py-4">
+                            <div x-show="!host.loaded && host.loading" x-cloak class="text-xs text-zinc-500">Загрузка воркеров…</div>
+                            <div x-show="!host.loaded && host.error" x-cloak
+                                 class="flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300"
+                                 role="alert">
+                                <span x-text="host.error"></span>
+                                <button type="button" @click="loadHostWorkers(host)"
+                                        class="rounded border border-red-400/40 px-2 py-0.5 text-red-200 transition-colors hover:bg-red-500/10 focus:outline-none focus:ring-2 focus:ring-red-400">
+                                    Повторить
+                                </button>
                             </div>
-                            <p x-show="Object.keys(w.matrix).length === 0" x-cloak class="text-xs text-zinc-500">
-                                Матрица пуста.
-                            </p>
+                            {# Фоновый полл неудачен, но данные УЖЕ загружены — ненавязчивая
+                               плашка рядом с рабочей таблицей (не вместо неё), гасится
+                               следующим успешным поллом (host.error сбрасывается в
+                               loadHostWorkers() при успехе). #}
+                            <div x-show="host.loaded && host.error" x-cloak
+                                 class="mb-2 flex items-center gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300"
+                                 role="status">
+                                <span x-text="host.error"></span>
+                                <button type="button" @click="loadHostWorkers(host)"
+                                        class="rounded border border-yellow-400/40 px-2 py-0.5 text-yellow-200 transition-colors hover:bg-yellow-500/10 focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                                    Повторить
+                                </button>
+                            </div>
+                            <template x-if="host.loaded">
+                                <div class="overflow-x-auto rounded-lg border border-zinc-800">
+                                    <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                                        <thead>
+                                            <tr class="text-left text-xs uppercase tracking-wider text-zinc-500">
+                                                <th class="px-4 py-2">Тип / инстанс</th>
+                                                <th class="px-4 py-2">Статус</th>
+                                                <th class="px-4 py-2">Свежесть</th>
+                                                <th class="px-4 py-2">Образ / версия</th>
+                                                <th class="px-4 py-2">Виден</th>
+                                                <th class="px-4 py-2 text-right">Пар</th>
+                                                <th class="px-4 py-2 text-right">In-flight</th>
+                                            </tr>
+                                        </thead>
+                                        <template x-for="w in host.workersList" :key="w.workerType + '|' + w.instanceId">
+                                            <tbody class="divide-y divide-zinc-800">
+                                                <tr class="text-zinc-300">
+                                                    <td class="px-4 py-3">
+                                                        <button type="button"
+                                                                @click="w.expanded = !w.expanded"
+                                                                :aria-expanded="w.expanded ? 'true' : 'false'"
+                                                                class="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-zinc-800/50 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                                            <span class="inline-block text-zinc-500 transition-transform"
+                                                                  :class="w.expanded ? 'rotate-90' : ''"
+                                                                  aria-hidden="true">▶</span>
+                                                            <span>
+                                                                <div class="font-mono text-white" x-text="w.workerType"></div>
+                                                                <div class="flex items-center gap-1.5 text-xs text-zinc-500">
+                                                                    <span x-show="w.isSeed" x-cloak
+                                                                          class="rounded-full bg-zinc-700 px-2 py-0.5 text-zinc-300"
+                                                                          title="Статичный снимок матрицы из registry-03 seed-миграции, не живой процесс">
+                                                                        Seed
+                                                                    </span>
+                                                                    <span x-show="w.isAi" x-cloak
+                                                                          class="rounded-full bg-indigo-500/15 px-2 py-0.5 text-indigo-300"
+                                                                          title="Воркер объявил isAi=true в capabilities">
+                                                                        AI
+                                                                    </span>
+                                                                    <span class="font-mono" x-text="w.instanceId"></span>
+                                                                </div>
+                                                            </span>
+                                                        </button>
+                                                    </td>
+                                                    <td class="px-4 py-3">
+                                                        {# Факт №1: liveness-статус (alive/disconnected/unknown) —
+                                                           НЕ то же самое, что свежесть lastSeen (соседняя колонка). #}
+                                                        <template x-if="w.isSeed">
+                                                            <span class="rounded-full bg-zinc-700 px-2.5 py-0.5 text-xs text-zinc-300">
+                                                                не отслеживается (seed)
+                                                            </span>
+                                                        </template>
+                                                        <template x-if="!w.isSeed">
+                                                            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs"
+                                                                  :class="statusClass(w.status)">
+                                                                <span class="h-1.5 w-1.5 rounded-full" :class="statusDotClass(w.status)"></span>
+                                                                <span x-text="statusLabel(w.status)"></span>
+                                                            </span>
+                                                        </template>
+                                                    </td>
+                                                    <td class="px-4 py-3">
+                                                        {# Факт №2: возраст lastSeen относительно GC-TTL. Для seed —
+                                                           дата seed-миграции, без alive/stale-тревоги (не воркер). #}
+                                                        <template x-if="w.isSeed">
+                                                            <span class="text-xs text-zinc-500" x-text="fmtDate(w.lastSeen)"></span>
+                                                        </template>
+                                                        <template x-if="!w.isSeed">
+                                                            <div>
+                                                                <span class="rounded-full px-2.5 py-0.5 text-xs"
+                                                                      :class="w.stale ? 'bg-red-500/15 text-red-400' : 'bg-green-500/15 text-green-400'"
+                                                                      x-text="w.stale ? 'устарел' : 'свежий'"></span>
+                                                                <div class="mt-1 text-xs text-zinc-500" x-text="fmtDate(w.lastSeen)"></div>
+                                                            </div>
+                                                        </template>
+                                                    </td>
+                                                    <td class="px-4 py-3 text-xs">
+                                                        <div class="font-mono text-zinc-300" x-text="w.version || '—'"></div>
+                                                        <div class="font-mono text-zinc-600" x-text="w.image || ''"></div>
+                                                    </td>
+                                                    <td class="px-4 py-3 text-xs text-zinc-500">
+                                                        <span x-text="w.isSeed ? 'из seed-миграции' : 'из register()'"></span>
+                                                    </td>
+                                                    <td class="px-4 py-3 text-right font-mono" x-text="w.pairCount"></td>
+                                                    <td class="px-4 py-3 text-right font-mono text-xs" x-text="fmtWorkerInflight(w.inflight)"></td>
+                                                </tr>
+                                                <tr x-show="w.expanded" x-cloak>
+                                                    <td colspan="7" class="bg-zinc-950/60 px-4 py-4">
+                                                        <h4 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                                                            Матрица пар (source → target)
+                                                        </h4>
+                                                        <div class="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                                                            <template x-for="(targets, from) in w.matrix" :key="from">
+                                                                <div class="rounded-lg bg-zinc-800/60 px-2.5 py-1.5 text-xs">
+                                                                    <span class="font-mono text-white" x-text="from"></span>
+                                                                    <span class="text-zinc-600">→</span>
+                                                                    <span class="font-mono text-zinc-300" x-text="targets.join(', ')"></span>
+                                                                </div>
+                                                            </template>
+                                                        </div>
+                                                        <p x-show="Object.keys(w.matrix).length === 0" x-cloak class="text-xs text-zinc-500">
+                                                            Матрица пуста.
+                                                        </p>
 
-                            {# Streams/routingKeys и matrix_categories — сырые capabilities-поля,
-                               не пересчитываются, показываются как объявил воркер. #}
-                            <h4 class="mb-2 mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                                Streams / routing keys
-                            </h4>
-                            <p class="text-xs text-zinc-300">
-                                <span class="text-zinc-500">streams:</span>
-                                <span class="font-mono" x-text="w.streams && w.streams.length ? w.streams.join(', ') : '—'"></span>
-                            </p>
-                            <p class="mt-1 text-xs text-zinc-300">
-                                <span class="text-zinc-500">routingKeys:</span>
-                                <span class="font-mono" x-text="w.routingKeys && w.routingKeys.length ? w.routingKeys.join(', ') : '—'"></span>
-                            </p>
-                            <p class="mt-1 text-xs text-zinc-300" x-show="w.matrix_categories && Object.keys(w.matrix_categories).length" x-cloak>
-                                <span class="text-zinc-500">matrix_categories:</span>
-                                <template x-for="(category, from) in w.matrix_categories" :key="from">
-                                    <span class="ml-1 font-mono" x-text="from + '→' + category"></span>
-                                </template>
-                            </p>
+                                                        {# Streams/routingKeys и matrix_categories — сырые capabilities-поля,
+                                                           не пересчитываются, показываются как объявил воркер. #}
+                                                        <h4 class="mb-2 mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                                                            Streams / routing keys
+                                                        </h4>
+                                                        <p class="text-xs text-zinc-300">
+                                                            <span class="text-zinc-500">streams:</span>
+                                                            <span class="font-mono" x-text="w.streams && w.streams.length ? w.streams.join(', ') : '—'"></span>
+                                                        </p>
+                                                        <p class="mt-1 text-xs text-zinc-300">
+                                                            <span class="text-zinc-500">routingKeys:</span>
+                                                            <span class="font-mono" x-text="w.routingKeys && w.routingKeys.length ? w.routingKeys.join(', ') : '—'"></span>
+                                                        </p>
+                                                        <p class="mt-1 text-xs text-zinc-300" x-show="w.matrix_categories && Object.keys(w.matrix_categories).length" x-cloak>
+                                                            <span class="text-zinc-500">matrix_categories:</span>
+                                                            <template x-for="(category, from) in w.matrix_categories" :key="from">
+                                                                <span class="ml-1 font-mono" x-text="from + '→' + category"></span>
+                                                            </template>
+                                                        </p>
 
-                            {# cpu/mem/load из последнего liveness-пуша (Phase 1 "дешёвые
-                               победы"). null, пока воркер ни разу не пинговал — честно
-                               показываем прочерк, не выдумываем нули. #}
-                            <h4 class="mb-2 mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                                Метрики (последний liveness-пуш)
-                            </h4>
-                            <template x-if="w.metrics">
-                                <div class="flex flex-wrap gap-3 text-xs text-zinc-300">
-                                    <span>CPU: <span class="font-mono" x-text="fmtMetric(w.metrics.cpu)"></span></span>
-                                    <span>MEM: <span class="font-mono" x-text="fmtMetric(w.metrics.mem)"></span></span>
-                                    <span>Load: <span class="font-mono" x-text="fmtMetric(w.metrics.load)"></span></span>
+                                                        {# cpu/mem/load из последнего liveness-пуша (Phase 1 "дешёвые
+                                                           победы"). null, пока воркер ни разу не пинговал — честно
+                                                           показываем прочерк, не выдумываем нули. #}
+                                                        <h4 class="mb-2 mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                                                            Метрики (последний liveness-пуш)
+                                                        </h4>
+                                                        <template x-if="w.metrics">
+                                                            <div class="flex flex-wrap gap-3 text-xs text-zinc-300">
+                                                                <span>CPU: <span class="font-mono" x-text="fmtMetric(w.metrics.cpu)"></span></span>
+                                                                <span>MEM: <span class="font-mono" x-text="fmtMetric(w.metrics.mem)"></span></span>
+                                                                <span>Load: <span class="font-mono" x-text="fmtMetric(w.metrics.load)"></span></span>
+                                                            </div>
+                                                        </template>
+                                                        <p x-show="!w.metrics" x-cloak class="text-xs text-zinc-500">
+                                                            Нет данных — воркер ещё не присылал метрики.
+                                                        </p>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </template>
+                                        <tbody>
+                                            <tr x-show="host.loaded && host.workersList.length === 0" x-cloak>
+                                                <td colspan="7" class="px-4 py-6 text-center text-sm text-zinc-500">Нет воркеров на этом хосте</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
                                 </div>
                             </template>
-                            <p x-show="!w.metrics" x-cloak class="text-xs text-zinc-500">
-                                Нет данных — воркер ещё не присылал метрики.
-                            </p>
                         </td>
                     </tr>
                 </tbody>
             </template>
             <tbody>
-                <tr x-show="!loading && workers.length === 0" x-cloak>
-                    <td colspan="8" class="px-4 py-6 text-center text-sm text-zinc-500">Нет данных</td>
+                <tr x-show="!loading && hosts.length === 0" x-cloak>
+                    <td colspan="7" class="px-4 py-6 text-center text-sm text-zinc-500">Нет данных</td>
                 </tr>
             </tbody>
         </table>
@@ -207,16 +370,29 @@
 <script>
     // Alpine-компонент секции воркеров. Все запросы — через shared
     // window.admin.fetch (Bearer + refresh/redirect). Live-poll каждые 15 c
-    // (список воркеров/lastSeen меняется медленнее очередей); интервал
+    // (список хостов/lastSeen меняется медленнее очередей); интервал
     // гасится при уничтожении компонента (x-destroy).
+    //
+    // hosts[] — массив записей уровня 1, каждая:
+    //   { key, host, workers, alive, disconnected, unknown, stale, lastSeen,
+    //     inflight, inflightKnown, cpu, mem, load, images, versions,
+    //     hasAi, hasSeed,
+    //     // UI-состояние, НЕ трогается при merge-in-place с бэка:
+    //     expanded, loaded, loading, error, workersList }
+    // host.workersList[] — записи уровня 2 (тот же shape, что раньше в
+    // плоском workers[]), плюс `w.expanded` — UI-флаг уровня 3, тоже не
+    // трогается при merge.
     function adminWorkers() {
         return {
             loading: true,
             error: '',
             ttlHours: null,
-            workers: [],
+            hosts: [],
             updatedAt: '',
             _timer: null,
+            staleDeleting: false,
+            staleNotice: '',
+            staleError: '',
 
             async init() {
                 const ok = await window.admin.ready;
@@ -234,24 +410,235 @@
                 }
             },
 
+            // Грузит сводку по хостам (уровень 1) и мержит в hosts[] точечно
+            // (mergeHosts), не трогая expanded/loaded/workersList. После
+            // успешного мержа обновляет воркеров ТОЛЬКО у развёрнутых хостов
+            // — свёрнутые не дёргаем зря.
             async reload() {
                 this.loading = true;
                 this.error = '';
                 try {
-                    const res = await window.admin.fetch('/api/v1/admin/workers');
+                    const res = await window.admin.fetch('/api/v1/admin/workers/hosts');
                     if (!res.ok) {
-                        this.error = 'Не удалось загрузить воркеров (' + res.status + ')';
+                        this.error = 'Не удалось загрузить хосты (' + res.status + ')';
                         return;
                     }
                     const data = await res.json();
                     this.ttlHours = data.ttlHours ?? null;
-                    this.workers = data.workers || [];
+                    this.mergeHosts(data.hosts || []);
                     this.updatedAt = new Date().toLocaleTimeString('ru-RU');
                 } catch (e) {
-                    this.error = 'Ошибка сети при загрузке воркеров';
+                    this.error = 'Ошибка сети при загрузке хостов';
+                    return;
                 } finally {
                     this.loading = false;
                 }
+                await this.refreshExpandedHosts();
+            },
+
+            // CNV-61: глобальная кнопка «Удалить отключённых» — DELETE
+            // /api/v1/admin/workers/stale (backend удаляет только
+            // disconnected/unknown, seed-строки исключены на бэке). Действие
+            // необратимо → подтверждение с явным предупреждением про
+            // временное исчезновение живого, но флапающего воркера (gateway
+            // попросит его переподключиться, но это не мгновенно — до ~5
+            // минут, если недавно уже был nudge, cooldown 300с). staleDeleting/
+            // staleNotice/staleError — отдельное от reload()'а состояние,
+            // чтобы не путать ошибку удаления с ошибкой обычного полла и не
+            // трогать уже отрисованную таблицу при неудаче.
+            async deleteStale() {
+                const confirmed = confirm(
+                    'Удалить из БД все строки воркеров со статусом «не подключён» или «нет данных» (кроме seed-строк с матрицей форматов)?\n\n'
+                    + 'Это необратимо. Если какой-то из них на самом деле ещё жив (просто отвалился/флапает) — '
+                    + 'gateway попросит его переподключиться, но это займёт от ~30 секунд до 5 минут, '
+                    + 'и на это время он пропадёт со страницы.',
+                );
+                if (!confirmed) {
+                    return;
+                }
+                this.staleDeleting = true;
+                this.staleError = '';
+                this.staleNotice = '';
+                try {
+                    const res = await window.admin.fetch('/api/v1/admin/workers/stale', { method: 'DELETE' });
+                    if (!res.ok) {
+                        this.staleError = 'Не удалось удалить отключённых (' + res.status + ')';
+                        return;
+                    }
+                    const data = await res.json();
+                    this.staleNotice = 'Удалено строк: ' + (data.deleted ?? 0);
+                    await this.reload();
+                } catch (e) {
+                    this.staleError = 'Ошибка сети при удалении отключённых';
+                } finally {
+                    this.staleDeleting = false;
+                }
+            },
+
+            // Sentinel клиентского :key для null-бакета (CNV-61 review, finding
+            // #2) — NUL-байт делает его КОЛЛИЗИОННО-НЕВОЗМОЖНЫМ с настоящим
+            // именем хоста (валидная строка не может его содержать), а
+            // hostKeyOf() ниже вдобавок ПРЕФИКСУЕТ настоящие имена ('host:'),
+            // так что даже гипотетический хост, буквально названный как этот
+            // sentinel, не совпал бы ключом. Тот же приём, что и на бэке —
+            // {@see \App\Service\Admin\WorkerStatsProvider::NULL_HOST_BUCKET_KEY}.
+            NULL_HOST_KEY: '\u0000__null_host__',
+
+            // Точечный мерж hosts[] по ключу host (null → NULL_HOST_KEY):
+            // существующие записи мутируются полями с бэка, новые —
+            // добавляются, пропавшие — отбрасываются. Порядок — как пришёл
+            // с бэка (уже сортирован: имя asc, null-бакет последним).
+            // expanded/loaded/loading/error/workersList НЕ трогаем.
+            mergeHosts(serverHosts) {
+                const existingByKey = new Map(this.hosts.map((h) => [h.key, h]));
+                const next = [];
+                for (const sh of serverHosts) {
+                    const key = this.hostKeyOf(sh.host);
+                    const existing = existingByKey.get(key);
+                    if (existing) {
+                        Object.assign(existing, this.hostStatsFields(sh));
+                        next.push(existing);
+                    } else {
+                        next.push(this.newHostEntry(sh));
+                    }
+                }
+                this.hosts = next;
+            },
+
+            // Настоящие имена хостов ПРЕФИКСУЮТСЯ ('host:'), NULL_HOST_KEY —
+            // отдельная константа с NUL-байтом внутри (невалиден в реальном
+            // имени хоста) — гипотетический хост, буквально названный так же,
+            // как сентинел, не может совпасть ключом ни с NULL_HOST_KEY, ни с
+            // префиксованной формой другого хоста (finding #2).
+            hostKeyOf(host) {
+                return (host === null || host === undefined) ? this.NULL_HOST_KEY : 'host:' + host;
+            },
+
+            hostStatsFields(sh) {
+                return {
+                    host: sh.host ?? null,
+                    workers: sh.workers ?? 0,
+                    alive: sh.alive ?? 0,
+                    disconnected: sh.disconnected ?? 0,
+                    unknown: sh.unknown ?? 0,
+                    stale: sh.stale ?? 0,
+                    lastSeen: sh.lastSeen ?? null,
+                    inflight: sh.inflight ?? null,
+                    inflightKnown: sh.inflightKnown !== false,
+                    cpu: sh.cpu ?? null,
+                    mem: sh.mem ?? null,
+                    load: sh.load ?? null,
+                    images: sh.images || [],
+                    versions: sh.versions || [],
+                    hasAi: !!sh.hasAi,
+                    hasSeed: !!sh.hasSeed,
+                };
+            },
+
+            newHostEntry(sh) {
+                return {
+                    key: this.hostKeyOf(sh.host),
+                    ...this.hostStatsFields(sh),
+                    expanded: false,
+                    loaded: false,
+                    loading: false,
+                    error: '',
+                    workersList: [],
+                };
+            },
+
+            // Разворот/сворот хоста по кнопке. Первый разворот — ленивая
+            // загрузка воркеров; повторные — используют уже загруженный
+            // host.workersList (обновляется поллом, см. refreshExpandedHosts).
+            async toggleHost(host) {
+                host.expanded = !host.expanded;
+                if (host.expanded && !host.loaded) {
+                    await this.loadHostWorkers(host);
+                }
+            },
+
+            // Обновляет воркеров у всех сейчас развёрнутых хостов (вызывается
+            // из reload() после мержа хостов) — свёрнутые хосты не трогаем.
+            async refreshExpandedHosts() {
+                const targets = this.hosts.filter((h) => h.expanded);
+                await Promise.all(targets.map((h) => this.loadHostWorkers(h)));
+            },
+
+            // Грузит воркеров конкретного хоста (уровень 2). Независимое от
+            // страницы loading/error — падение одного хоста не гасит таблицу.
+            // Wire-контракт (CNV-61 review, finding #2): host.host===null →
+            // ?hostNull=1 (легаси-корзина), иначе ?host=<реальное имя> — имя
+            // передаётся как есть, БЕЗ сентинела (даже хост, буквально
+            // названный `__none__`, теперь просто обычное имя).
+            //
+            // ПЕРВАЯ загрузка (!host.loaded) — блокирующий спиннер, как и
+            // раньше (host.loading=true, шаблон гейтит таблицу на
+            // !host.loaded). ФОНОВЫЙ рефреш (host.loaded уже true — вызов из
+            // refreshExpandedHosts() на каждый 15-секундный полл) — НЕ трогает
+            // host.loading и НЕ гасит уже отрендеренные данные при ошибке:
+            // таблица остаётся смонтированной (шаблон гейтит на host.loaded,
+            // не на !loading&&!error), а неудача полла всплывает отдельной
+            // неразрушающей плашкой рядом (host.error, x-show="host.loaded &&
+            // host.error" в шаблоне) — гасится следующим успешным поллом.
+            // Без этого разделения merge-in-place в mergeHostWorkers()
+            // обесценивался бы самим циклом полла (review finding #1).
+            async loadHostWorkers(host) {
+                if (host.loading) {
+                    return;
+                }
+                const isFirstLoad = !host.loaded;
+                if (isFirstLoad) {
+                    host.loading = true;
+                    host.error = '';
+                }
+                try {
+                    const url = host.host === null
+                        ? '/api/v1/admin/workers?hostNull=1'
+                        : '/api/v1/admin/workers?host=' + encodeURIComponent(host.host);
+                    const res = await window.admin.fetch(url);
+                    if (!host.expanded) {
+                        // Хост свернули пока запрос летел — не подсовываем
+                        // данные в скрытую панель.
+                        return;
+                    }
+                    if (!res.ok) {
+                        host.error = isFirstLoad
+                            ? 'Не удалось загрузить воркеров (' + res.status + ')'
+                            : 'не удалось обновить (' + res.status + ')';
+                        return;
+                    }
+                    const data = await res.json();
+                    this.mergeHostWorkers(host, data.workers || []);
+                    host.loaded = true;
+                    host.error = '';
+                } catch (e) {
+                    if (host.expanded) {
+                        host.error = isFirstLoad ? 'Ошибка сети при загрузке воркеров' : 'ошибка сети при обновлении';
+                    }
+                } finally {
+                    if (isFirstLoad) {
+                        host.loading = false;
+                    }
+                }
+            },
+
+            // Точечный мерж host.workersList по workerType+'|'+instanceId —
+            // как mergeHosts, но на уровень воркеров. w.expanded (уровень 3,
+            // раскрытая матрица/streams/метрики) НЕ трогаем.
+            mergeHostWorkers(host, serverWorkers) {
+                const existingByKey = new Map(host.workersList.map((w) => [w.workerType + '|' + w.instanceId, w]));
+                const next = [];
+                for (const sw of serverWorkers) {
+                    const key = sw.workerType + '|' + sw.instanceId;
+                    const existing = existingByKey.get(key);
+                    if (existing) {
+                        Object.assign(existing, sw);
+                        next.push(existing);
+                    } else {
+                        next.push({ ...sw, expanded: false });
+                    }
+                }
+                host.workersList = next;
             },
 
             fmtDate(iso) {
@@ -261,7 +648,42 @@
                 return new Date(iso).toLocaleString('ru-RU');
             },
 
-            // cpu/mem/load приходят как доля 0..1 (см. workers/common/ws_client.py
+            // inflightKnown === false → честный прочерк, а НЕ 0 (0 — легитимное
+            // значение «сейчас ничего в обработке», known=false — «неизвестно»).
+            fmtInflight(known, value) {
+                if (known === false) {
+                    return '—';
+                }
+                return (value === null || value === undefined) ? '—' : String(value);
+            },
+
+            fmtWorkerInflight(value) {
+                return (value === null || value === undefined) ? '—' : String(value);
+            },
+
+            // host.cpu/host.mem/host.load из /admin/workers/hosts — ТА ЖЕ единица,
+            // что per-worker w.metrics.cpu/mem/load: доля 0..1 (см.
+            // workers/common/ws_client.py::_load_snapshot — cpu/mem через
+            // cgroup, load = getloadavg()/ncpu, ЗАЖАТ в 0..1 — та же шкала,
+            // а НЕ «обычный load average»). WorkerStatsProvider::avgMax()
+            // агрегирует avg/max на исходной доле, без пересчёта в процент —
+            // процентный вид строим здесь же, как и fmtMetric() для per-worker
+            // значений, чтобы обе колонки согласованно читались как одна шкала.
+            // null — никто на хосте не присылал метрики, прочерк, не 0.
+            fmtHostStat(stat) {
+                if (!stat || typeof stat.avg !== 'number' || typeof stat.max !== 'number') {
+                    return '—';
+                }
+                return (stat.avg * 100).toFixed(1) + '% / макс ' + (stat.max * 100).toFixed(1) + '%';
+            },
+
+            // Сигнал разнобоя версий/образов на хосте (см. массивы versions/
+            // images в контракте — они существуют именно для этой проверки).
+            hasVersionDrift(host) {
+                return (host.versions && host.versions.length > 1) || (host.images && host.images.length > 1);
+            },
+
+            // cpu/mem/load per-worker приходят как доля 0..1 (см. workers/common/ws_client.py
             // _load_snapshot) — показываем процентом; null (метрика ещё не пришла) — прочерком.
             fmtMetric(value) {
                 if (value === null || value === undefined) {

@@ -185,7 +185,8 @@ final class InternalWorkerController extends AbstractController
      * POST /api/v1/internal/worker/liveness
      * Body: {"instances":[{"workerType":"...","instanceId":"...",
      *   "status":"alive"|"disconnected","lastSeenAt":"<ISO-8601 UTC>",
-     *   "metrics":{"cpu":<float|null>,"mem":<float|null>,"load":<float|null>}|absent}],
+     *   "metrics":{"cpu":<float|null>,"mem":<float|null>,"load":<float|null>}|absent,
+     *   "inflight":<int>=0|absent}],
      *   "snapshot":<bool|absent>,"authoritative":<bool|absent>,"gatewayId":<string|absent>}
      * Response: {"updated":<int>,"unknown":[{"workerType":"...","instanceId":"..."}],
      *   "offlined":<int>}
@@ -227,6 +228,16 @@ final class InternalWorkerController extends AbstractController
      * batch entry omits it (e.g. an instance that just connected and hasn't
      * pinged yet), never fabricated.
      *
+     * `inflight` (CNV-61) — OPTIONAL non-negative int per instance, how many
+     * jobs it currently holds in-flight (`workers/gateway/liveness.py::_Instance.inflight`).
+     * Omitted/null = "unknown" (an older gateway build, or a ping that fired
+     * off a code path with no credits in scope) — NEVER coerced to 0, "we
+     * don't know" and "genuinely idle" are different facts the admin UI must
+     * tell apart. Persisted inside the SAME `metrics` JSON blob (no migration,
+     * no new column) alongside cpu/mem/load — see
+     * {@see WorkerCapabilityRepository::updateLiveness()} for the merge rule.
+     *
+
      * Malformed-batch policy: ANY invalid entry rejects the WHOLE batch with
      * 400 (not a partial-apply-and-report-the-rest split). This is an
      * internal trusted gateway↔PHP contract, not a public API expected to
@@ -281,7 +292,7 @@ final class InternalWorkerController extends AbstractController
     }
 
     /**
-     * @return array{workerType: string, instanceId: string, status: WorkerLivenessStatus, lastSeenAt: \DateTimeImmutable, metrics: array{cpu: float|null, mem: float|null, load: float|null}|null}|string
+     * @return array{workerType: string, instanceId: string, status: WorkerLivenessStatus, lastSeenAt: \DateTimeImmutable, metrics: array{cpu: float|null, mem: float|null, load: float|null}|null, inflight: int|null}|string
      *         Normalized entry, or an error-message string on validation failure.
      */
     private function validateLivenessEntry(mixed $entry): array|string
@@ -333,12 +344,27 @@ final class InternalWorkerController extends AbstractController
             ];
         }
 
+        // `inflight` (CNV-61) — optional non-negative int, omitted/null = "unknown"
+        // (never fabricated as 0). Strictly an int on the wire (not "numeric") —
+        // it counts jobs, a fractional value always signals a gateway-side bug.
+        $inflight = null;
+        if (array_key_exists('inflight', $entry) && $entry['inflight'] !== null) {
+            if (! is_int($entry['inflight'])) {
+                return 'inflight must be an integer or null';
+            }
+            if ($entry['inflight'] < 0) {
+                return 'inflight must be >= 0';
+            }
+            $inflight = $entry['inflight'];
+        }
+
         return [
             'workerType' => $entry['workerType'],
             'instanceId' => $entry['instanceId'],
             'status'     => $status,
             'lastSeenAt' => $lastSeenAt,
             'metrics'    => $metrics,
+            'inflight'   => $inflight,
         ];
     }
 }

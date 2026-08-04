@@ -1,0 +1,45 @@
+{% extends 'base.html.twig' %}
+
+{# CNV-61: отдельная страница истории («Мои конвертации»). Открытая оболочка —
+   auth клиентский (historyApp), JWT всегда; гость — только при cookie_consent.
+   /dashboard историю НЕ трогаем. #}
+
+{% block title %}{{ 'home.history_heading'|trans }}{% endblock %}
+
+{% block body %}
+<div
+    x-data="historyApp()"
+    class="flex flex-1 flex-col"
+>
+    <main class="mx-auto w-full max-w-3xl px-4 py-8">
+        <template x-if="loggedIn">
+            <h1 class="mb-6 text-2xl font-semibold text-slate-800">{{ 'home.history_heading'|trans }}</h1>
+        </template>
+        <template x-if="authResolved && !loggedIn">
+            <div class="mb-6">
+                <h1 class="text-2xl font-semibold text-slate-800">{{ 'home.history_heading_guest'|trans }}</h1>
+                <p class="mt-1 text-xs text-slate-400">{{ 'home.history_guest_note'|trans }}</p>
+            </div>
+        </template>
+        {# До authResolved — статичный h1, чтобы не мигать пустым заголовком. #}
+        <template x-if="!authResolved">
+            <h1 class="mb-6 text-2xl font-semibold text-slate-800">{{ 'home.history_heading'|trans }}</h1>
+        </template>
+
+        <template x-if="error">
+            <div class="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="error"></div>
+        </template>
+
+        <section>
+            {% include 'partials/_conversion_history.html.twig' %}
+        </section>
+    </main>
+
+    {# CNV-61-preview: общая модалка предпросмотра source/result (иконки в
+       строках истории — partials/_conversion_history.html.twig). ── #}
+    {% include 'partials/_file_preview_modal.html.twig' %}
+</div>
+
+{% include 'partials/_file_preview_script.html.twig' %}
+{% include 'partials/_history_app_script.html.twig' %}
+{% endblock %}

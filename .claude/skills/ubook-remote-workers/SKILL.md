@@ -19,9 +19,13 @@ description: >-
 uBook is a **CPU-only remote host** running six convertor workers as pure
 WS-clients of the gateway on the main server (saFin). It has NO gateway, NO
 php/db, NO KeyDB — the workers reach the main server's public `wss://` and
-Symfony API only. Generic remote-host theory lives in
-`docs/workers-remote-deploy.md`; image topology + build/push in skill
-`image-build-deploy`. This skill is only the uBook-specific concrete facts.
+Symfony API, relayed through saNl's nginx SNI-passthrough (`stream {}` /
+`ssl_preread`, confirmed via `nginx -T` on saNl: `xakki.pro`/`~*\.xakki\.pro$`
+→ `upstream safin_448 { server 95.217.118.82:448; }`), not saFin directly.
+See `remote-worker-connectivity-triage` for the full hop and its failure
+modes. Generic remote-host theory lives in `docs/workers-remote-deploy.md`;
+image topology + build/push in skill `image-build-deploy`. This skill is only
+the uBook-specific concrete facts.
 
 > Verify these against reality before relying on them — this is a live-host
 > fact sheet and hosts drift. Found drift → fix this skill in the same change

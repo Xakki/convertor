@@ -5,9 +5,13 @@
 `worker-image`, `worker-data`) + `worker-ai:cpu` — не разворачивая на нём
 `php`/`mariadb`/`nginx`/`keydb`/`ws-gateway`/`metrics-exporter`. Все воркеры —
 чистые WS-клиенты (см. `docs/queue-contract.md`): ни KeyDB, ни S3 напрямую не
-трогают, только публичный `wss://…/ws/worker/` gateway'я на главном сервере и
-Symfony API по HTTPS. `ws-gateway` и `metrics-exporter` остаются ТОЛЬКО на
-главном сервере — их на remote-хосте поднимать не нужно и незачем.
+трогают, только публичный `wss://…/ws/worker/` gateway'я и Symfony API по
+HTTPS. Трафик до главного сервера идёт не напрямую: `remote-хост → saNl
+(nginx `stream`, SNI passthrough) → saFin:448 → nginx проекта` — подтверждено
+`nginx -T` на saNl (`map $ssl_preread_server_name`: `xakki.pro`/`~*\.xakki\.pro$`
+→ `upstream safin_448 { server 95.217.118.82:448; }`). `ws-gateway` и
+`metrics-exporter` остаются ТОЛЬКО на главном сервере — их на remote-хосте
+поднимать не нужно и незачем.
 
 > **Публичный bootstrap без клона репо:** `deploy/` + gist (`curl | bash`) —
 > см. `deploy/README.md`. Этот документ — полный путь через клон репозитория

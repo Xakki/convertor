@@ -177,6 +177,57 @@ final class UserControllerTest extends WebTestCase
         self::assertSame(2, $item['quotaCounters']['heavy']['monthly']);
     }
 
+    public function testListDefaultExcludesGuests(): void
+    {
+        $client = static::createClient();
+        $token  = $this->adminToken();
+        $reg    = $this->persistUser();
+        $guest  = $this->persistGuest();
+        $server = ['HTTP_AUTHORIZATION' => "Bearer {$token}"];
+
+        $client->request('GET', '/api/v1/admin/users', ['q' => (string) $reg->getId()], server: $server);
+        self::assertResponseIsSuccessful();
+        $regData = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertIsArray($regData);
+        $regIds = array_map(static fn (array $r): int => (int) $r['id'], $regData['items']);
+        self::assertContains($reg->getId(), $regIds);
+        foreach ($regData['items'] as $row) {
+            self::assertFalse($row['isGuest'], 'дефолтный список без анонимов');
+        }
+
+        $client->request('GET', '/api/v1/admin/users', ['q' => (string) $guest->getId()], server: $server);
+        self::assertResponseIsSuccessful();
+        $guestData = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertIsArray($guestData);
+        $guestIds = array_map(static fn (array $r): int => (int) $r['id'], $guestData['items']);
+        self::assertNotContains($guest->getId(), $guestIds);
+    }
+
+    public function testListGuest1ReturnsOnlyGuests(): void
+    {
+        $client = static::createClient();
+        $token  = $this->adminToken();
+        $reg    = $this->persistUser();
+        $guest  = $this->persistGuest();
+
+        $client->request(
+            'GET',
+            '/api/v1/admin/users',
+            ['guest' => '1', 'q' => (string) $guest->getId()],
+            server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"],
+        );
+        self::assertResponseIsSuccessful();
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertIsArray($data);
+
+        $ids = array_map(static fn (array $r): int => (int) $r['id'], $data['items']);
+        self::assertContains($guest->getId(), $ids);
+        self::assertNotContains($reg->getId(), $ids);
+        foreach ($data['items'] as $row) {
+            self::assertTrue($row['isGuest'], 'guest=1 — только анонимы');
+        }
+    }
+
     /**
      * @param array<string, mixed> $counters
      */
@@ -225,6 +276,19 @@ final class UserControllerTest extends WebTestCase
     {
         $em   = static::getContainer()->get(EntityManagerInterface::class);
         $user = (new User())->setIsAdmin($admin);
+        $em->persist($user);
+        $em->flush();
+        $this->createdUserIds[] = $user->getId();
+
+        return $user;
+    }
+
+    private function persistGuest(): User
+    {
+        $em   = static::getContainer()->get(EntityManagerInterface::class);
+        $user = (new User())
+            ->setIsGuest(true)
+            ->setGuestId('admin-usr-g-' . bin2hex(random_bytes(8)));
         $em->persist($user);
         $em->flush();
         $this->createdUserIds[] = $user->getId();

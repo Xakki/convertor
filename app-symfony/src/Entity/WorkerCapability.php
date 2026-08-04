@@ -80,7 +80,17 @@ class WorkerCapability
      * потребители обязаны обрабатывать null. НЕ входит в критерии маршрутизации
      * — чистый монитор-сигнал для admin-страницы, как и {@see $status}.
      *
-     * @var array{cpu: float|null, mem: float|null, load: float|null}|null
+     * `inflight` (CNV-61) — ЖИВЁТ В ЭТОМ ЖЕ JSON-блобе (без миграции): число
+     * job'ов, которые инстанс держит "в полёте" на момент последнего пинга
+     * (`workers/gateway/liveness.py::_Instance.inflight`). `null` — либо gateway
+     * не прислал ключ (старый билд/нет Credits в скоупе пинга — "неизвестно"),
+     * либо весь `metrics`-блоб отсутствует; НИКОГДА не подставляем 0 вместо
+     * null — «неизвестно» и «действительно 0 задач» разные факты. Наружу
+     * (admin API) отдаётся ОТДЕЛЬНЫМ top-level полем
+     * {@see \App\Service\Admin\WorkerStatsProvider::toRow()}, не как часть
+     * cpu/mem/load-объекта — те ключи остаются как были.
+     *
+     * @var array{cpu: float|null, mem: float|null, load: float|null, inflight?: int|null}|null
      */
     #[ORM\Column(type: 'json', nullable: true)]
     private ?array $metrics = null;
@@ -150,7 +160,7 @@ class WorkerCapability
     }
 
     /**
-     * @return array{cpu: float|null, mem: float|null, load: float|null}|null
+     * @return array{cpu: float|null, mem: float|null, load: float|null, inflight?: int|null}|null
      */
     public function getMetrics(): ?array
     {
@@ -158,7 +168,7 @@ class WorkerCapability
     }
 
     /**
-     * @param array{cpu: float|null, mem: float|null, load: float|null}|null $metrics
+     * @param array{cpu: float|null, mem: float|null, load: float|null, inflight?: int|null}|null $metrics
      */
     public function setMetrics(?array $metrics): self
     {
