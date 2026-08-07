@@ -33,6 +33,9 @@
             completed: '{{ 'home.status.completed'|trans|e('js') }}',
             failed: '{{ 'home.status.failed'|trans|e('js') }}',
             expired: '{{ 'home.status.expired'|trans|e('js') }}',
+            // CNV-71-03: клиентский псевдо-статус — сервер такое значение
+            // никогда не пришлёт (см. POLL_GAVE_UP_STATUS ниже).
+            poll_gave_up: '{{ 'home.status.poll_gave_up'|trans|e('js') }}',
         },
         units: {
             bytes: '{{ 'home.units.bytes'|trans|e('js') }}',
@@ -54,8 +57,14 @@
             status415: '{{ 'home.error.status_415'|trans|e('js') }}',
             status422: '{{ 'home.error.status_422'|trans|e('js') }}',
             status429: '{{ 'home.error.status_429'|trans|e('js') }}',
+            // CNV-71-03: 503 worker_unavailable — воркер нужного типа никогда
+            // не регистрировался (не путать с 409 conversion_disabled).
+            workerUnavailable: '{{ 'home.error.worker_unavailable'|trans|e('js') }}',
+            // CNV-71-03: 409 conversion_disabled — пара валидна, но временно
+            // выключена админом (ConversionToggleService) — не путать с 503
+            // worker_unavailable выше (там воркер вообще никогда не регистрировался).
+            conversionDisabled: '{{ 'home.error.conversion_disabled'|trans|e('js') }}',
             genericStatus: '{{ 'home.error.generic_status'|trans|e('js') }}',
-            pollTimeout: '{{ 'home.error.poll_timeout'|trans|e('js') }}',
             downloadFailed: '{{ 'home.error.download_failed'|trans|e('js') }}',
             downloadNetwork: '{{ 'home.error.download_network'|trans|e('js') }}',
             sourceDownloadFailed: '{{ 'home.error.source_download_failed'|trans|e('js') }}',
@@ -89,7 +98,16 @@
     const QUOTA_TIER_ORDER = ['light', 'medium', 'heavy', 'ai'];
     // Статусы задачи: активные (идёт обработка) и терминальные (менять не будут).
     const ACTIVE_STATUSES = ['pending', 'processing'];
-    const TERMINAL_STATUSES = ['completed', 'failed', 'expired'];
+    // CNV-71-03: POLL_GAVE_UP_STATUS — клиентский псевдо-статус (сервер такое
+    // значение НИКОГДА не присылает, см. ConversionStatus — только pending/
+    // processing/completed/failed/expired). Означает: клиентский ~5-минутный
+    // поллинг-кап исчерпан, но задача НЕ провалилась и НЕ протухла на сервере —
+    // просто ждёт своей очереди дольше, чем мы готовы крутить спиннер. Он
+    // ТЕРМИНАЛЕН для canSubmit() (разблокирует форму — иначе кнопка "Конвертировать"
+    // залипает мёртвой навсегда), но НЕ входит в FAILED_STATUSES — не должен
+    // окрашиваться/читаться как ошибка (isFailed(s) ниже).
+    const POLL_GAVE_UP_STATUS = 'poll_gave_up';
+    const TERMINAL_STATUSES = ['completed', 'failed', 'expired', POLL_GAVE_UP_STATUS];
     const FAILED_STATUSES = ['failed', 'expired'];
     // Алиасы расширений → канонические форматы реестра (реестр знает только их).
     const EXT_ALIASES = {
@@ -825,6 +843,22 @@
                     this.errorInsufficientBalance = true;
                     return BILLING_I18N.insufficientBalance;
                 }
+                // CNV-71-03: 503 worker_unavailable → отдельный текст, явно
+                // говорящий про временность отказа (не общая ошибка) — тот же
+                // паттерн, что и у 429 insufficient_balance выше. НЕ трогаем
+                // общий fallback ниже (detail/genericStatus) — он используется
+                // для ЛЮБОГО не замапленного статуса (в т.ч. 500), подмена его
+                // на d.message раскрыла бы сырой текст фреймворка/debug-исключения.
+                if (res.status === 503 && detail === 'worker_unavailable') {
+                    return I18N.errors.workerUnavailable;
+                }
+                // CNV-71-03: 409 conversion_disabled — пара валидна, но выключена
+                // админом (ConversionToggleService) — раньше падала в общий
+                // fallback ниже и показывала пользователю сырой код "conversion_disabled"
+                // вместо текста. Тот же паттерн, что и у 503 worker_unavailable выше.
+                if (res.status === 409 && detail === 'conversion_disabled') {
+                    return I18N.errors.conversionDisabled;
+                }
                 return map[res.status] || (detail || I18N.errors.genericStatus.replace('%status%', res.status));
             },
 
@@ -844,10 +878,17 @@
                 // Устаревший цикл (началась новая задача) — молча выходим.
                 if (gen !== this._pollGen || !this.job.id) return;
                 this._pollTries++;
-                // Кап ~5 минут: 2с × 150 попыток
+                // CNV-71-03: кап ~5 минут (2с × 150 попыток) — НЕ реальный
+                // серверный таймаут (WORKER_CLAIM_TIMEOUT_MINUTES = 60 мин,
+                // см. POST /api/v1/internal/worker/expire): задача на сервере
+                // всё ещё pending/processing и вполне может успешно завершиться.
+                // Раньше здесь форсили job.status='failed' — прямая ложь
+                // пользователю ("не удалось", хотя задача жива). Вместо этого
+                // просто перестаём поллить и показываем честное "ещё в очереди"
+                // (POLL_GAVE_UP_STATUS) — НЕ трогаем job.error (реальная причина
+                // отказа, если она когда-нибудь появится, должна остаться из d.error).
                 if (this._pollTries > 150) {
-                    this.job.status = 'failed';
-                    this.job.error = I18N.errors.pollTimeout;
+                    this.job.status = POLL_GAVE_UP_STATUS;
                     return;
                 }
                 try {

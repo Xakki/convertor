@@ -163,8 +163,8 @@ db-dump-pull: ## Скачать дамп из S3 в ./backup/dump.sql.gz (DUMP_K
 ##@ Testing (всё гоняется на ИЗОЛИРОВАННОМ тест-стенде из .env.test)
 
 .PHONY: test
-test: test-up ## Полный прогон: тест-стенд + PHPUnit + pytest воркеров + drift-guard
-	$(MAKE_TEST) test-php test-python test-drift
+test: test-up ## Полный прогон: тест-стенд + PHPUnit + pytest воркеров + gateway + drift-guard
+	$(MAKE_TEST) test-php test-python test-gateway test-drift
 
 .PHONY: smoke
 smoke: ## Smoke e2e: 1 конвертация/категорию (doc/image/audio/video/data/ai) на тест-стенде

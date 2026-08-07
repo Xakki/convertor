@@ -14,15 +14,6 @@ use Doctrine\Persistence\ManagerRegistry;
  */
 class WorkerCapabilityRepository extends ServiceEntityRepository
 {
-    /**
-     * Литерал ЗАДУБЛИРОВАН намеренно — тот же паттерн, что
-     * {@see \App\Service\Worker\WorkerCapabilityGcService::SEED_INSTANCE_ID},
-     * `WorkerController::RESERVED_SEED_INSTANCE_ID` и
-     * `migrations/Version20260722150301.php::SEED_INSTANCE_ID`. При
-     * переименовании синхронизировать все места вручную.
-     */
-    private const string SEED_INSTANCE_ID = '__seed__';
-
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, WorkerCapability::class);
@@ -113,6 +104,32 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
     }
 
     /**
+     * CNV-71-03: "воркер такого типа когда-либо существовал" — ЛЮБАЯ строка с
+     * этим `worker_type`. CNV-71-04 удалил seed-строки `__seed__` (миграция
+     * `Version20260807060000`) — их больше нет, и для этого метода их
+     * присутствие никогда и не было нужно: он не исключает НИКАКИЕ строки по
+     * `instance_id`, в отличие от {@see markSilentDisconnected()} /
+     * {@see deleteStaleByStatus()}. НЕ проверяет alive/offline/disconnected
+     * статус — только сам факт регистрации типа
+     * ({@see \App\Service\Conversion\ConversionManager} гейтит по этому
+     * методу: нет ни одной строки → немедленный отказ 503
+     * `worker_unavailable`; строка есть, даже offline, → задача принимается и
+     * ждёт claim с таймаутом). Без seed-строк тип воркера без хотя бы одной
+     * живой/когда-либо зарегистрированной строки теперь по-настоящему
+     * возвращает `false` — это и делает 503-гейт в `ConversionManager`
+     * достижимым на практике, а не только в теории.
+     */
+    public function existsForWorkerType(string $workerType): bool
+    {
+        $conn = $this->getEntityManager()->getConnection();
+
+        return $conn->fetchOne(
+            'SELECT 1 FROM worker_capabilities WHERE worker_type = :workerType LIMIT 1',
+            ['workerType' => $workerType],
+        ) !== false;
+    }
+
+    /**
      * registry-06: liveness-пуш от WS-Gateway обновляет `last_seen` по
      * составному ключу (workerType, instanceId) — UPDATE ONLY, никогда
      * INSERT (в отличие от {@see upsert()}). Молчаливая вставка здесь
@@ -129,8 +146,11 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
      * `unknown` = запрошенные ключи МИНУС найденные (по SELECT, не по UPDATE).
      *
      * Обновляет `status` наравне с `last_seen` (тот же составной CASE) — НЕ
-     * влияет на маршрутизацию: {@see \App\Service\Conversion\ConversionRegistry}
-     * читает только `capabilities`, это поле никогда не трогает.
+     * влияет на маршрутизацию: с CNV-71-02
+     * {@see \App\Service\Conversion\ConversionRegistry} вообще не читает эту
+     * таблицу для роутинга (та строится из статического каталога);
+     * `capabilities` используется только для live-диагностики
+     * ({@see \App\Service\Conversion\ConversionRegistry::getCapabilityWarnings()}).
      *
      * `metrics` (cpu/mem/load, Phase 1 "дешёвые победы") и `inflight` (CNV-61,
      * ЖИВЁТ В ТОМ ЖЕ JSON-блобе `metrics`, без миграции/нового столбца) — два
@@ -265,8 +285,6 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
      * Условия (все обязательны):
      *  - `status = 'alive'` — трогаем только строки, чья ложь реально видна на
      *    admin-странице; уже disconnected/unknown переписывать нечем;
-     *  - `instance_id != '__seed__'` — seed-строка не процесс, у неё НИКОГДА не
-     *    бывает соединения и её `last_seen` вечно древний (дата миграции);
      *  - `last_seen < :threshold` — ГЛАВНОЕ условие: каждый gateway обновляет
      *    `last_seen` каждому своему инстансу КАЖДЫЙ push-цикл, поэтому пройти
      *    его может только инстанс, которого не видел НИКТО целое окно;
@@ -286,12 +304,11 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
         $conn = $this->getEntityManager()->getConnection();
 
         $sql = 'UPDATE worker_capabilities SET status = :disconnected'
-            . ' WHERE status = :alive AND instance_id != :seedInstanceId AND last_seen < :threshold';
+            . ' WHERE status = :alive AND last_seen < :threshold';
         $params = [
-            'disconnected'   => WorkerLivenessStatus::Disconnected->value,
-            'alive'          => WorkerLivenessStatus::Alive->value,
-            'seedInstanceId' => self::SEED_INSTANCE_ID,
-            'threshold'      => $threshold->format('Y-m-d H:i:s'),
+            'disconnected' => WorkerLivenessStatus::Disconnected->value,
+            'alive'        => WorkerLivenessStatus::Alive->value,
+            'threshold'    => $threshold->format('Y-m-d H:i:s'),
         ];
 
         $keep = [];
@@ -314,13 +331,6 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
      * остаётся отдельной, независимой операцией — эндпоинт её не заменяет и
      * не меняет её расписание/поведение).
      *
-     * `instance_id != '__seed__'` — то же исключение и по той же причине, что
-     * {@see markSilentDisconnected()} и `WorkerCapabilityGcService`: seed-строки
-     * статус имеют `unknown` (DB-default, никогда не получают liveness-пуш),
-     * поэтому без явного исключения кнопка снесла бы канонический seed-снимок
-     * матрицы (`registry-03`) — единственная страховка D1 «БД никогда не
-     * пуста» при отсутствии живых воркеров.
-     *
      * @return int число удалённых строк
      */
     public function deleteStaleByStatus(): int
@@ -328,11 +338,10 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
         $conn = $this->getEntityManager()->getConnection();
 
         return (int) $conn->executeStatement(
-            'DELETE FROM worker_capabilities WHERE status IN (:disconnected, :unknown) AND instance_id != :seedInstanceId',
+            'DELETE FROM worker_capabilities WHERE status IN (:disconnected, :unknown)',
             [
-                'disconnected'   => WorkerLivenessStatus::Disconnected->value,
-                'unknown'        => WorkerLivenessStatus::Unknown->value,
-                'seedInstanceId' => self::SEED_INSTANCE_ID,
+                'disconnected' => WorkerLivenessStatus::Disconnected->value,
+                'unknown'      => WorkerLivenessStatus::Unknown->value,
             ],
         );
     }

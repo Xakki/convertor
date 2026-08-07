@@ -551,6 +551,72 @@ async def test_post_dlq_fail_network_error_is_retryable_false():
 
 
 # --------------------------------------------------------------------------
+# post_expire (CNV-71-03): accepted-but-never-claimed timeout → /expire
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_post_expire_body_shape_and_path():
+    rec = RelayRecorder(status=200)
+    relay = _relay(rec)
+    ok, status = await relay.post_expire(42, "worker_timeout")
+    assert ok is True
+    assert status == 200
+    assert rec.requests[0]["path"] == "/api/v1/internal/worker/expire"
+    assert rec.requests[0]["auth"] == f"Bearer {INTERNAL_TOKEN}"
+    assert rec.requests[0]["body"] == {"conversionId": 42, "reason": "worker_timeout"}
+
+
+@pytest.mark.asyncio
+async def test_post_expire_404_is_terminal_true(caplog):
+    """404 ("Conversion not found" — строка удалена раньше, чем задачу кто-то
+    забрал) — узкий terminal-whitelist (только 404, НЕ 400, в отличие от
+    post_dlq_fail's {400,404}): отмечать нечего, повтор даст тот же 404
+    навсегда → ok=True (ack-worthy), WARNING залогирован внутри relay.py."""
+    rec = RelayRecorder(status=404)
+    relay = _relay(rec)
+    with caplog.at_level("WARNING", logger="workers.gateway.relay"):
+        ok, status = await relay.post_expire(42, "worker_timeout")
+    assert ok is True
+    assert status == 404
+    assert any(
+        "expire relay 404" in r.message and "not retrying" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_expire_400_is_retryable_false():
+    """400 НЕ в whitelist'е (в отличие от post_dlq_fail) — здесь это баг самого
+    запроса gateway, не факт об удалённой Conversion; не должен тихо ack'аться."""
+    rec = RelayRecorder(status=400)
+    relay = _relay(rec)
+    ok, status = await relay.post_expire(42, "worker_timeout")
+    assert ok is False
+    assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_post_expire_5xx_is_retryable_false():
+    rec = RelayRecorder(status=503)
+    relay = _relay(rec)
+    ok, status = await relay.post_expire(42, "worker_timeout")
+    assert ok is False
+    assert status == 503
+
+
+@pytest.mark.asyncio
+async def test_post_expire_network_error_status_none():
+    def _raise(request):
+        raise httpx.ConnectError("boom", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_raise))
+    relay = RelayClient(BASE_URL, INTERNAL_TOKEN, client=client)
+    ok, status = await relay.post_expire(42, "worker_timeout")
+    assert ok is False
+    assert status is None
+
+
+# --------------------------------------------------------------------------
 # pre-relay permanent (CNV-37): malformed / oversize / decode → DLQ сразу
 # --------------------------------------------------------------------------
 

@@ -15,11 +15,14 @@ use Doctrine\ORM\Mapping as ORM;
  * с одинаковым воркером, или ffmpeg, регистрирующий audio- и video-стрим раздельно
  * под разными workerType, но с общим instanceId процесса).
  *
- * Используется ConversionRegistry для построения матрицы конвертаций — БД
- * единственный источник (registry-05: hardcoded-фолбэк удалён; пустая/
- * недоступная БД отдаёт честную пустую матрицу, не подставное значение).
- * lastSeen — только для мониторинга; liveness не используется для
- * маршрутизации в Phase 1.
+ * CNV-71-02: роутинг-матрица (`ConversionRegistry::isSupported()`/`getCategory()`/
+ * `streamFor()`) больше НЕ строится из этой сущности — источник теперь
+ * статический каталог `config/catalog/conversion_pairs.json`. Эта сущность
+ * остаётся источником ТОЛЬКО для live-диагностики воркеров
+ * ({@see \App\Service\Conversion\ConversionRegistry::getCapabilityWarnings()},
+ * `WorkerStatsProvider`, `Admin\WorkerController`, `WorkerCapabilityGcService`,
+ * `WorkerLivenessReconciler`). lastSeen — только для мониторинга; liveness не
+ * используется для маршрутизации.
  */
 #[ORM\Entity(repositoryClass: WorkerCapabilityRepository::class)]
 #[ORM\Table(name: 'worker_capabilities')]
@@ -61,8 +64,9 @@ class WorkerCapability
     /**
      * Liveness-статус (registry-06) — ОТДЕЛЬНЫЙ факт от {@see $lastSeen}, см.
      * {@see WorkerLivenessStatus}. НЕ входит в критерии выбора воркера для
-     * маршрутизации — {@see \App\Service\Conversion\ConversionRegistry}
-     * никогда не читает это поле. Дефолт `Alive` — намеренно НЕ конструкторный
+     * маршрутизации — с CNV-71-02 {@see \App\Service\Conversion\ConversionRegistry}
+     * вообще не читает эту сущность для роутинга (только для диагностики).
+     * Дефолт `Alive` — намеренно НЕ конструкторный
      * параметр (см. {@see setStatus()}): реальная строка создаётся нативным
      * SQL в {@see WorkerCapabilityRepository::upsert()}, минуя этот
      * конструктор целиком; дефолт здесь имеет значение только для кода,

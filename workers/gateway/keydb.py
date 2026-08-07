@@ -470,6 +470,73 @@ class KeyDbGateway:
         return out
 
     # ------------------------------------------------------------------
+    # Accepted-but-never-claimed expiry (CNV-71-03, см. workers/gateway/expiry.py)
+    # ------------------------------------------------------------------
+
+    async def get_last_delivered_id(self, stream: str) -> str:
+        """`XINFO GROUPS <stream>` → `last-delivered-id` группы `convertor`.
+
+        Граница детекции "никогда не доставлено" (§ карточки CNV-71-03): записи
+        с id <= last-delivered-id были отданы `XREADGROUP` хотя бы раз (даже
+        если ещё не acked) — их территория reclaim/PEL, expiry-sweep их не
+        трогает. Записи с id > last-delivered-id — чистый backlog, которого ни
+        один consumer никогда не видел (`XAUTOCLAIM` эту категорию структурно
+        не видит — оно работает только по PEL).
+
+        Отсутствие группы (ещё ни разу не `ensure_group`) исправляем сами —
+        как и другие XAUTOCLAIM-методы этого класса. Транзиентная ошибка →
+        лог + `"0-0"` (весь стрим трактуется как backlog — безопасно: строгий
+        undercount протухания, не наоборот).
+        """
+        await self.ensure_group(stream)
+        try:
+            groups = await self._redis.xinfo_groups(stream)
+        except Exception as exc:
+            logger.warning(
+                "XINFO GROUPS failed — treating stream as fully undelivered",
+                extra={"stream": stream, "error": str(exc)},
+            )
+            return "0-0"
+
+        for g in groups:
+            name = g.get("name") if isinstance(g, dict) else None
+            if _to_str(name) == GROUP:
+                return _to_str(g.get("last-delivered-id", "0-0"))
+        return "0-0"
+
+    async def scan_undelivered_backlog(
+        self, stream: str, after_id: str, count: int
+    ) -> list[tuple[str, dict]]:
+        """`XRANGE <stream> (<after_id> + COUNT <count>` — backlog СТРОГО после `after_id`.
+
+        `(` перед `after_id` — exclusive-нижняя граница XRANGE: сама
+        `last-delivered-id` (или уже переклеймленная/подобранная запись)
+        НЕ должна попасть в результат — она либо доставлена, либо не
+        существует. Возвращает по возрастанию id (oldest-first) — вызывающий
+        код (`expiry.py`) обрабатывает записи именно в этом порядке.
+        Транзиентная ошибка → лог + `[]` (следующий тик исправит).
+        """
+        try:
+            entries = await self._redis.xrange(
+                stream, min=f"({after_id}", max="+", count=count
+            )
+        except Exception as exc:
+            logger.warning(
+                "XRANGE backlog scan failed",
+                extra={"stream": stream, "afterId": after_id, "error": str(exc)},
+            )
+            return []
+        return [(_to_str(entry_id), fields) for entry_id, fields in entries]
+
+    async def delete_entry(self, stream: str, entry_id: str) -> None:
+        """`XDEL <stream> <entryId>` — снести expired/poison backlog-запись.
+
+        БЕЗ `XACK`/`DEL worker:job` — в отличие от `ack()`: backlog-запись
+        никогда не была доставлена, у неё нет ни PEL-записи, ни job-меты.
+        """
+        await self._redis.xdel(stream, entry_id)
+
+    # ------------------------------------------------------------------
     # Живой статус conv:status:{convId} — ЕДИНСТВЕННЫЙ писатель = gateway (s1-07)
     # ------------------------------------------------------------------
 

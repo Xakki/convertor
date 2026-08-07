@@ -1,0 +1,630 @@
+[
+  {
+    "isAi": true,
+    "matrix": {
+      "flac": [
+        "srt",
+        "txt",
+        "vtt"
+      ],
+      "m4a": [
+        "srt",
+        "txt",
+        "vtt"
+      ],
+      "md": [
+        "mp3",
+        "ogg",
+        "wav"
+      ],
+      "mp3": [
+        "srt",
+        "txt",
+        "vtt"
+      ],
+      "ogg": [
+        "srt",
+        "txt",
+        "vtt"
+      ],
+      "opus": [
+        "srt",
+        "txt",
+        "vtt"
+      ],
+      "txt": [
+        "json",
+        "mp3",
+        "ogg",
+        "wav"
+      ],
+      "wav": [
+        "srt",
+        "txt",
+        "vtt"
+      ]
+    },
+    "matrix_categories": {
+      "flac": "audio",
+      "m4a": "audio",
+      "md": "document",
+      "mp3": "audio",
+      "ogg": "audio",
+      "opus": "audio",
+      "txt": "document",
+      "wav": "audio"
+    },
+    "routingKeys": [
+      "ai"
+    ],
+    "streams": [
+      "ai"
+    ],
+    "workerType": "ai"
+  },
+  {
+    "isAi": false,
+    "matrix": {
+      "aac": [
+        "aac",
+        "flac",
+        "m4a",
+        "mp3",
+        "ogg",
+        "opus",
+        "wav"
+      ],
+      "flac": [
+        "aac",
+        "flac",
+        "m4a",
+        "mp3",
+        "ogg",
+        "opus",
+        "wav"
+      ],
+      "m4a": [
+        "aac",
+        "flac",
+        "m4a",
+        "mp3",
+        "ogg",
+        "opus",
+        "wav"
+      ],
+      "mp3": [
+        "aac",
+        "flac",
+        "m4a",
+        "mp3",
+        "ogg",
+        "opus",
+        "wav"
+      ],
+      "ogg": [
+        "aac",
+        "flac",
+        "m4a",
+        "mp3",
+        "ogg",
+        "opus",
+        "wav"
+      ],
+      "opus": [
+        "aac",
+        "flac",
+        "m4a",
+        "mp3",
+        "ogg",
+        "opus",
+        "wav"
+      ],
+      "wav": [
+        "aac",
+        "flac",
+        "m4a",
+        "mp3",
+        "ogg",
+        "opus",
+        "wav"
+      ],
+      "wma": [
+        "aac",
+        "flac",
+        "m4a",
+        "mp3",
+        "ogg",
+        "opus",
+        "wav"
+      ]
+    },
+    "matrix_categories": {},
+    "routingKeys": [
+      "audio"
+    ],
+    "streams": [
+      "audio"
+    ],
+    "workerType": "audio"
+  },
+  {
+    "isAi": false,
+    "matrix": {
+      "csv": [
+        "json",
+        "toml",
+        "xml",
+        "yaml",
+        "yml"
+      ],
+      "json": [
+        "csv",
+        "toml",
+        "xml",
+        "yaml",
+        "yml"
+      ],
+      "toml": [
+        "csv",
+        "json",
+        "xml",
+        "yaml",
+        "yml"
+      ],
+      "xml": [
+        "csv",
+        "json",
+        "toml",
+        "yaml",
+        "yml"
+      ],
+      "yaml": [
+        "csv",
+        "json",
+        "toml",
+        "xml"
+      ],
+      "yml": [
+        "csv",
+        "json",
+        "toml",
+        "xml"
+      ]
+    },
+    "matrix_categories": {},
+    "routingKeys": [
+      "data"
+    ],
+    "streams": [
+      "data"
+    ],
+    "workerType": "data"
+  },
+  {
+    "isAi": false,
+    "matrix": {
+      "csv": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "doc": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "docx": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "epub": [
+        "docx",
+        "html",
+        "md",
+        "odt",
+        "rtf",
+        "txt"
+      ],
+      "htm": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "html": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "latex": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "md": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "odp": [
+        "odp",
+        "pdf",
+        "pptx"
+      ],
+      "ods": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "odt": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "pages": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "pdf": [
+        "docx",
+        "jpg",
+        "md",
+        "txt"
+      ],
+      "ppt": [
+        "odp",
+        "pdf",
+        "pptx"
+      ],
+      "pptx": [
+        "odp",
+        "pdf",
+        "pptx"
+      ],
+      "rst": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "rtf": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "tex": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "txt": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "wiki": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "xls": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ],
+      "xlsx": [
+        "docx",
+        "epub",
+        "html",
+        "md",
+        "odt",
+        "pdf",
+        "rtf",
+        "txt"
+      ]
+    },
+    "matrix_categories": {},
+    "routingKeys": [
+      "document"
+    ],
+    "streams": [
+      "document"
+    ],
+    "workerType": "document"
+  },
+  {
+    "isAi": false,
+    "matrix": {
+      "bmp": [
+        "gif",
+        "ico",
+        "jpg",
+        "pdf",
+        "png",
+        "tiff",
+        "webp"
+      ],
+      "gif": [
+        "bmp",
+        "ico",
+        "jpg",
+        "pdf",
+        "png",
+        "tiff",
+        "webp"
+      ],
+      "ico": [
+        "bmp",
+        "gif",
+        "jpg",
+        "pdf",
+        "png",
+        "tiff",
+        "webp"
+      ],
+      "jpeg": [
+        "bmp",
+        "docx",
+        "gif",
+        "ico",
+        "md",
+        "pdf",
+        "png",
+        "tiff",
+        "txt",
+        "webp"
+      ],
+      "jpg": [
+        "bmp",
+        "docx",
+        "gif",
+        "ico",
+        "md",
+        "pdf",
+        "png",
+        "tiff",
+        "txt",
+        "webp"
+      ],
+      "pdf": [
+        "docx",
+        "md",
+        "txt"
+      ],
+      "png": [
+        "bmp",
+        "docx",
+        "gif",
+        "ico",
+        "jpg",
+        "md",
+        "pdf",
+        "tiff",
+        "txt",
+        "webp"
+      ],
+      "tif": [
+        "bmp",
+        "docx",
+        "gif",
+        "ico",
+        "jpg",
+        "md",
+        "pdf",
+        "png",
+        "txt",
+        "webp"
+      ],
+      "tiff": [
+        "bmp",
+        "docx",
+        "gif",
+        "ico",
+        "jpg",
+        "md",
+        "pdf",
+        "png",
+        "txt",
+        "webp"
+      ],
+      "webp": [
+        "bmp",
+        "gif",
+        "ico",
+        "jpg",
+        "pdf",
+        "png",
+        "tiff"
+      ]
+    },
+    "matrix_categories": {},
+    "routingKeys": [
+      "image"
+    ],
+    "streams": [
+      "image"
+    ],
+    "workerType": "image"
+  },
+  {
+    "isAi": false,
+    "matrix": {
+      "3gp": [
+        "avi",
+        "flac",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "ogg",
+        "wav",
+        "webm"
+      ],
+      "avi": [
+        "avi",
+        "flac",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "ogg",
+        "wav",
+        "webm"
+      ],
+      "flv": [
+        "avi",
+        "flac",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "ogg",
+        "wav",
+        "webm"
+      ],
+      "mkv": [
+        "avi",
+        "flac",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "ogg",
+        "wav",
+        "webm"
+      ],
+      "mov": [
+        "avi",
+        "flac",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "ogg",
+        "wav",
+        "webm"
+      ],
+      "mp4": [
+        "avi",
+        "flac",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "ogg",
+        "wav",
+        "webm"
+      ],
+      "webm": [
+        "avi",
+        "flac",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "ogg",
+        "wav",
+        "webm"
+      ],
+      "wmv": [
+        "avi",
+        "flac",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "ogg",
+        "wav",
+        "webm"
+      ]
+    },
+    "matrix_categories": {},
+    "routingKeys": [
+      "video"
+    ],
+    "streams": [
+      "video"
+    ],
+    "workerType": "video"
+  }
+]

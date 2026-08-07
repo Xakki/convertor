@@ -6,7 +6,6 @@ namespace App\Tests\Functional\Controller\Admin;
 
 use App\Entity\User;
 use App\Enum\WorkerLivenessStatus;
-use App\Enum\WorkerType;
 use App\Repository\WorkerCapabilityRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
@@ -16,9 +15,12 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  * Функциональные тесты admin-workers-эндпоинта (registry-07, финальный шаг
  * эпика registry-00-self-registration). Граница — ROLE_ADMIN на JWT-firewall
  * (Option B, тот же паттерн, что QueueControllerTest): не-админ 403,
- * неаутентифицированный 401, админ 200. Требуют тест-БД convertor-test
- * (registry-03 seed-строки там уже есть — используются как готовые
- * isSeed=true фикстуры без ручной вставки).
+ * неаутентифицированный 401, админ 200. Требуют тест-БД convertor-test.
+ *
+ * CNV-71-04: `__seed__`-строки и вся их спец-обработка (isSeed/hasSeed,
+ * исключения из GC/сверки/bulk-delete) удалены — каждый тест сам заводит
+ * нужные ему фикстуры через {@see WorkerCapabilityRepository::upsert()},
+ * не полагается на статичный registry-03 снимок.
  */
 final class WorkerControllerTest extends WebTestCase
 {
@@ -100,25 +102,13 @@ final class WorkerControllerTest extends WebTestCase
 
         self::assertArrayHasKey('workers', $data);
         self::assertIsArray($data['workers']);
-
-        // registry-03 seeded all 6 canonical types as instance_id='__seed__' —
-        // they must be present, flagged isSeed=true, status='unknown'.
-        $seedRows  = array_filter($data['workers'], static fn (array $w): bool => $w['isSeed'] === true);
-        $seedTypes = array_column($seedRows, 'workerType');
-        foreach (WorkerType::cases() as $workerType) {
-            self::assertContains($workerType->value, $seedTypes, "seed workerType {$workerType->value} присутствует");
-        }
-        foreach ($seedRows as $row) {
-            self::assertSame('__seed__', $row['instanceId']);
-            self::assertSame('unknown', $row['status']);
-        }
     }
 
     /**
-     * A freshly-registered (non-seed) instance: isSeed=false, status=alive,
-     * NOT stale (just registered), pairCount/matrix reflect what it declared.
+     * A freshly-registered instance: status=alive, NOT stale (just
+     * registered), pairCount/matrix reflect what it declared.
      */
-    public function testWorkersReflectsRealNonSeedInstance(): void
+    public function testWorkersReflectsRealInstance(): void
     {
         $client = static::createClient();
         $token  = $this->jwtFor($this->persistUser(true));
@@ -149,7 +139,6 @@ final class WorkerControllerTest extends WebTestCase
         }
 
         self::assertNotNull($row, 'freshly registered instance must appear in the list');
-        self::assertFalse($row['isSeed']);
         self::assertSame('alive', $row['status'], 'register() sets alive');
         self::assertFalse($row['stale'], 'just registered — must not be stale');
         self::assertSame('9.9.9-test', $row['version']);
@@ -282,8 +271,9 @@ final class WorkerControllerTest extends WebTestCase
      * CNV-61: `/workers/hosts` groups the SAME rows `/workers` returns by
      * `host` — a real host with a partially-known `inflight`, a real host
      * with NO worker reporting `inflight` at all (`inflightKnown: false`,
-     * not a misleading 0), and the legacy `host IS NULL` bucket (already
-     * populated by the registry-03 seed rows, no extra fixture needed for it).
+     * not a misleading 0), and the legacy `host IS NULL` bucket. CNV-71-04:
+     * seed rows (which used to populate the null bucket for free) are gone —
+     * this test now provides its own explicit no-host fixture.
      */
     public function testWorkersHostsAggregatesPerHostIncludingNullBucketAndUnknownInflight(): void
     {
@@ -291,13 +281,16 @@ final class WorkerControllerTest extends WebTestCase
         $token  = $this->jwtFor($this->persistUser(true));
         $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
 
-        $hostA1 = self::HOST_TEST_INSTANCE_PREFIX . 'a1';
-        $hostA2 = self::HOST_TEST_INSTANCE_PREFIX . 'a2';
-        $hostB1 = self::HOST_TEST_INSTANCE_PREFIX . 'b1';
+        $hostA1   = self::HOST_TEST_INSTANCE_PREFIX . 'a1';
+        $hostA2   = self::HOST_TEST_INSTANCE_PREFIX . 'a2';
+        $hostB1   = self::HOST_TEST_INSTANCE_PREFIX . 'b1';
+        $hostNull = self::HOST_TEST_INSTANCE_PREFIX . 'nullhost';
 
         $repo->upsert(self::TEST_WORKER_TYPE, $hostA1, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []], 'hosts-test-a');
         $repo->upsert(self::TEST_WORKER_TYPE, $hostA2, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []], 'hosts-test-a');
         $repo->upsert(self::TEST_WORKER_TYPE, $hostB1, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []], 'hosts-test-b');
+        // No `$host` argument — persists `host = NULL`, feeding the legacy bucket.
+        $repo->upsert(self::TEST_WORKER_TYPE, $hostNull, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []]);
 
         // Only ONE instance on "hosts-test-a" reports `inflight`; "hosts-test-b"
         // reports none at all.
@@ -341,8 +334,7 @@ final class WorkerControllerTest extends WebTestCase
         self::assertSame(0, $hostB['inflight']);
         self::assertFalse($hostB['inflightKnown'], 'no worker on this host ever reported inflight');
 
-        // Legacy null-host bucket — always present (registry-03 seed rows have
-        // no host) and sorted LAST.
+        // Legacy null-host bucket — populated by $hostNull above, sorted LAST.
         self::assertArrayHasKey('__null__', $byHost, 'null-host bucket must be present');
         self::assertNull($byHost['__null__']['host']);
         self::assertSame(null, $data['hosts'][array_key_last($data['hosts'])]['host'], 'null bucket sorted last');
@@ -394,6 +386,11 @@ final class WorkerControllerTest extends WebTestCase
     {
         $client = static::createClient();
         $token  = $this->jwtFor($this->persistUser(true));
+        $repo   = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        // CNV-71-04: seed rows (which used to guarantee a non-empty null-host
+        // bucket for free) are gone — provide an explicit no-host fixture.
+        $repo->upsert(self::TEST_WORKER_TYPE, self::TEST_INSTANCE_ID, ['isAi' => false, 'streams' => [], 'routingKeys' => [], 'matrix' => []]);
 
         $client->request(
             'GET',
@@ -403,7 +400,7 @@ final class WorkerControllerTest extends WebTestCase
         self::assertResponseIsSuccessful();
 
         $data = json_decode((string) $client->getResponse()->getContent(), true);
-        self::assertNotEmpty($data['workers'], 'registry-03 seed rows have no host — this bucket is never empty');
+        self::assertNotEmpty($data['workers'], 'the no-host fixture just registered must appear in the null bucket');
         foreach ($data['workers'] as $row) {
             self::assertNull($row['host']);
         }
@@ -470,9 +467,8 @@ final class WorkerControllerTest extends WebTestCase
         $client = static::createClient();
         $token  = $this->jwtFor($this->persistUser(true));
 
-        // No disconnected/unknown non-seed rows exist at this point — the
-        // registry-03 seed rows ARE status=unknown but are excluded by the
-        // repository, so a clean run must report an honest zero, not error.
+        // No disconnected/unknown rows exist at this point — a clean run must
+        // report an honest zero, not error.
         $client->request('DELETE', '/api/v1/admin/workers/stale', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
         self::assertResponseIsSuccessful();
 
@@ -481,8 +477,8 @@ final class WorkerControllerTest extends WebTestCase
     }
 
     /**
-     * Happy path (CNV-61): a `disconnected` row and a `unknown` non-seed row
-     * are both removed, the endpoint reports their count.
+     * Happy path (CNV-61): a `disconnected` row and an `unknown` row are both
+     * removed, the endpoint reports their count.
      */
     public function testDeleteStaleRemovesDisconnectedAndUnknownRows(): void
     {
@@ -503,10 +499,11 @@ final class WorkerControllerTest extends WebTestCase
             'lastSeenAt' => new \DateTimeImmutable(),
         ]]);
         // `unknown` never comes from updateLiveness() on a real known row (see
-        // WorkerLivenessStatus doc — it's a DB-column DEFAULT for seed rows
-        // only); the repository's delete predicate matches on the raw column
-        // value regardless of how it got there, so a direct UPDATE is a fair
-        // way to fabricate a non-seed row in that state for this test.
+        // WorkerLivenessStatus::Unknown doc — it's a DB-column DEFAULT never
+        // written by application code); the repository's delete predicate
+        // matches on the raw column value regardless of how it got there, so
+        // a direct UPDATE is a fair way to fabricate a row in that state for
+        // this test.
         $em->getConnection()->executeStatement(
             'UPDATE worker_capabilities SET status = :status WHERE worker_type = :wt AND instance_id = :id',
             ['status' => WorkerLivenessStatus::Unknown->value, 'wt' => self::TEST_WORKER_TYPE, 'id' => $unknownId],
@@ -528,31 +525,6 @@ final class WorkerControllerTest extends WebTestCase
             ['wt' => self::TEST_WORKER_TYPE, 'd' => $disconnectedId, 'u' => $unknownId],
         );
         self::assertSame([], $remaining, 'both rows must be gone');
-    }
-
-    /**
-     * The single most important correctness constraint of CNV-61: seed rows
-     * (`instance_id='__seed__'`, status=unknown by DB default) must survive —
-     * without this exclusion the button would wipe the canonical format matrix.
-     */
-    public function testDeleteStaleExcludesSeedRows(): void
-    {
-        $client = static::createClient();
-        $token  = $this->jwtFor($this->persistUser(true));
-        $em     = static::getContainer()->get(EntityManagerInterface::class);
-
-        $seedCountBefore = (int) $em->getConnection()->fetchOne(
-            "SELECT COUNT(*) FROM worker_capabilities WHERE instance_id = '__seed__'",
-        );
-        self::assertGreaterThan(0, $seedCountBefore, 'registry-03 seeds a __seed__ row per canonical worker type');
-
-        $client->request('DELETE', '/api/v1/admin/workers/stale', server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"]);
-        self::assertResponseIsSuccessful();
-
-        $seedCountAfter = (int) $em->getConnection()->fetchOne(
-            "SELECT COUNT(*) FROM worker_capabilities WHERE instance_id = '__seed__'",
-        );
-        self::assertSame($seedCountBefore, $seedCountAfter, 'seed rows must never be touched by this endpoint');
     }
 
     /**

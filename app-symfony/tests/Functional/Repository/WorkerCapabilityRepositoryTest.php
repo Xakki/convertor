@@ -88,42 +88,6 @@ final class WorkerCapabilityRepositoryTest extends KernelTestCase
     }
 
     /**
-     * registry-03: seed-миграция заливает строки с instance_id='__seed__'. Реальный
-     * register того же worker_type (другой instanceId — Python-воркер никогда не
-     * шлёт '__seed__') должен апсертиться отдельной строкой рядом с seed, не падая
-     * на составном UNIQUE(worker_type, instance_id).
-     */
-    public function testRealRegisterUpsertsAlongsideSeedRowWithoutUniqueViolation(): void
-    {
-        self::bootKernel();
-        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
-
-        $seed             = $repo->upsert('test-wc-seeded', '__seed__', ['isAi' => false, 'matrix' => ['jpg' => ['png']], 'version' => 'seed']);
-        $live             = $repo->upsert('test-wc-seeded', 'host-a:worker-1', ['isAi' => false, 'matrix' => ['jpg' => ['png', 'webp']], 'version' => '1.2.3']);
-        $this->toRemove[] = $seed;
-        $this->toRemove[] = $live;
-
-        self::assertNotSame($seed->getId(), $live->getId());
-        self::assertSame('__seed__', $seed->getInstanceId());
-        self::assertSame('host-a:worker-1', $live->getInstanceId());
-
-        $all = static::getContainer()->get(EntityManagerInterface::class)
-            ->getRepository(WorkerCapability::class)
-            ->findBy(['workerType' => 'test-wc-seeded']);
-        self::assertCount(2, $all, 'live register must coexist with the seed row, not collide on the composite unique key');
-
-        // Повторный upsert по тому же seed-ключу (напр. повторный прогон seed-миграции)
-        // по-прежнему обновляет seed-строку in place, не трогая live-строку.
-        $reSeed = $repo->upsert('test-wc-seeded', '__seed__', ['isAi' => false, 'matrix' => ['jpg' => ['png']], 'version' => 'seed']);
-        self::assertSame($seed->getId(), $reSeed->getId());
-
-        $allAfter = static::getContainer()->get(EntityManagerInterface::class)
-            ->getRepository(WorkerCapability::class)
-            ->findBy(['workerType' => 'test-wc-seeded']);
-        self::assertCount(2, $allAfter, 're-seeding must not duplicate rows');
-    }
-
-    /**
      * Phase 1 "дешёвые победы": updateLiveness() persists `metrics`
      * (cpu/mem/load) alongside last_seen/status, matching the gateway's wire
      * payload ({@see \App\Controller\Api\InternalWorkerController::liveness()}).
@@ -263,6 +227,31 @@ final class WorkerCapabilityRepositoryTest extends KernelTestCase
             $reloaded->getMetrics(),
             'a metrics-only push must not wipe out a previously stored inflight',
         );
+    }
+
+    /**
+     * CNV-71-03: existsForWorkerType() отвечает true при ЛЮБОЙ строке этого
+     * worker_type (гейт ConversionManager) и false, если строк вообще нет.
+     */
+    public function testExistsForWorkerTypeTrueAfterUpsert(): void
+    {
+        self::bootKernel();
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        self::assertFalse($repo->existsForWorkerType('test-wc-exists'), 'precondition: nothing registered yet');
+
+        $cap              = $repo->upsert('test-wc-exists', 'host-a', ['isAi' => false, 'matrix' => []]);
+        $this->toRemove[] = $cap;
+
+        self::assertTrue($repo->existsForWorkerType('test-wc-exists'));
+    }
+
+    public function testExistsForWorkerTypeFalseForNeverRegisteredType(): void
+    {
+        self::bootKernel();
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        self::assertFalse($repo->existsForWorkerType('test-wc-never-registered-' . bin2hex(random_bytes(4))));
     }
 
     /**

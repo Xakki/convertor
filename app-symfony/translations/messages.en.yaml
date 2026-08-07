@@ -96,8 +96,18 @@ home:
     job_prefix: 'Job #'
     job_processing: 'Processing…'
     download_result: 'Download result'
-    error_expired: 'The result has expired'
+    # CNV-71-03: "expired" here = the accepted job was never claimed by any
+    # worker within the waiting window (WORKER_CLAIM_TIMEOUT_MINUTES) — NOT a
+    # finished result's storage expiring (that has its own copy, see
+    # preview.gone / dashboard.history.error.expired). Mentions the refund (AC).
+    error_expired: 'No worker was available to pick up the job within the waiting window. The conversion was cancelled and the charge was refunded — please try again later.'
     error_failed: 'Conversion failed'
+    # CNV-71-03: client-side polling gave up after ~5 minutes (not to be
+    # confused with error_expired above — that's the real server-side
+    # WORKER_CLAIM_TIMEOUT_MINUTES timeout, 60 min). The job has NOT failed —
+    # it is still queued; say so honestly and do NOT show an error status/color
+    # (see FAILED_STATUSES in the JS).
+    poll_gave_up_message: 'The job is still queued — the server may take up to an hour to process it. The result will appear in your conversion history once it is ready; no need to refresh this page.'
     history_heading: 'My conversions'
     # CNV-61: button/link next to Convert → /history.
     history_link: 'My conversions'
@@ -119,6 +129,9 @@ home:
         completed: 'Completed'
         failed: 'Failed'
         expired: 'Expired'
+        # CNV-71-03: client-side pseudo-status after the ~5-minute polling cap —
+        # see poll_gave_up_message above and POLL_GAVE_UP_STATUS in _converter_app_script.
+        poll_gave_up: 'Still queued'
     error:
         login_invalid_link: 'This link is no longer valid — please sign in again.'
         formats_load_failed: 'Failed to load the format list'
@@ -136,8 +149,14 @@ home:
         status_415: 'Unsupported file type.'
         status_422: 'This conversion is not supported.'
         status_429: 'Daily quota exceeded or too many requests.'
+        # CNV-71-03: 503 worker_unavailable — no worker of the required type
+        # has ever registered (not to be confused with conversion_disabled —
+        # there the pair is valid, just switched off by an admin).
+        worker_unavailable: 'Conversion is temporarily unavailable — no worker currently supports this conversion type. Please try again later.'
+        # CNV-71-03: 409 conversion_disabled — the pair is valid but currently
+        # switched off by an admin (not to be confused with worker_unavailable above).
+        conversion_disabled: 'This conversion type is temporarily disabled by the administrator. Please try again later.'
         generic_status: 'Error %status%'
-        poll_timeout: 'Timed out waiting for the result'
         download_failed: 'Failed to download the result'
         download_network: 'Network error while downloading'
         source_download_failed: 'Failed to download the source file'

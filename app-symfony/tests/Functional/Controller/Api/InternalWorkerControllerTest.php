@@ -579,6 +579,153 @@ final class InternalWorkerControllerTest extends WebTestCase
     }
 
     // -------------------------------------------------------------------------
+    // expire (CNV-71-03)
+    // -------------------------------------------------------------------------
+
+    public function testExpireReturns401WithNoToken(): void
+    {
+        $client = static::createClient();
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/expire',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json'],
+            '{"conversionId":99999,"reason":"worker_timeout"}',
+        );
+        self::assertSame(401, $client->getResponse()->getStatusCode());
+    }
+
+    public function testExpireReturns400WhenConversionIdMissing(): void
+    {
+        $client = static::createClient();
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/expire',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            '{"reason":"worker_timeout"}',
+        );
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+    }
+
+    public function testExpireReturns404WhenConversionNotFound(): void
+    {
+        $client = static::createClient();
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/expire',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            '{"conversionId":999999999,"reason":"worker_timeout"}',
+        );
+        self::assertSame(404, $client->getResponse()->getStatusCode());
+    }
+
+    /**
+     * Happy path: Pending conversion → expire → status=expired, Russian
+     * errorMessage set, quota refunded (same refund() call as fail/dlq-fail —
+     * see ConversionResultPersister's shared 'failed'/'expired' branch).
+     */
+    public function testExpirePersistsExpiredWithRussianMessage(): void
+    {
+        $client = static::createClient();
+        $em     = static::getContainer()->get(EntityManagerInterface::class);
+
+        $conversion = $this->persistPendingConversion($em);
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/expire',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode(['conversionId' => $conversion->getId(), 'reason' => 'worker_timeout'], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue($body['ok']);
+
+        $em->clear();
+        $reloaded = $em->find(Conversion::class, $conversion->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame(ConversionStatus::Expired, $reloaded->getStatus());
+        self::assertNotNull($reloaded->getErrorMessage());
+        self::assertStringContainsString('воркер', mb_strtolower((string) $reloaded->getErrorMessage()));
+    }
+
+    /**
+     * Idempotency: already-Expired conversion stays Expired, no double
+     * refund, still 200 (persist()'s terminal-status guard now includes
+     * Expired alongside Completed/Failed).
+     */
+    public function testExpireIsIdempotentWhenAlreadyExpired(): void
+    {
+        $client = static::createClient();
+        $em     = static::getContainer()->get(EntityManagerInterface::class);
+
+        $conversion = $this->persistPendingConversion($em);
+        $conversion->setStatus(ConversionStatus::Expired);
+        $conversion->setErrorMessage('first expiry');
+        $em->flush();
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/expire',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode(['conversionId' => $conversion->getId(), 'reason' => 'worker_timeout'], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue($body['ok']);
+
+        $em->clear();
+        $reloaded = $em->find(Conversion::class, $conversion->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame(ConversionStatus::Expired, $reloaded->getStatus());
+        self::assertSame('first expiry', $reloaded->getErrorMessage(), 'idempotency guard must skip the second write entirely');
+    }
+
+    /**
+     * A late expire call for a job that already completed for real must NOT
+     * clobber it — the terminal-status guard trips on the row's CURRENT
+     * status, regardless of the incoming event's state.
+     */
+    public function testExpireDoesNotClobberAlreadyCompletedConversion(): void
+    {
+        $client = static::createClient();
+        $em     = static::getContainer()->get(EntityManagerInterface::class);
+
+        $conversion = $this->persistPendingConversion($em);
+        $conversion->setStatus(ConversionStatus::Completed);
+        $em->flush();
+
+        $client->request(
+            'POST',
+            '/api/v1/internal/worker/expire',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_AUTHORIZATION' => 'Bearer test-internal-token'],
+            json_encode(['conversionId' => $conversion->getId(), 'reason' => 'worker_timeout'], JSON_THROW_ON_ERROR),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue($body['ok']);
+
+        $em->clear();
+        $reloaded = $em->find(Conversion::class, $conversion->getId());
+        self::assertNotNull($reloaded);
+        self::assertSame(ConversionStatus::Completed, $reloaded->getStatus(), 'expiry must never clobber a completed job');
+    }
+
+    // -------------------------------------------------------------------------
     // liveness (registry-06)
     // -------------------------------------------------------------------------
 
@@ -1191,38 +1338,6 @@ final class InternalWorkerControllerTest extends WebTestCase
 
         self::assertSame(200, $client->getResponse()->getStatusCode());
         self::assertSame(WorkerLivenessStatus::Alive, $this->reload($repo, $cap)->getStatus());
-    }
-
-    /**
-     * Seed-строка (registry-03) — не процесс: у неё вечно древний lastSeen и
-     * она никогда не получает liveness-пуш. Сверка обязана её не трогать,
-     * иначе админка показывала бы «снимок матрицы» как упавший воркер.
-     */
-    public function testSeedRowIsNeverOfflinedByReconcile(): void
-    {
-        $client = static::createClient();
-        $conn   = static::getContainer()->get(EntityManagerInterface::class)->getConnection();
-        // Худший случай для seed: статус alive + древний last_seen (дата
-        // seed-миграции) — под все условия сверки, кроме исключения по
-        // instance_id. Исходное состояние восстанавливаем в finally.
-        $conn->executeStatement(
-            "UPDATE worker_capabilities SET status = 'alive', last_seen = '2020-01-01 00:00:00' WHERE instance_id = '__seed__'",
-        );
-
-        try {
-            $this->pushLiveness($client, [], ['snapshot' => true, 'authoritative' => true]);
-            self::assertSame(200, $client->getResponse()->getStatusCode());
-
-            $stillAlive = (int) $conn->fetchOne(
-                "SELECT COUNT(*) FROM worker_capabilities WHERE instance_id = '__seed__' AND status = 'alive'",
-            );
-            $total = (int) $conn->fetchOne("SELECT COUNT(*) FROM worker_capabilities WHERE instance_id = '__seed__'");
-            self::assertSame($total, $stillAlive, 'seed-строки не гасятся сверкой ни при каких условиях');
-        } finally {
-            $conn->executeStatement(
-                "UPDATE worker_capabilities SET status = 'unknown' WHERE instance_id = '__seed__'",
-            );
-        }
     }
 
     /**

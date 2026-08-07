@@ -6,7 +6,9 @@ framework:
         # Пул `cache.app` — общий Redis-бэкенд на KeyDB, БД 0 (см. CLAUDE.md:
         # «KeyDB — единственный instance, несколько баз (0: cache, 1: sessions, 2: queues)»).
         # Зачем Redis, а не filesystem по умолчанию: инвалидация кэша
-        # (ConversionToggleService::invalidate() и ConversionRegistry::invalidateMatrix())
+        # (ConversionToggleService::invalidate() — единственный оставшийся
+        # потребитель cache.app в этом домене с CNV-71-02, когда ConversionRegistry
+        # перешла на статический каталог и cache.app больше не использует)
         # должна быть видна ВСЕМ PHP-инстансам сразу. Filesystem-адаптер локален для
         # каждого контейнера → сброс в одном инстансе не виден остальным.
         app: cache.adapter.redis

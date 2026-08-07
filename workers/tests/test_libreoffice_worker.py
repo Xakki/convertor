@@ -16,7 +16,6 @@ from workers.libreoffice.worker import (
     LibreOfficeWorker,
     _MATRIX,
     _MIME,
-    _PAGES_IMPORT_OK,
 )
 
 
@@ -294,20 +293,30 @@ class TestLibreOfficeConvertErrors:
             with pytest.raises(ValueError, match="unsupported conversion"):
                 worker.convert(_make_job(26, src, "pptx", "docx"))
 
-    @pytest.mark.skipif(_PAGES_IMPORT_OK, reason="pages supported when libetonyek present")
+    def test_pages_unconditional_in_matrix(self):
+        """pages is a plain matrix entry now — libetonyek is an execution-time
+        guard, not a matrix gate (see worker.py docstring)."""
+        assert "pages" in _MATRIX
+
     def test_pages_source_rejected_without_libetonyek(self, tmp_path):
-        assert "pages" not in _MATRIX
+        """Execution-time guard: matrix accepts pages, but convert() must fail
+        the job with a permanent (ValueError) error when libetonyek is
+        missing, rather than attempting soffice and producing a confusing
+        failure. _PAGES_IMPORT_OK is patched so this is deterministic
+        regardless of whether the test image actually has libetonyek."""
         src = _src(tmp_path, "in.pages")
         worker = _worker(tmp_path)
-        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
-            with pytest.raises(ValueError, match="unsupported source format"):
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker._PAGES_IMPORT_OK", False):
+            with pytest.raises(ValueError, match="libetonyek"):
                 worker.convert(_make_job(25, src, "pages", "pdf"))
 
-    @pytest.mark.skipif(not _PAGES_IMPORT_OK, reason="pages requires libetonyek in image")
     def test_pages_to_pdf_via_soffice(self, tmp_path):
-        out_path, mime, ext = TestLibreOfficeConvert()._run(
-            tmp_path, 28, "in.pages", "pages", "pdf"
-        )
+        """Happy path — libetonyek present, conversion proceeds normally."""
+        with patch("workers.libreoffice.worker._PAGES_IMPORT_OK", True):
+            out_path, mime, ext = TestLibreOfficeConvert()._run(
+                tmp_path, 28, "in.pages", "pages", "pdf"
+            )
         assert ext == "pdf"
         assert mime == "application/pdf"
         assert Path(out_path).exists()

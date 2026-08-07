@@ -55,8 +55,19 @@ Backend построен по образцу **https://github.com/Xakki/ExRate**
    не меняется.
 2. Manager спрашивает **Registry** — `isSupported()`/`getCategory()`/`isAi()`
    (или `isOcrSupported()` для OCR-флага) — чистая проверка пары форматов по
-   матрице (БД `worker_capabilities`, с hardcoded fallback в
-   `ConversionRegistry::workerCapabilities()`, кешируется в `cache.app`).
+   матрице (CNV-71-02: единственный источник — статический коммиченный каталог
+   `app-symfony/config/catalog/conversion_pairs.json`, загружает
+   `ConversionRegistry::loadCatalogMatrix()`, per-request memo без
+   межзапросного кеша; отсутствующий/невалидный/пустой файл — громкий
+   `\RuntimeException`, не тихий фолбэк). Каталог генерируется из
+   `worker_capabilities.json`, который генерируется из Python `CAPABILITIES`
+   воркеров (`workers/tools/gen_worker_capabilities.py` +
+   `workers/tools/capabilities_ast.py`, AST-экстракция); регенерация и
+   drift-проверка — таргеты `formats-catalog`/`test-drift` в
+   `workers/Makefile`. БД `worker_capabilities`/`WorkerCapabilityRepository`
+   больше НЕ читается для построения матрицы — единственный оставшийся
+   потребитель — `ConversionRegistry::getCapabilityWarnings()` (live-диагностика
+   воркеров), а не роутинг.
 3. Manager прогоняет гейты **в фиксированном порядке** (до любых S3/quota
    side-эффектов): toggle (`ConversionToggleService`) → ai/video-гейт для
    гостя → size (413) → mime (415) → quota (`QuotaService::check`).

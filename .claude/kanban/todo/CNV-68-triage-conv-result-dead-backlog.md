@@ -54,7 +54,64 @@
 - 2026-08-04: выбран вариант «удалить легаси-стрим» (не переносить/не
   хранить `conv.result.dead»). Прежняя предпосылка карты («`conv.result.dead`
   — текущий DLQ») была неверной — исправлено.
+- 2026-08-07 (CNV-71, разбор алерта `ConvertorDeadLetterGrowing`): пункт
+  «содержимое `conv.dead` проверено» из Acceptance Criteria — **выполнен**.
+  Осталась только часть по `conv.result.dead` (11 легаси-записей, см. выше).
 
-**Контекст:** найдено в ходе диагностического прогона 2026-08-04.
+**Разбор единственной записи `conv.dead` (dev-стенд, найдена/устранена 2026-08-07):**
+```
+id:              1783878917623-0
+conversionId:    6
+state:           failed
+reason:          worker error: Client error '401 Unauthorized' for url
+                 'https://convertor.xakki.pro/api/v1/worker/jobs/1783877914562-0/input'
+                 (times_delivered=4)
+originalStream:  conv.document
+originalEntryId: 1783877914562-0
+```
+Дата записи (по ms-префиксу id) — 2026-07-12 17:55:17 UTC. Consumer-группа
+`convertor`: `pending=0`, `last-delivered-id` в точности равен id этой записи —
+т.е. запись была доставлена `dlq-consumer`'ом и `XACK`'нута ещё тогда; строка
+`Conversion(id=6)` в БД к моменту разбора уже отсутствовала (удалена
+несвязанным сбросом dev-данных). Переотправка не нужна — запись
+исторический ACKed-residue. Решение: удалена (`XDEL`) с dev-стенда
+2026-08-07, повторно проверив перед удалением `pending=0` и совпадение
+`last-delivered-id`.
+
+**Корневая причина алерта `ConvertorDeadLetterGrowing` (монотонный gauge):**
+`convertor_dead_letter_messages` = `XLEN conv.dead` (`workers/metrics_exporter/exporter.py`).
+До правки `dlq_consumer._process_entry` (`workers/gateway/dlq_consumer.py`)
+делал только `XACK` после успешного relay-ответа — саму запись из стрима
+никогда не удалял (`add_to_dlq` пишет `conv.dead` намеренно без `MAXLEN`,
+иначе алерт не мог бы погаснуть в принципе). Итог: `XLEN` мог только расти,
+алерт (`expr: convertor_dead_letter_messages > 0`, `for: 10m`) после первой
+же DLQ-записи горел бы навсегда, даже если DLQ-consumer успешно финализирует
+все новые записи. **Исправлено в CNV-71**: `_process_entry` теперь делает
+`XACK` → WARNING-лог с полной декодированной записью (аудит-след, т.к. стрим
+был единственной сырой копией) → `XDEL`, строго после подтверждённого
+relay-2xx (тот же порядок, что в `expiry.py`). После правки и удаления
+residue-записи: `XLEN conv.dead` = 0 на dev, `convertor_dead_letter_messages`
+= 0 в Prometheus, `ALERTS{alertname="ConvertorDeadLetterGrowing"}` — пустой
+результат (не просто `pending`, алерт полностью снят).
+
+**DLQ-consumer liveness — вердикт по подозрению в «мёртвом» consumer'е:**
+`XINFO CONSUMERS conv.dead` на dev показывал `idle` ~17.4 дня у consumer'а
+`dlq-consumer`, несмотря на ~30 рестартов `ws-gateway` с 07-26 и лог "dlq
+consumer loop started" на каждом. Эмпирически проверено (KeyDB probe +
+рестарт тест-стенда с синтетической DLQ-записью): **это НЕ баг, а свойство
+метрики** — `idle` в `XINFO CONSUMERS` сбрасывается ТОЛЬКО при реальной
+доставке новой записи (`XREADGROUP`, вернувший >0 элементов) или `XCLAIM`;
+пустые блокирующие `XREADGROUP`-опросы (5 сек, `dlq_consumer_block_ms`) НЕ
+сбрасывают `idle`, даже если consumer их непрерывно выполняет. На
+тест-стенде свежерестартованный `dlq-consumer` подобрал и обработал
+синтетическую DLQ-запись (`conversionId` заведомо не существующий → PHP 404
+→ terminal ack) в пределах ~1 секунды — цикл `run_dlq_consumer_loop` жив и
+работает сразу после рестарта. 17.4-дневный `idle` на dev полностью
+объясняется тем, что в `conv.dead` на dev с 07-20 не поступало ни одной
+новой записи — «мёртвый инструмент», не мёртвый consumer. Фикса не
+требуется, отдельная карточка не заводится.
+
+**Контекст:** найдено в ходе диагностического прогона 2026-08-04; `conv.dead`
+половина разобрана и закрыта в рамках CNV-71 (2026-08-07).
 
 **Status:** todo

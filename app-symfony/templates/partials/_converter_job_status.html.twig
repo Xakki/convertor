@@ -20,7 +20,7 @@
             <span
                 class="rounded-full px-3 py-1 text-xs font-medium"
                 :class="{
-                    'bg-slate-100 text-slate-600': isActive(job.status),
+                    'bg-slate-100 text-slate-600': isActive(job.status) || job.status === 'poll_gave_up',
                     'bg-green-100 text-green-700': job.status === 'completed',
                     'bg-red-100 text-red-700': isFailed(job.status),
                 }"
@@ -35,6 +35,22 @@
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.4 0 0 5.4 0 12h4z"></path>
                 </svg>
                 {{ 'home.job_processing'|trans }}
+            </div>
+        </template>
+
+        {# CNV-71-03: клиентский поллинг сдался через ~5 минут (POLL_GAVE_UP_STATUS,
+           _converter_app_script.html.twig) — задача НЕ failed/expired на сервере,
+           просто ждёт воркера дольше, чем мы готовы крутить спиннер. Нейтральная
+           (НЕ красная) подача, download-кнопка скрыта (условие ниже завязано
+           строго на 'completed'), ссылка на /history — тем же путём/копией, что
+           и постоянная ссылка формы (home.history_link / app_history). #}
+        <template x-if="job.status === 'poll_gave_up'">
+            <div class="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <p>{{ 'home.poll_gave_up_message'|trans }}</p>
+                <a
+                    href="{{ path('app_history') }}"
+                    class="mt-2 inline-block font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+                >{{ 'home.history_link'|trans }}</a>
             </div>
         </template>
 
@@ -62,8 +78,14 @@
             </div>
         </template>
 
+        {# CNV-71-03: для 'expired' ВСЕГДА показываем локальный (авторский)
+           текст, а не job.error — серверный errorMessage для этого статуса
+           фиксированная строка без упоминания возврата оплаты
+           (ConversionResultPersister::persist()), а AC требует явно сказать
+           про возврат. Для 'failed' порядок не меняем — там job.error несёт
+           реальную, разную по конверсиям причину отказа. #}
         <template x-if="isFailed(job.status)">
-            <div class="mt-4 text-sm text-red-600" x-text="job.error || (job.status === 'expired' ? '{{ 'home.error_expired'|trans|e('js') }}' : '{{ 'home.error_failed'|trans|e('js') }}')"></div>
+            <div class="mt-4 text-sm text-red-600" x-text="job.status === 'expired' ? '{{ 'home.error_expired'|trans|e('js') }}' : (job.error || '{{ 'home.error_failed'|trans|e('js') }}')"></div>
         </template>
     </div>
 </template>

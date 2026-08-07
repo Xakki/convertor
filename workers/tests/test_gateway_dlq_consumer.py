@@ -18,6 +18,12 @@ KeyDB-слой — на РЕАЛЬНОМ keydb (как в `test_gateway_reclaim_
       relay-вызов её наконец XACK'ает (доказывает, что "retry на следующем
       sweep'е" — не пустые слова, см. dlq_consumer.py docstring).
   [F] Poison-запись (`conversionId<=0`) дропается (ack) БЕЗ вызова relay.
+  [G] Relay 2xx → запись XDEL'ена из conv.dead (XLEN падает до 0, монотонный
+      gauge CNV-71 честно возвращается к нулю, не только PEL пуст).
+  [H] Relay провал → запись НЕ XDEL'ена (XLEN не падает) — симметрично [C].
+  [I] Аудит-лог (WARNING, DLQ_AUDIT_LOG_MARKER) эмиттится ДО XDEL с полным
+      декодированным payload'ом — единственная сохранившаяся копия сырой
+      записи после её удаления из стрима.
 """
 
 from __future__ import annotations
@@ -28,7 +34,11 @@ import json
 import pytest
 
 from workers.gateway.config import Config
-from workers.gateway.dlq_consumer import DLQ_CONSUMER_NAME, run_dlq_consumer_loop
+from workers.gateway.dlq_consumer import (
+    DLQ_AUDIT_LOG_MARKER,
+    DLQ_CONSUMER_NAME,
+    run_dlq_consumer_loop,
+)
 from workers.gateway.keydb import DLQ_STREAM, GROUP, KeyDbGateway, build_client
 
 # ---------------------------------------------------------------------------
@@ -68,6 +78,10 @@ async def _seed_dlq(client, conv_id: int, reason: str, processing_ms=None, attem
 async def _pending_count(client) -> int:
     res = await client.xpending(DLQ_STREAM, GROUP)
     return int(res["pending"])
+
+
+async def _xlen(client) -> int:
+    return int(await client.xlen(DLQ_STREAM))
 
 
 class FakeRelay:
@@ -284,6 +298,96 @@ async def test_consumer_drops_poison_conversion_id_without_calling_relay():
 
         assert relay.calls == []  # poison entry never reaches relay
         assert await _pending_count(client) == 0  # dropped via XACK, not stuck in PEL
+    finally:
+        await client.delete(DLQ_STREAM)
+        await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# [G] Relay 2xx → запись XDEL'ена (XLEN → 0, монотонный gauge CNV-71)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consumer_deletes_entry_from_stream_on_success():
+    """После XACK успешная запись также XDEL'ится — XLEN, а не только PEL,
+    возвращается к 0 (это и есть фикс `ConvertorDeadLetterGrowing`: без XDEL
+    XLEN монотонно растёт и алерт никогда не гаснет)."""
+    client, keydb = await _new_real_kv()
+    try:
+        await client.delete(DLQ_STREAM)  # stale entries from other suites would be read first
+        await _seed_dlq(client, conv_id=2001, reason="deleted after success")
+        relay = FakeRelay(ok=True)
+
+        await _run_one_sweep(keydb, relay, _cfg())
+
+        assert relay.calls == [(2001, "deleted after success", None, 0)]
+        assert await _pending_count(client) == 0
+        assert await _xlen(client) == 0
+    finally:
+        await client.delete(DLQ_STREAM)
+        await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# [H] Relay провал → запись НЕ XDEL'ена (XLEN не падает)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consumer_does_not_delete_entry_on_relay_failure():
+    client, keydb = await _new_real_kv()
+    try:
+        await client.delete(DLQ_STREAM)  # stale entries from other suites would be read first
+        await _seed_dlq(client, conv_id=2002, reason="kept on failure")
+        relay = FakeRelay(ok=False)
+
+        await _run_one_sweep(keydb, relay, _cfg())
+
+        assert relay.calls == [(2002, "kept on failure", None, 0)]
+        # НЕ acked И НЕ deleted — запись цела и в PEL, и в стриме
+        assert await _pending_count(client) == 1
+        assert await _xlen(client) == 1
+    finally:
+        await client.delete(DLQ_STREAM)
+        await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# [I] Аудит-лог (WARNING, DLQ_AUDIT_LOG_MARKER) эмиттится ДО XDEL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consumer_logs_full_entry_before_delete(caplog):
+    """Стрим — единственная сырая копия DLQ-записи; после XDEL аудит-след
+    остаётся только в логе. Проверяем: WARNING-уровень, greppable-маркер,
+    и что в extra есть все требуемые поля (conversionId/reason/originalStream/
+    originalEntryId/entryId)."""
+    import logging
+
+    client, keydb = await _new_real_kv()
+    try:
+        await client.delete(DLQ_STREAM)  # stale entries from other suites would be read first
+        await _seed_dlq(
+            client, conv_id=2003, reason="audit me", processing_ms=42, attempt=1,
+        )
+        relay = FakeRelay(ok=True)
+
+        with caplog.at_level(logging.WARNING, logger="workers.gateway.dlq_consumer"):
+            await _run_one_sweep(keydb, relay, _cfg())
+
+        audit_records = [r for r in caplog.records if r.message == DLQ_AUDIT_LOG_MARKER]
+        assert len(audit_records) == 1
+        rec = audit_records[0]
+        assert rec.levelno == logging.WARNING
+        assert rec.conversionId == 2003
+        assert rec.reason == "audit me"
+        assert rec.originalStream == "conv.testdlq"
+        assert rec.originalEntryId == "0-0"
+        assert rec.processingMs == 42
+        assert rec.attempt == 1
+        assert rec.entryId  # non-empty Redis stream id
     finally:
         await client.delete(DLQ_STREAM)
         await client.aclose()

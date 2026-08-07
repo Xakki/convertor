@@ -32,6 +32,29 @@ final class CuratedConversionPairsTest extends TestCase
         }
     }
 
+    /**
+     * CNV-71-02: `CuratedConversionPairs` is a hand-maintained editorial
+     * SUBSET of the committed catalog (`config/catalog/conversion_pairs.json`)
+     * — used for the header dropdown / SEO pages, kept manually in sync rather
+     * than generated. This guards against that manual sync silently drifting:
+     * every curated pair must exist in the real catalog-backed registry AND
+     * its hand-written `category` must match what the registry actually
+     * routes it to.
+     */
+    public function testEveryCuratedPairCategoryMatchesTheCatalog(): void
+    {
+        $registry = $this->newSeedRegistry();
+
+        foreach (CuratedConversionPairs::all() as $pair) {
+            self::assertSame(
+                $pair['category'],
+                $registry->getCategory($pair['from'], $pair['to'])->value,
+                "Curated pair {$pair['from']} → {$pair['to']} declares category "
+                . "\"{$pair['category']}\" but the catalog disagrees",
+            );
+        }
+    }
+
     public function testGroupedKeepsCategoriesInFirstAppearanceOrderAndDropsCategoryKey(): void
     {
         $grouped = CuratedConversionPairs::grouped();

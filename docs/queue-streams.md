@@ -26,7 +26,7 @@
 | `conv.ai`        | `ai`        | AI (STT / TTS / GPT-OCR) |
 
 **Routing key formula (PHP):** `key = isAi ? 'ai' : category`.
-В seed __seed__ нет пар с `category=markup` (0 строк); live md/html/htm хранятся как `document`.
+В статическом каталоге `config/catalog/conversion_pairs.json` нет пар с `category=markup` (0 строк); live md/html/htm хранятся как `document`.
 Если пара когда-либо получит `markup`, `ConversionRegistry::streamFor()` сворачивает её в `'document'`.
 OCR override: when `$ocr=true`, `streamFor()` always returns `'image'`, regardless of category.
 The Symfony Messenger transport name is `conv_<key>`; the stream name is `conv.<key>`.
@@ -264,15 +264,30 @@ messages, and check container logs in Graylog / Portainer.
 2. **Matrix subset:** every `(from, to)` pair in a worker's `CAPABILITIES["matrix"]`
    is present in `ConversionRegistry` (worker matrix ⊆ registry).
 
-**Матрица `/formats` (ConversionRegistry):** строится по **всем** строкам
-`worker_capabilities` без фильтра по свежести, `status` или `lastSeen` (см.
-`ConversionRegistry::buildMatrixFromCapabilities()`, registry-06). Soft-filter
-матрицы сознательно отвергнут (CNV-6): liveness — сигнал мониторинга, не вход
-маршрутизации. Очистка устаревших и junk-строк — long-TTL GC / CNV-36, не
-soft-filter маршрутизации.
+**Матрица `/formats` (ConversionRegistry):** CNV-71-02 убрал DB как источник
+матрицы целиком — `ConversionRegistry::loadCatalogMatrix()` читает статический
+коммиченный каталог `app-symfony/config/catalog/conversion_pairs.json`
+(сгенерирован из `worker_capabilities.json`, который генерируется из Python
+`CAPABILITIES` воркеров через `workers/tools/gen_worker_capabilities.py`), не
+таблицу `worker_capabilities` и не `status`/`lastSeen`. Прежний DB-backed
+метод `buildMatrixFromCapabilities()` удалён; `WorkerCapabilityRepository`
+используется только для live-диагностики воркеров
+(`ConversionRegistry::getCapabilityWarnings()`), не для построения матрицы.
+Soft-filter по liveness остаётся сознательно отвергнутым (CNV-6) и для
+каталога неприменим: каталог — не рантайм-снимок БД. Очистка устаревших и
+junk-строк — long-TTL GC / CNV-36, никак не влияет на состав каталога.
 
 This prevents two silent failure modes:
-- A stream exists in PHP routing but no worker listens → jobs accumulate forever.
+- A stream exists in PHP routing but no worker listens → jobs accumulate forever
+  **if the deploy itself goes unnoticed** — the drift test blocks it before it
+  ships. If it ships anyway (or a previously-live workerType goes fully dark
+  post-deploy), CNV-71-03's expiry-sweep (`workers/gateway/expiry.py`,
+  `WORKER_CLAIM_TIMEOUT_MINUTES`, env var table above) now bounds the damage:
+  a backlog entry never delivered to any consumer is relayed to
+  `POST /api/v1/internal/worker/expire` and terminated as `Conversion::Expired`
+  (refunded) instead of sitting in the stream forever — see `queue-contract.md`
+  §5 for the wire contract. The drift test still matters: it catches the
+  misconfiguration at deploy time, before any user waits out the timeout.
 - A worker claims pairs the registry doesn't know about → those conversions are
   never dispatched to that worker (dead capability).
 
@@ -301,6 +316,9 @@ coordinates to reach the gateway and Symfony.
 | `DLQ_CONSUMER_BLOCK_MS` | `5000` | Blocking timeout on `conv.dead`'s `XREADGROUP` |
 | `DLQ_CONSUMER_RETRY_IDLE_MS` | `30000` | Idle threshold for retry-reclaiming unacked `conv.dead` entries |
 | `DLQ_CONSUMER_RECLAIM_BATCH` | `10` | Max `conv.dead` entries reclaimed per retry pass |
+| `WORKER_CLAIM_TIMEOUT_MINUTES` | `60` | CNV-71-03: age threshold (minutes) for the expiry-sweep — a `conv.<type>` backlog entry never delivered to any consumer (see §8 below) for longer than this is relayed to `POST /api/v1/internal/worker/expire` and dropped |
+| `EXPIRY_SWEEP_INTERVAL_S` | `300.0` | Tick interval of the expiry-sweep loop (`workers/gateway/expiry.py`) — deliberately its OWN interval, not `RECLAIM_INTERVAL_S` (§3 idle-reclaim is a different mechanism, see §8) |
+| `EXPIRY_SWEEP_BATCH` | `50` | Max never-delivered backlog entries scanned per stream per expiry-sweep tick |
 
 `MAX_RETRIES` (delivery-count threshold before DLQ, §4) is a hardcoded constant (`3`) in
 `workers/gateway/keydb.py`, not an env var.

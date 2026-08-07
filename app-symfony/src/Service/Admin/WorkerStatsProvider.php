@@ -36,20 +36,9 @@ use App\Service\Worker\WorkerLivenessTtl;
  * через {@see \App\Service\Worker\WorkerLivenessTtl::staleThreshold()}, чтобы
  * будущая правка floor/единиц/jitter в одном месте не разошлась молча со
  * вторым.
- *
- * Seed-строки (`instanceId='__seed__'`, `[[registry-03-seed-migration]]`)
- * помечены `isSeed=true`: `stale` для них считается тем же способом (честные
- * сырые данные — их `lastSeen` действительно старый, это дата seed-миграции),
- * но UI ОБЯЗАН не показывать их как "мёртвый воркер" — они не воркер, а
- * статичный снимок матрицы, который никогда не устаревает по смыслу и не
- * получает liveness-пуш. Решение о представлении — на фронтенде
- * (`templates/admin/workers.html.twig`), не здесь: сервис отдаёт честные
- * данные + флаг, разметка решает, как их показать.
  */
 final readonly class WorkerStatsProvider
 {
-    private const string SEED_INSTANCE_ID = '__seed__';
-
     /**
      * Внутренний sentinel для группировки легacy-строк (`host IS NULL`) в
      * {@see collectHosts()} — просто читаемее на диффе, чем buckets[null].
@@ -70,7 +59,6 @@ final readonly class WorkerStatsProvider
      *     workers: list<array{
      *         workerType: string,
      *         instanceId: string,
-     *         isSeed: bool,
      *         image: string|null,
      *         version: string|null,
      *         lastSeen: string,
@@ -101,11 +89,9 @@ final readonly class WorkerStatsProvider
             $this->repository->findAllCapabilities(),
         );
 
-        // workerType asc, seed-строка первой в своей группе (естественная
-        // "база, затем живые инстансы" читаемость), затем instanceId asc.
+        // workerType asc, затем instanceId asc.
         usort($rows, static fn (array $a, array $b): int
             => $a['workerType'] <=> $b['workerType']
-            ?: $b['isSeed']     <=> $a['isSeed']
             ?: $a['instanceId'] <=> $b['instanceId']);
 
         return ['ttlHours' => $this->ttlHours, 'workers' => $rows];
@@ -135,7 +121,7 @@ final readonly class WorkerStatsProvider
      *         mem: array{avg: float, max: float}|null,
      *         load: array{avg: float, max: float}|null,
      *         images: list<string>, versions: list<string>,
-     *         hasAi: bool, hasSeed: bool
+     *         hasAi: bool
      *     }>
      * }
      */
@@ -184,7 +170,7 @@ final readonly class WorkerStatsProvider
      *     mem: array{avg: float, max: float}|null,
      *     load: array{avg: float, max: float}|null,
      *     images: list<string>, versions: list<string>,
-     *     hasAi: bool, hasSeed: bool
+     *     hasAi: bool
      * }
      */
     private function aggregateHost(?string $host, array $rows): array
@@ -205,7 +191,6 @@ final readonly class WorkerStatsProvider
         $images        = [];
         $versions      = [];
         $hasAi         = false;
-        $hasSeed       = false;
 
         foreach ($rows as $row) {
             match ($row['status']) {
@@ -249,9 +234,6 @@ final readonly class WorkerStatsProvider
             if ($row['isAi']) {
                 $hasAi = true;
             }
-            if ($row['isSeed']) {
-                $hasSeed = true;
-            }
         }
 
         $images = array_values(array_unique($images));
@@ -275,7 +257,6 @@ final readonly class WorkerStatsProvider
             'images'        => $images,
             'versions'      => $versions,
             'hasAi'         => $hasAi,
-            'hasSeed'       => $hasSeed,
         ];
     }
 
@@ -307,7 +288,7 @@ final readonly class WorkerStatsProvider
 
     /**
      * @return array{
-     *     workerType: string, instanceId: string, isSeed: bool,
+     *     workerType: string, instanceId: string,
      *     image: string|null, version: string|null, lastSeen: string,
      *     status: string, stale: bool, pairCount: int,
      *     matrix: array<string, list<string>>,
@@ -359,7 +340,6 @@ final readonly class WorkerStatsProvider
         return [
             'workerType'        => $cap->getWorkerType(),
             'instanceId'        => $cap->getInstanceId(),
-            'isSeed'            => $cap->getInstanceId() === self::SEED_INSTANCE_ID,
             'image'             => isset($blob['image'])   && is_string($blob['image']) ? $blob['image'] : null,
             'version'           => isset($blob['version']) && is_string($blob['version']) ? $blob['version'] : null,
             'lastSeen'          => $cap->getLastSeen()->format(\DateTimeInterface::ATOM),

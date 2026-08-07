@@ -13,21 +13,13 @@ use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 /**
  * Живой прогон long-TTL GC против реальной тест-БД (convertor-test).
  *
- * Central hard acceptance criterion (registry-06): seed-строки
- * (`instance_id='__seed__'`) НИКОГДА не удаляются GC, даже с заведомо
- * древним `last_seen` — их `last_seen` устанавливается один раз при
- * registry-03 seed-миграции и никогда не обновляется реальным
- * liveness-пушем (ни один живой воркер не владеет `__seed__`), поэтому по
- * возрасту `last_seen` seed-строки ВСЕГДА выглядят кандидатом на удаление.
- * Явное исключение `instance_id != '__seed__'` в
- * {@see WorkerCapabilityGcService::run()} — единственное, что их защищает;
- * этот тест доказывает, что исключение реально работает против живой БД, а
- * не только по чтению кода.
+ * CNV-71-04: `__seed__`-строки и их спец-обработка удалены — GC теперь
+ * удаляет ЛЮБУЮ строку старше TTL по `last_seen`, без исключений по
+ * instance_id (кроме известного junk-набора {@see WorkerCapabilityGcService::JUNK_INSTANCE_IDS}).
  *
  * Использует workerType `gc-test-fixture`, не пересекающийся ни с одним
- * реальным registry-03 seed-типом (document/image/audio/video/data/ai) —
- * иначе "до"-состояние теста было бы неотличимо от прод-seed-данных,
- * которые уже сидят в convertor-test с registry-03.
+ * реальным worker-type (document/image/audio/video/data/ai) — чтобы не
+ * задеть реальные ряды, которые могут уже сидеть в convertor-test.
  */
 final class WorkerCapabilityGcServiceTest extends KernelTestCase
 {
@@ -57,19 +49,7 @@ final class WorkerCapabilityGcServiceTest extends KernelTestCase
         parent::tearDown();
     }
 
-    public function testAncientSeedRowSurvivesGc(): void
-    {
-        $this->insertRow(self::TEST_WORKER_TYPE, '__seed__', (new \DateTimeImmutable())->modify('-10 years'));
-
-        $this->gc()->run();
-
-        self::assertTrue(
-            $this->rowExists(self::TEST_WORKER_TYPE, '__seed__'),
-            'seed row (instance_id=__seed__) must NEVER be deleted by GC, regardless of age',
-        );
-    }
-
-    public function testStaleNonSeedRowIsDeleted(): void
+    public function testStaleRowIsDeleted(): void
     {
         $this->insertRow(self::TEST_WORKER_TYPE, 'stale-instance', (new \DateTimeImmutable())->modify('-10 years'));
 
@@ -78,11 +58,11 @@ final class WorkerCapabilityGcServiceTest extends KernelTestCase
         self::assertGreaterThanOrEqual(1, $result['deleted']);
         self::assertFalse(
             $this->rowExists(self::TEST_WORKER_TYPE, 'stale-instance'),
-            'a non-seed row older than TTL must be deleted',
+            'a row older than TTL must be deleted',
         );
     }
 
-    public function testFreshNonSeedRowSurvivesGc(): void
+    public function testFreshRowSurvivesGc(): void
     {
         $this->insertRow(self::TEST_WORKER_TYPE, 'fresh-instance', new \DateTimeImmutable());
 
@@ -95,28 +75,10 @@ final class WorkerCapabilityGcServiceTest extends KernelTestCase
     }
 
     /**
-     * Both a stale seed row AND a stale non-seed row in the SAME batch —
-     * proves the exclusion is per-row (`instance_id != '__seed__'` in the
-     * WHERE clause), not an accidental all-or-nothing skip triggered by the
-     * mere presence of a seed row in the table.
-     */
-    public function testMixedBatchDeletesOnlyNonSeedStaleRow(): void
-    {
-        $ancient = (new \DateTimeImmutable())->modify('-10 years');
-        $this->insertRow(self::TEST_WORKER_TYPE, '__seed__', $ancient);
-        $this->insertRow(self::TEST_WORKER_TYPE, 'stale-sibling', $ancient);
-
-        $this->gc()->run();
-
-        self::assertTrue($this->rowExists(self::TEST_WORKER_TYPE, '__seed__'), 'seed row must survive');
-        self::assertFalse($this->rowExists(self::TEST_WORKER_TYPE, 'stale-sibling'), 'stale non-seed sibling must be deleted');
-    }
-
-    /**
-     * `status` never influences the GC decision — only `last_seen` age and the
-     * seed exclusion do (see the defensive comment in
-     * {@see \App\Service\Conversion\ConversionRegistry::buildMatrixFromCapabilities()}
-     * for the routing-side counterpart of this same guarantee). Proven both
+     * `status` never influences the GC decision — only `last_seen` age does
+     * (routing itself no longer reads `worker_capabilities` at all since
+     * CNV-71-02, so there is no routing-side counterpart to this guarantee
+     * anymore — this test covers the GC/diagnostics side only). Proven both
      * directions: `disconnected`-but-fresh survives, `alive`-but-ancient is
      * still deleted — status is not a shortcut past the TTL check either way.
      */
@@ -151,12 +113,12 @@ final class WorkerCapabilityGcServiceTest extends KernelTestCase
 
     /**
      * registry-09 / CNV-36: junk `test:worker` удаляется на каждом GC-проходе
-     * независимо от TTL; seed-сibling в том же workerType выживает.
+     * независимо от TTL; свежий соседний ряд того же workerType не задет.
      */
     public function testJunkTestWorkerInstanceIsAlwaysDeleted(): void
     {
         $this->insertRow(self::TEST_WORKER_TYPE, 'test:worker', new \DateTimeImmutable());
-        $this->insertRow(self::TEST_WORKER_TYPE, '__seed__', (new \DateTimeImmutable())->modify('-10 years'));
+        $this->insertRow(self::TEST_WORKER_TYPE, 'fresh-sibling', new \DateTimeImmutable());
 
         $result = $this->gc()->run();
 
@@ -166,8 +128,8 @@ final class WorkerCapabilityGcServiceTest extends KernelTestCase
             'junk instance_id test:worker must be deleted on every GC pass, regardless of last_seen age',
         );
         self::assertTrue(
-            $this->rowExists(self::TEST_WORKER_TYPE, '__seed__'),
-            'seed row must survive junk purge',
+            $this->rowExists(self::TEST_WORKER_TYPE, 'fresh-sibling'),
+            'junk purge must not affect other fresh rows in the same workerType',
         );
     }
 

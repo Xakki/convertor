@@ -42,6 +42,24 @@ At-least-once + idempotent-consumer + retry (важно понимать ВМЕ�
 - Operator-requeue (перезапуск проваленной конверсии) работает от строки БД
   (`Conversion.status=failed`), НЕ от сырого `conv.dead` — вне объёма этого
   модуля, см. kanban-карточку.
+
+XDEL после XACK (монотонный gauge, CNV-71 / `ConvertorDeadLetterGrowing`):
+- `add_to_dlq` пишет `conv.dead` БЕЗ `MAXLEN` (намеренно — любой cap > 0 не даёт
+  `XLEN` вернуться к 0, алерт `convertor_dead_letter_messages > 0` (см.
+  `workers/metrics_exporter/exporter.py`) горел бы вечно после первой же
+  DLQ-записи). Раньше `XACK` был терминальной операцией над записью — стрим
+  рос монотонно, `XLEN` никогда не уменьшался. Теперь `_process_entry` ПОСЛЕ
+  успешного `XACK` также делает `XDEL` (тот же порядок "XDEL только после
+  подтверждённого relay-2xx", что в `expiry.py`) — записи, которые consumer
+  успешно зафиналил в PHP, больше не занимают место в `conv.dead`, и gauge
+  честно падает до 0.
+- Перед `XDEL` вся декодированная запись логируется на уровне WARNING
+  (маркер `DLQ_AUDIT_LOG_MARKER`) — стрим был единственной сырой копией,
+  этот лог становится аудит-следом.
+- Edge case: если consumer упадёт МЕЖДУ `XACK` и `XDEL`, запись останется в
+  `conv.dead` навсегда осиротевшей (PHP уже зафиналил Conversion, но XLEN не
+  уменьшится на эту запись) — редкий случай, отдельного механизма для него
+  нет (принято сознательно, не разработка "cleanup-sweep").
 """
 
 from __future__ import annotations
@@ -52,6 +70,10 @@ import logging
 from workers.gateway.config import Config
 from workers.gateway.keydb import DLQ_STREAM, KeyDbGateway
 from workers.gateway.relay import RelayClient
+
+# Greppable маркер аудит-строки — единственная сохранившаяся копия сырой
+# DLQ-записи после XDEL (см. `_process_entry` docstring).
+DLQ_AUDIT_LOG_MARKER = "dlq entry audit (pre-delete)"
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +167,14 @@ async def run_dlq_consumer_loop(
 async def _process_entry(
     keydb: KeyDbGateway, relay: RelayClient, entry_id: str, payload: dict
 ) -> None:
-    """Одна DLQ-запись: relay.post_dlq_fail → XACK при True, иначе оставить unacked.
+    """Одна DLQ-запись: relay.post_dlq_fail → XACK при True → XDEL, иначе оставить unacked.
 
     `post_dlq_fail` возвращает `True` и на 2xx, и на terminal-4xx (её контракт,
     см. docstring) — обе ветки здесь неразличимы намеренно: и то, и то ack-worthy.
+
+    Порядок ПОСЛЕ успеха: `XACK` → аудит-лог (WARNING, вся декодированная
+    запись) → `XDEL` (см. module docstring "XDEL после XACK") — никогда
+    наоборот, `XDEL` до подтверждённого relay-2xx не делаем.
     """
     conversion_id = int(payload.get("conversionId", 0) or 0)
     reason = str(payload.get("reason", "") or "")
@@ -162,13 +188,33 @@ async def _process_entry(
             "dlq entry finalized",
             extra={"entryId": entry_id, "conversionId": conversion_id},
         )
+        logger.warning(
+            DLQ_AUDIT_LOG_MARKER,
+            extra={
+                "entryId": entry_id,
+                "entryTimestampMs": _entry_ms(entry_id),
+                "conversionId": conversion_id,
+                "reason": reason,
+                "originalStream": payload.get("originalStream"),
+                "originalEntryId": payload.get("originalEntryId"),
+                "processingMs": processing_ms,
+                "attempt": attempt,
+            },
+        )
+        await keydb.delete_entry(DLQ_STREAM, entry_id)
     else:
-        # Relay недоступен/5xx — НЕ ack: запись остаётся в PEL DLQ_CONSUMER_NAME,
-        # следующая итерация подберёт её через reclaim_dlq_idle (см. module docstring).
+        # Relay недоступен/5xx — НЕ ack и НЕ XDEL: запись остаётся в PEL
+        # DLQ_CONSUMER_NAME и в стриме, следующая итерация подберёт её через
+        # reclaim_dlq_idle (см. module docstring).
         logger.warning(
             "dlq relay failed — leaving unacked for retry",
             extra={"entryId": entry_id, "conversionId": conversion_id},
         )
+
+
+def _entry_ms(entry_id: str) -> int:
+    """Миллисекундный префикс Redis stream id (`<ms>-<seq>`) → int (зеркалит `expiry.py`)."""
+    return int(entry_id.split("-", 1)[0])
 
 
 def _coerce_processing_ms(value: object) -> int | None:

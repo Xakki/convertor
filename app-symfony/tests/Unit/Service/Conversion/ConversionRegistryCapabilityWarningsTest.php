@@ -11,10 +11,12 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Проверяет {@see ConversionRegistry::getCapabilityWarnings()} — admin-видимый
- * сигнал о AI-воркерах, чьи `matrix`-форматы молча дропаются из routing-матрицы
- * из-за отсутствующего/нерезолвящегося `matrix_categories` (см.
- * `buildMatrixFromCapabilities()`). До этого сигнал тонул в `logger->warning`
- * и не был виден в admin-панели.
+ * сигнал о AI-воркерах, чьи `matrix`-форматы молча дропались бы редукцией
+ * (см. `reduceCapabilities()`) из-за отсутствующего/нерезолвящегося
+ * `matrix_categories`. До этого сигнал тонул в `logger->warning` и не был
+ * виден в admin-панели. Не затронуто CNV-71-02: этот метод по-прежнему читает
+ * `WorkerCapabilityRepository` напрямую (live-диагностика воркеров), в
+ * отличие от роутинг-матрицы.
  */
 final class ConversionRegistryCapabilityWarningsTest extends TestCase
 {

@@ -1,0 +1,2760 @@
+[
+  {
+    "from": "3gp",
+    "to": "avi",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "3gp",
+    "to": "flac",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "3gp",
+    "to": "mkv",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "3gp",
+    "to": "mov",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "3gp",
+    "to": "mp3",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "3gp",
+    "to": "mp4",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "3gp",
+    "to": "ogg",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "3gp",
+    "to": "wav",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "3gp",
+    "to": "webm",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "aac",
+    "to": "flac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "aac",
+    "to": "m4a",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "aac",
+    "to": "mp3",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "aac",
+    "to": "ogg",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "aac",
+    "to": "opus",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "aac",
+    "to": "wav",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "avi",
+    "to": "flac",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "avi",
+    "to": "mkv",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "avi",
+    "to": "mov",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "avi",
+    "to": "mp3",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "avi",
+    "to": "mp4",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "avi",
+    "to": "ogg",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "avi",
+    "to": "wav",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "avi",
+    "to": "webm",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "bmp",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "bmp",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "bmp",
+    "to": "jpg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "bmp",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "bmp",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "bmp",
+    "to": "tiff",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "bmp",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "json",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "toml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "xml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "yaml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "csv",
+    "to": "yml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "doc",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "doc",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "doc",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "doc",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "doc",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "doc",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "doc",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "doc",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "docx",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "docx",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "docx",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "docx",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "docx",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "docx",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "docx",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "epub",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "epub",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "epub",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "epub",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "epub",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "epub",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "aac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "m4a",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "mp3",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "ogg",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "opus",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "srt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "txt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "vtt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "flac",
+    "to": "wav",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "avi",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "flac",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "mkv",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "mov",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "mp3",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "mp4",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "ogg",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "wav",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "flv",
+    "to": "webm",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "gif",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "gif",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "gif",
+    "to": "jpg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "gif",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "gif",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "gif",
+    "to": "tiff",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "gif",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "htm",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "htm",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "htm",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "htm",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "htm",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "htm",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "htm",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "htm",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "html",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "html",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "html",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "html",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "html",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "html",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "html",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ico",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ico",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ico",
+    "to": "jpg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ico",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ico",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ico",
+    "to": "tiff",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ico",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "docx",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "md",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "tiff",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "txt",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpeg",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpg",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpg",
+    "to": "docx",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "jpg",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpg",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpg",
+    "to": "md",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "jpg",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpg",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpg",
+    "to": "tiff",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "jpg",
+    "to": "txt",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "jpg",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "json",
+    "to": "csv",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "json",
+    "to": "toml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "json",
+    "to": "xml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "json",
+    "to": "yaml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "json",
+    "to": "yml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "latex",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "latex",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "latex",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "latex",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "latex",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "latex",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "latex",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "latex",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "aac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "flac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "mp3",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "ogg",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "opus",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "srt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "txt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "vtt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "m4a",
+    "to": "wav",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "mp3",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "ogg",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "md",
+    "to": "wav",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "mkv",
+    "to": "avi",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mkv",
+    "to": "flac",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mkv",
+    "to": "mov",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mkv",
+    "to": "mp3",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mkv",
+    "to": "mp4",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mkv",
+    "to": "ogg",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mkv",
+    "to": "wav",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mkv",
+    "to": "webm",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mov",
+    "to": "avi",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mov",
+    "to": "flac",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mov",
+    "to": "mkv",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mov",
+    "to": "mp3",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mov",
+    "to": "mp4",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mov",
+    "to": "ogg",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mov",
+    "to": "wav",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mov",
+    "to": "webm",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "aac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "flac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "m4a",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "ogg",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "opus",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "srt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "txt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "vtt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp3",
+    "to": "wav",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp4",
+    "to": "avi",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp4",
+    "to": "flac",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp4",
+    "to": "mkv",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp4",
+    "to": "mov",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp4",
+    "to": "mp3",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp4",
+    "to": "ogg",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp4",
+    "to": "wav",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "mp4",
+    "to": "webm",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odp",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odp",
+    "to": "pptx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ods",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ods",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ods",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ods",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ods",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ods",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ods",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ods",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odt",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odt",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odt",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odt",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odt",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odt",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "odt",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "aac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "flac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "m4a",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "mp3",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "opus",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "srt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "txt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "vtt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "ogg",
+    "to": "wav",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "aac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "flac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "m4a",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "mp3",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "ogg",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "srt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "txt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "vtt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "opus",
+    "to": "wav",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pages",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pages",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pages",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pages",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pages",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pages",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pages",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pages",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pdf",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "pdf",
+    "to": "jpg",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pdf",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "pdf",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "png",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "png",
+    "to": "docx",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "png",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "png",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "png",
+    "to": "jpg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "png",
+    "to": "md",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "png",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "png",
+    "to": "tiff",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "png",
+    "to": "txt",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "png",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ppt",
+    "to": "odp",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ppt",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "ppt",
+    "to": "pptx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pptx",
+    "to": "odp",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "pptx",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rst",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rst",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rst",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rst",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rst",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rst",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rst",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rst",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rtf",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rtf",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rtf",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rtf",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rtf",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rtf",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "rtf",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tex",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tex",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tex",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tex",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tex",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tex",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tex",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tex",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "docx",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "jpg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "md",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "txt",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tif",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tiff",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tiff",
+    "to": "docx",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "tiff",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tiff",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tiff",
+    "to": "jpg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tiff",
+    "to": "md",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "tiff",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tiff",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "tiff",
+    "to": "txt",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": true
+  },
+  {
+    "from": "tiff",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "toml",
+    "to": "csv",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "toml",
+    "to": "json",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "toml",
+    "to": "xml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "toml",
+    "to": "yaml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "toml",
+    "to": "yml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "json",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "mp3",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "ogg",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "wav",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "aac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "flac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "m4a",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "mp3",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "ogg",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "opus",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "srt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "txt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "wav",
+    "to": "vtt",
+    "category": "audio",
+    "isAi": true,
+    "ocrCapable": false
+  },
+  {
+    "from": "webm",
+    "to": "avi",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webm",
+    "to": "flac",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webm",
+    "to": "mkv",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webm",
+    "to": "mov",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webm",
+    "to": "mp3",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webm",
+    "to": "mp4",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webm",
+    "to": "ogg",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webm",
+    "to": "wav",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webp",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webp",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webp",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webp",
+    "to": "jpg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webp",
+    "to": "pdf",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webp",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "webp",
+    "to": "tiff",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wiki",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wiki",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wiki",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wiki",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wiki",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wiki",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wiki",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wiki",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wma",
+    "to": "aac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wma",
+    "to": "flac",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wma",
+    "to": "m4a",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wma",
+    "to": "mp3",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wma",
+    "to": "ogg",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wma",
+    "to": "opus",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wma",
+    "to": "wav",
+    "category": "audio",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "avi",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "flac",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "mkv",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "mov",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "mp3",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "mp4",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "ogg",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "wav",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "wmv",
+    "to": "webm",
+    "category": "video",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xls",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xls",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xls",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xls",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xls",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xls",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xls",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xls",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xlsx",
+    "to": "docx",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xlsx",
+    "to": "epub",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xlsx",
+    "to": "html",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xlsx",
+    "to": "md",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xlsx",
+    "to": "odt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xlsx",
+    "to": "pdf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xlsx",
+    "to": "rtf",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xlsx",
+    "to": "txt",
+    "category": "document",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xml",
+    "to": "csv",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xml",
+    "to": "json",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xml",
+    "to": "toml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xml",
+    "to": "yaml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "xml",
+    "to": "yml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "yaml",
+    "to": "csv",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "yaml",
+    "to": "json",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "yaml",
+    "to": "toml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "yaml",
+    "to": "xml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "yml",
+    "to": "csv",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "yml",
+    "to": "json",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "yml",
+    "to": "toml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "yml",
+    "to": "xml",
+    "category": "data",
+    "isAi": false,
+    "ocrCapable": false
+  }
+]

@@ -36,7 +36,6 @@ class Schedule implements ScheduleProviderInterface
             ->add(RecurringMessage::every('1 hour', new FileCleanupMessage()))
 
             // Ежечасный long-TTL GC мёртвых worker_capabilities строк (registry-06).
-            // Seed-строки (__seed__) исключены безусловно — см. WorkerCapabilityGcService.
             ->add(RecurringMessage::every('1 hour', new WorkerCapabilityGcMessage()))
         ;
     }

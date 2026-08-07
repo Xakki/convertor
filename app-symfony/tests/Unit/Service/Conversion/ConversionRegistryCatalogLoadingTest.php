@@ -1,0 +1,159 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Unit\Service\Conversion;
+
+use App\Enum\FileCategory;
+use App\Service\Conversion\ConversionRegistry;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * CNV-71-02: {@see ConversionRegistry} builds its routing matrix from a
+ * committed catalog FILE (`config/catalog/conversion_pairs.json` by default —
+ * see `ConversionRegistry::defaultCatalogPath()`), not from a DB table
+ * anymore. This suite covers that file-loading seam directly: a missing,
+ * malformed OR EMPTY file must all fail LOUDLY (never silently degrade to an
+ * empty matrix — an empty matrix here means every format and every
+ * conversion on the site 400s; there is no legitimate case for a committed
+ * empty catalog), and the matrix is memoized per registry instance (one file
+ * read per instance, not per method call).
+ */
+final class ConversionRegistryCatalogLoadingTest extends TestCase
+{
+    private string $tmpDir;
+
+    protected function setUp(): void
+    {
+        $this->tmpDir = sys_get_temp_dir() . '/conversion_registry_catalog_test_' . bin2hex(random_bytes(8));
+        mkdir($this->tmpDir);
+    }
+
+    protected function tearDown(): void
+    {
+        foreach (glob($this->tmpDir . '/*') ?: [] as $file) {
+            unlink($file);
+        }
+        rmdir($this->tmpDir);
+    }
+
+    private function writeCatalog(string $contents): string
+    {
+        $path = $this->tmpDir . '/catalog.json';
+        file_put_contents($path, $contents);
+
+        return $path;
+    }
+
+    public function testMissingCatalogFileThrowsInsteadOfDegradingToEmptyMatrix(): void
+    {
+        $registry = new ConversionRegistry(catalogPath: $this->tmpDir . '/does-not-exist.json');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/файл каталога не найден/u');
+
+        $registry->getSupportedFormats();
+    }
+
+    public function testMalformedJsonThrows(): void
+    {
+        $path     = $this->writeCatalog('{not valid json');
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/невалидный JSON/u');
+
+        $registry->isSupported('jpg', 'png');
+    }
+
+    public function testNonArrayRootThrows(): void
+    {
+        $path     = $this->writeCatalog('{"from": "jpg"}');
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        $this->expectException(\RuntimeException::class);
+
+        $registry->getSupportedFormats();
+    }
+
+    public function testRowMissingRequiredKeyThrows(): void
+    {
+        // 'category' отсутствует
+        $path     = $this->writeCatalog('[{"from": "jpg", "to": "png", "isAi": false}]');
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        $this->expectException(\RuntimeException::class);
+
+        $registry->getSupportedFormats();
+    }
+
+    public function testUnknownCategoryValueThrows(): void
+    {
+        $path     = $this->writeCatalog('[{"from": "jpg", "to": "png", "category": "bogus", "isAi": false}]');
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        $this->expectException(\RuntimeException::class);
+
+        $registry->getSupportedFormats();
+    }
+
+    /**
+     * Синтаксически валидный, но ПУСТОЙ каталог — не «честный вырожденный
+     * случай», а ГРОМКАЯ ошибка: легитимного коммиченного пустого каталога
+     * не существует, пустая матрица означает потерю всех форматов сайтом.
+     */
+    public function testSyntacticallyValidEmptyArrayThrows(): void
+    {
+        $path     = $this->writeCatalog('[]');
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/пуст/u');
+
+        $registry->getSupportedFormats();
+    }
+
+    public function testValidTinyCatalogBuildsWorkingMatrix(): void
+    {
+        $path = $this->writeCatalog(json_encode([
+            ['from' => 'jpg', 'to' => 'png', 'category' => 'image', 'isAi' => false, 'ocrCapable' => false],
+            ['from' => 'mp3', 'to' => 'txt', 'category' => 'audio', 'isAi' => true, 'ocrCapable' => false],
+        ], JSON_THROW_ON_ERROR));
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        self::assertTrue($registry->isSupported('jpg', 'png'));
+        self::assertSame(FileCategory::Image, $registry->getCategory('jpg', 'png'));
+        self::assertFalse($registry->isAi('jpg', 'png'));
+        self::assertSame('image', $registry->streamFor('jpg', 'png'));
+
+        self::assertTrue($registry->isSupported('mp3', 'txt'));
+        self::assertTrue($registry->isAi('mp3', 'txt'));
+        self::assertSame('ai', $registry->streamFor('mp3', 'txt'));
+
+        self::assertFalse($registry->isSupported('png', 'jpg'), 'reverse direction is not declared');
+    }
+
+    /**
+     * Матрица держится в per-request memo (см. `ConversionRegistry::getMatrix()`):
+     * файл читается максимум один раз за инстанс. Доказательство от противного —
+     * удаляем файл ПОСЛЕ первого успешного построения матрицы и убеждаемся, что
+     * повторные вызовы всё ещё работают (не падают на "файл не найден").
+     */
+    public function testMatrixIsMemoizedPerInstanceNotReReadFromDisk(): void
+    {
+        $path = $this->writeCatalog(json_encode([
+            ['from' => 'jpg', 'to' => 'png', 'category' => 'image', 'isAi' => false, 'ocrCapable' => false],
+        ], JSON_THROW_ON_ERROR));
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        self::assertTrue($registry->isSupported('jpg', 'png'), 'precondition: matrix built successfully first');
+
+        unlink($path);
+
+        self::assertTrue(
+            $registry->isSupported('jpg', 'png'),
+            'second call must reuse the in-memory matrix, not re-read the (now missing) file',
+        );
+        self::assertSame(FileCategory::Image, $registry->getCategory('jpg', 'png'));
+    }
+}

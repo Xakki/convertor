@@ -27,4 +27,12 @@
 
 **Decisions:** *(resolved grooming questions — keep on the card after `todo/` so the rationale survives)*
 - Источник правды — код воркеров (Python-матрицы), каталог только генерируется из него, не редактируется руками — подтверждено пользователем 2026-08-04
-</content>
+
+**Execution Log:**
+- Двухстадийный генератор: Python AST-извлечение блобов возможностей воркеров (`workers/tools/capabilities_ast.py` + `gen_worker_capabilities.py` → `app-symfony/config/catalog/worker_capabilities.json`, 6 блобов) → PHP-редукция через существующий `ConversionRegistry` (команда `app:catalog:generate-conversion-pairs` → `app-symfony/config/catalog/conversion_pairs.json`, 386 пар).
+- Причина двухстадийности: category/isAi/precedence — политика, она осталась только в `ConversionRegistry` (`reduceCapabilities()`), в Python её нет.
+- Регенерация — `make formats-catalog` (обе стадии).
+- Drift-гварды: PHP-тест `ConversionPairsCatalogDriftTest` + Python `test_catalog_drift.py`, оба под `make test`.
+- Сверка с эталоном `tests/Fixtures/conversion_matrix.golden.txt`: 386 из 394, ровно 8 отсутствующих — `pages->{docx,epub,html,md,odt,pdf,rtf,txt}`, исключены сознательно (LibreOffice добавляет `pages` в матрицу рантайм-проверкой libetonyek, статический каталог такое не моделирует).
+- Находка: регистрирующихся workerType шесть, а не пять — `workers/ffmpeg/worker.py` регистрируется дважды, как `audio` и как `video`.
+- QA: `make phpstan` чисто, `make cs-check` чисто, `make TEST=1 test-drift` 6/6, PHP-сьют зелёный кроме 2 pre-existing падений в `ConversionTextInputControllerTest` (BillingMode enum не мокается, к этой задаче отношения не имеет).

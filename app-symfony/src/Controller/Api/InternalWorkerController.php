@@ -32,6 +32,9 @@ use Symfony\Component\Routing\Attribute\Route;
  *   fail() ключуется НАПРЯМУЮ по conversionId (не jobId→getJobMeta): запись
  *   `worker:job:{jobId}` к моменту DLQ-записи уже удалена, поэтому getJobMeta()
  *   дал бы гарантированный 404.
+ * - expire (CNV-71-03): принятая, но никем не взятая за WORKER_CLAIM_TIMEOUT_MINUTES
+ *   задача → gateway детектит таймаут и релеит сюда → пометить expired + refund
+ *   (тот же путь, что fail/dlq-fail, target-статус Expired вместо Failed).
  */
 #[Route('/api/v1/internal/worker')]
 final class InternalWorkerController extends AbstractController
@@ -182,6 +185,51 @@ final class InternalWorkerController extends AbstractController
     }
 
     /**
+     * POST /api/v1/internal/worker/expire
+     * Body: {"conversionId": <int>, "reason": "worker_timeout"}
+     *
+     * CNV-71-03: closes the "hybrid" worker-availability check — a pair whose
+     * workerType HAS a worker_capabilities row (even offline/disconnected) is
+     * accepted and queued by {@see \App\Service\Conversion\ConversionManager}
+     * instead of being refused outright. If NO worker ever claims the accepted
+     * job within `WORKER_CLAIM_TIMEOUT_MINUTES`, the gateway (Python, separate
+     * zone) detects the timeout and relays here — this endpoint does NOT do
+     * the detection itself, only the terminal-state write.
+     *
+     * `reason` is accepted but not echoed back into errorMessage: the Russian
+     * user-facing message is authored here (see
+     * {@see ConversionResultPersister::persist()}'s 'expired' branch), not
+     * passed through — unlike dlq-fail's free-text `reason`, this one is a
+     * fixed wire-contract value, nothing to surface verbatim.
+     *
+     * Idempotent via {@see ConversionResultPersister::persist()}'s terminal-
+     * status guard (now including Expired): already Completed/Failed/Expired →
+     * no DB write, still 200 `{"ok":true}`. Refund/chain fail-propagation
+     * reuse the exact 'failed' path (same ConversionFailed event dispatch).
+     */
+    #[Route('/expire', methods: ['POST'])]
+    public function expire(Request $request): JsonResponse
+    {
+        $body         = json_decode((string) $request->getContent(), true, 512, 0);
+        $conversionId = is_array($body) && isset($body['conversionId']) ? (int) $body['conversionId'] : 0;
+
+        if ($conversionId <= 0) {
+            return $this->json(['error' => '"conversionId" field is required'], Response::HTTP_BAD_REQUEST);
+        }
+
+        if ($this->conversions->find($conversionId) === null) {
+            return $this->json(['error' => 'Conversion not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $this->persister->persist([
+            'conversionId' => $conversionId,
+            'state'        => 'expired',
+        ]);
+
+        return $this->json(['ok' => true]);
+    }
+
+    /**
      * POST /api/v1/internal/worker/liveness
      * Body: {"instances":[{"workerType":"...","instanceId":"...",
      *   "status":"alive"|"disconnected","lastSeenAt":"<ISO-8601 UTC>",
@@ -307,7 +355,8 @@ final class InternalWorkerController extends AbstractController
             return 'instanceId must be a non-empty string';
         }
         // Wire contract allows ONLY alive/disconnected (never "unknown" —
-        // that value is DB-only, reserved for seed rows, see the migration).
+        // that value is a DB column default never written by application
+        // code, see WorkerLivenessStatus::Unknown docblock).
         $status = is_string($entry['status'] ?? null) ? WorkerLivenessStatus::tryFrom($entry['status']) : null;
         if ($status === null || $status === WorkerLivenessStatus::Unknown) {
             return 'status must be "alive" or "disconnected"';

@@ -5,15 +5,16 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Controller\Api;
 
 use App\Repository\WorkerCapabilityRepository;
-use App\Service\Conversion\ConversionRegistry;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 /**
  * Функциональные тесты POST /api/v1/worker/register.
  *
- * WorkerCapabilityRepository и ConversionRegistry мокируются в контейнере,
- * чтобы тесты не зависели от живой БД.
+ * WorkerCapabilityRepository мокируется в контейнере, чтобы тесты не
+ * зависели от живой БД. ConversionRegistry больше не участвует (CNV-71-02:
+ * register() больше не инвалидирует роутинг-матрицу — та строится из
+ * статического каталога, не из этой таблицы).
  */
 final class WorkerRegisterControllerTest extends WebTestCase
 {
@@ -57,10 +58,6 @@ final class WorkerRegisterControllerTest extends WebTestCase
             ->with('image', 'host-a.image-0', self::VALID_PAYLOAD, null);
         $container->set(WorkerCapabilityRepository::class, $repo);
 
-        $registry = $this->createMock(ConversionRegistry::class);
-        $registry->expects(self::once())->method('invalidateMatrix');
-        $container->set(ConversionRegistry::class, $registry);
-
         $client->request(
             'POST',
             self::URL,
@@ -86,9 +83,6 @@ final class WorkerRegisterControllerTest extends WebTestCase
 
         $repo = $this->createStub(WorkerCapabilityRepository::class);
         $container->set(WorkerCapabilityRepository::class, $repo);
-
-        $registry = $this->createStub(ConversionRegistry::class);
-        $container->set(ConversionRegistry::class, $registry);
 
         $client->request(
             'POST',
@@ -119,9 +113,6 @@ final class WorkerRegisterControllerTest extends WebTestCase
             ->with('image', 'host-a.image-0', $payload, 'xbook-remote');
         $container->set(WorkerCapabilityRepository::class, $repo);
 
-        $registry = $this->createStub(ConversionRegistry::class);
-        $container->set(ConversionRegistry::class, $registry);
-
         $client->request(
             'POST',
             self::URL,
@@ -145,9 +136,6 @@ final class WorkerRegisterControllerTest extends WebTestCase
             ->with('image', 'host-a.image-0', self::VALID_PAYLOAD, null);
         $container->set(WorkerCapabilityRepository::class, $repo);
 
-        $registry = $this->createStub(ConversionRegistry::class);
-        $container->set(ConversionRegistry::class, $registry);
-
         $client->request(
             'POST',
             self::URL,
@@ -167,8 +155,6 @@ final class WorkerRegisterControllerTest extends WebTestCase
 
         $repo = $this->createStub(WorkerCapabilityRepository::class);
         $container->set(WorkerCapabilityRepository::class, $repo);
-        $registry = $this->createStub(ConversionRegistry::class);
-        $container->set(ConversionRegistry::class, $registry);
 
         $payload = array_merge(self::VALID_PAYLOAD, ['host' => 12345]);
 
@@ -203,10 +189,6 @@ final class WorkerRegisterControllerTest extends WebTestCase
         $repo->expects(self::never())->method('upsert');
         $container->set(WorkerCapabilityRepository::class, $repo);
 
-        $registry = $this->createMock(ConversionRegistry::class);
-        $registry->expects(self::never())->method('invalidateMatrix');
-        $container->set(ConversionRegistry::class, $registry);
-
         $payload = array_merge(self::VALID_PAYLOAD, ['workerType' => 'bogus']);
 
         $client->request(
@@ -237,8 +219,6 @@ final class WorkerRegisterControllerTest extends WebTestCase
 
         $repo = $this->createStub(WorkerCapabilityRepository::class);
         $container->set(WorkerCapabilityRepository::class, $repo);
-        $registry = $this->createStub(ConversionRegistry::class);
-        $container->set(ConversionRegistry::class, $registry);
 
         $client->request(
             'POST',
@@ -263,8 +243,6 @@ final class WorkerRegisterControllerTest extends WebTestCase
 
         $repo = $this->createStub(WorkerCapabilityRepository::class);
         $container->set(WorkerCapabilityRepository::class, $repo);
-        $registry = $this->createStub(ConversionRegistry::class);
-        $container->set(ConversionRegistry::class, $registry);
 
         $client->request(
             'POST',

@@ -16,8 +16,10 @@ use App\EventListener\ConversionChainListener;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
 use App\Exception\InsufficientBalanceException;
+use App\Exception\WorkerUnavailableException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
+use App\Repository\WorkerCapabilityRepository;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
@@ -53,6 +55,11 @@ class ConversionManager
         // Allowlist финальных пар для chaining (CNV-5). null в unit-тестах =
         // пустой allowlist (цепочки выключены), как дефолт CHAIN_ENABLED_PAIRS.
         private readonly ?ChainEnablement $chainEnablement = null,
+        // CNV-71-03: гейт "воркер существует" (worker_capabilities). Опционален,
+        // как toggleService выше — в проде autowiring инжектит реальный
+        // репозиторий; unit-тесты без БД получают null → гейт пропускается
+        // (поведение по умолчанию = воркер доступен).
+        private readonly ?WorkerCapabilityRepository $workerCapabilities = null,
     ) {
     }
 
@@ -140,6 +147,17 @@ class ConversionManager
             throw new ConversionDisabledException('Конвертация временно отключена');
         }
 
+        // Гейт "воркер существует" (CNV-71-03): ни одной строки в
+        // worker_capabilities для нужного workerType → отказ, тем же порядком
+        // причин, что и toggle-гейт выше (дёшево, до любых side-эффектов).
+        // Строка ЕСТЬ (даже offline/disconnected) → задача принимается —
+        // протухание никем не взятой задачи закрывает отдельный gateway-эндпоинт
+        // (POST /api/v1/internal/worker/expire, WORKER_CLAIM_TIMEOUT_MINUTES).
+        $workerType = $this->registry->streamFor($fromFormat, $toFormat, $ocr);
+        if ($this->workerCapabilities !== null && ! $this->workerCapabilities->existsForWorkerType($workerType)) {
+            throw new WorkerUnavailableException('Конвертация временно недоступна');
+        }
+
         // Гейт ai/video: пара, требующая полного логина (isAi ИЛИ category=Video),
         // недоступна гостю. Проверяем СРАЗУ после вычисления isAi/category и ДО
         // любых size/quota/S3-эффектов — 403 отдаётся дёшево и без сайд-эффектов.
@@ -222,6 +240,12 @@ class ConversionManager
         foreach ($path as $hop) {
             if ($this->toggleService !== null && ! $this->toggleService->isEnabled($hop['from'], $hop['to'])) {
                 throw new ConversionDisabledException('Конвертация временно отключена');
+            }
+            // Тот же гейт "воркер существует", что и в createSingleHop() —
+            // per-hop, chain никогда не OCR (см. докблок класса выше).
+            $hopWorkerType = $this->registry->streamFor($hop['from'], $hop['to'], false);
+            if ($this->workerCapabilities !== null && ! $this->workerCapabilities->existsForWorkerType($hopWorkerType)) {
+                throw new WorkerUnavailableException('Конвертация временно недоступна');
             }
             if (! $privileged && ($hop['isAi'] || $hop['category'] === FileCategory::Video)) {
                 throw new AuthRequiredException('Для ai/video конвертаций нужен вход.');
@@ -338,11 +362,13 @@ class ConversionManager
      * обычного submit. Исходник уже в `-inputs` — клиент файл не грузит.
      *
      * Порядок гейтов до side-эффектов: owner → path-safe key → S3 exists (410) →
-     * toggle → quota.check; затем copy → persist → dispatch → charge.
+     * toggle → worker-availability (CNV-71-03) → quota.check; затем copy →
+     * persist → dispatch → charge.
      *
      * @throws \RuntimeException     чужая / несуществующая (контроллер → 404)
      * @throws GoneHttpException     исходник истёк / вычищен (→ 410)
      * @throws ConversionDisabledException пара отключена админом (→ 409)
+     * @throws WorkerUnavailableException  ни одной строки в worker_capabilities (→ 503)
      */
     public function retryConversion(int $id, User $user): Conversion
     {
@@ -364,6 +390,14 @@ class ConversionManager
 
         if ($this->toggleService !== null && ! $this->toggleService->isEnabled($fromFormat, $toFormat)) {
             throw new ConversionDisabledException('Конвертация временно отключена');
+        }
+
+        // Тот же гейт "воркер существует", что и в createSingleHop()/createChain()
+        // (CNV-71-03) — retry раньше его не имел и мог поставить в очередь пару,
+        // на которую никогда не зарегистрировался воркер, вместо немедленного 503.
+        $workerType = $this->registry->streamFor($fromFormat, $toFormat, $ocr);
+        if ($this->workerCapabilities !== null && ! $this->workerCapabilities->existsForWorkerType($workerType)) {
+            throw new WorkerUnavailableException('Конвертация временно недоступна');
         }
 
         $billingMode = $this->quotaService->check($user, $category, $isAi);

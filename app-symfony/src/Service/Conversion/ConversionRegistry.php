@@ -4,38 +4,54 @@ declare(strict_types=1);
 
 namespace App\Service\Conversion;
 
-use App\Entity\WorkerCapability;
 use App\Enum\FileCategory;
 use App\Repository\WorkerCapabilityRepository;
 use Psr\Log\LoggerInterface;
-use Symfony\Contracts\Cache\CacheInterface;
-use Symfony\Contracts\Cache\ItemInterface;
 
 /**
  * Capability-driven conversion routing.
  *
- * Единственный источник матрицы — БД, таблица `worker_capabilities`,
- * построенная из register-запросов воркеров ({@see buildRoutingPairs()},
- * {@see buildMatrixFromCapabilities()}). Хардкод-фолбэк удалён (registry-05):
- * после seed-миграции (registry-03) таблица никогда не пуста в норме, а
- * пустой/недоступный результат отдаёт ЧЕСТНУЮ пустую матрицу — см.
- * {@see buildRoutingPairs()} — а не подставное значение.
+ * CNV-71-02: единственный источник МАТРИЦЫ РОУТИНГА — коммиченный статический
+ * каталог `config/catalog/conversion_pairs.json` ({@see loadCatalogMatrix()}),
+ * НЕ таблица `worker_capabilities`. Каталог — резолвленный список пар
+ * `{from, to, category, isAi}`, сгенерированный из зарегистрированных
+ * capability-блобов воркеров той же самой редукцией, что применяется к
+ * live-блобам ({@see reduceCapabilities()}, через `getSupportedFormatsFromBlobs()`
+ * и `App\Command\GenerateConversionPairsCommand`) — так что политика
+ * (non-AI побеждает AI, {@see NON_AI_PRECEDENCE} tie-break, резолв AI-категории)
+ * определена ОДИН раз и общая для генерации каталога и (раньше) для DB-backed
+ * матрицы. `worker_capabilities`/{@see WorkerCapabilityRepository} остаётся
+ * источником ТОЛЬКО для live-диагностики воркеров — {@see getCapabilityWarnings()}
+ * и `WorkerStatsProvider`/`Admin\WorkerController`/`WorkerCapabilityGcService`/
+ * `WorkerLivenessReconciler` — и НИКОГДА не читается для построения роутинг-матрицы.
  *
- * Матрица кешируется в Symfony cache.app (filesystem) и сбрасывается при каждом
- * вызове {@see invalidateMatrix()} (вызывается из register-эндпоинта). Пустой/
- * ошибочный результат построения НЕ кешируется ({@see buildMatrix()}), чтобы
- * временный сбой БД не замораживал пустую матрицу на весь TTL.
+ * Отсутствующий, невалидный (не-JSON, не-массив, ряд без from/to/category/isAi)
+ * ИЛИ ПУСТОЙ (`[]`) файл каталога — ГРОМКАЯ ошибка (`\RuntimeException` из
+ * {@see loadCatalogMatrix()}), не тихий откат к пустой матрице: пустая матрица
+ * здесь означала бы, что весь сайт разом теряет все форматы и все конвертации
+ * 400-ят. Легитимного случая коммиченного пустого каталога не существует —
+ * синтаксически валидный, но пустой `[]` трактуется так же громко, как и
+ * повреждённый файл.
+ *
+ * Матрица держится ТОЛЬКО в per-request memo (`$this->matrix`, строится один раз
+ * за запрос при первом обращении) — межзапросного кеша (`cache.app`) больше нет:
+ * каталог статичен (коммиченный файл, меняется только релизом кода), инвалидация
+ * по регистрации/GC воркера ему не нужна. Метод `invalidateMatrix()` и её 3
+ * колл-сайта (register-эндпоинт, admin `deleteStale()`,
+ * `WorkerCapabilityGcService::run()`) удалены вместе с cross-request кешем.
  *
  * AI-воркеры — только запасной вариант: пара назначается AI только если ни один
  * non-AI воркер её не занял. AI-пары объявляются плоско (mp3→txt, txt→mp3 и т.д.)
  * в самом capability-blob воркера ('isAi' => true, 'matrix', 'matrix_categories');
- * FileCategory резолвится через {@see resolveAiCategory()}.
+ * FileCategory резолвится через {@see resolveAiCategory()}. Эта политика применяется
+ * ТОЛЬКО во время генерации каталога (`getSupportedFormatsFromBlobs()`) — не во
+ * время чтения уже резолвленного `conversion_pairs.json`.
  *
  * Сигнатуры {@see getSupportedFormats()}, {@see isSupported()}, {@see streamFor()} не меняются.
  */
 class ConversionRegistry
 {
-    private const CACHE_KEY = 'conv.worker.matrix';
+    private const string DEFAULT_CATALOG_RELATIVE_PATH = '/config/catalog/conversion_pairs.json';
 
     /**
      * Explicit OCR capability set: {jpg,png,tiff,pdf} × {txt,md,docx}. Owned by
@@ -43,10 +59,11 @@ class ConversionRegistry
      * path in {@see isOcrSupported()}/{@see streamFor()} — pdf OCR is flag-only
      * (never a plain matrix entry, so pdf→txt without the flag stays document
      * text-extraction). The raster (jpg/png/tiff) OCR pairs themselves are
-     * plain matrix entries declared directly by the image worker's DB row
-     * (registry-03 seed: `$imageMatrix`) — no separate constant needed here
-     * for that half since registry-05 removed the hardcoded fallback that used
-     * to seed them (`OCR_RASTER`, now deleted as dead/unused).
+     * plain matrix entries declared directly in the static catalog
+     * (`config/catalog/conversion_pairs.json`, CNV-71-02) — no separate
+     * constant needed here for that half since registry-05 removed the
+     * hardcoded fallback that used to seed them (`OCR_RASTER`, now deleted as
+     * dead/unused).
      */
     private const OCR_SOURCES = ['jpg', 'png', 'tiff', 'pdf'];
     private const OCR_TARGETS = ['txt', 'md', 'docx'];
@@ -70,8 +87,8 @@ class ConversionRegistry
      * {@see nonAiPrecedenceRank()}'s `PHP_INT_MAX` default and reproduce the
      * exact order-dependent bug this constant exists to fix, just outside the
      * 5 types visible today). `testNonAiPrecedenceCoversEveryFileCategoryCase`
-     * (ConversionRegistryFallbackTest) fails if a future `FileCategory` case
-     * is added here unranked.
+     * (ConversionRegistryReduceCapabilitiesTest) fails if a future `FileCategory`
+     * case is added here unranked.
      *   - `document` highest: primary text-extraction path (the fix's own case).
      *   - `markup` right after `document`: no live workerType='markup' registrant
      *     exists (folded into `document` only at routing time by streamFor()),
@@ -107,17 +124,25 @@ class ConversionRegistry
     private ?array $matrix = null;
 
     /**
-     * Параметры — опциональны для конструктора, но `$repository === null` не
-     * является production-путём: autowiring в контейнере всегда инжектирует
-     * реальный репозиторий. Этот случай остаётся только ради тестов, которые
-     * намеренно проверяют поведение БЕЗ репозитория (напр.
-     * {@see getCapabilityWarnings()} без БД) — {@see buildRoutingPairs()} для
-     * него отдаёт тихую пустую матрицу, а не хардкод.
+     * `$repository` — опционален для конструктора, но `null` НЕ является
+     * production-путём для роутинг-матрицы (та больше не читает репозиторий
+     * вообще): autowiring в контейнере всегда инжектирует реальный репозиторий,
+     * а `null` остаётся только ради unit-тестов {@see getCapabilityWarnings()}
+     * без БД (тот метод — единственное, что ещё читает `$repository`).
+     *
+     * `$catalogPath` — путь к резолвленному каталогу пар (см. класс-докблок).
+     * DI-биндинг — `config/services.yaml` (`%kernel.project_dir%/config/catalog/
+     * conversion_pairs.json`); `null` (напр. `new ConversionRegistry()` без DI
+     * в unit-тестах) резолвится в {@see defaultCatalogPath()} — ТОТ ЖЕ реальный
+     * коммиченный файл, так что тесты без явного `$catalogPath` видят полный
+     * production-каталог. Тесты, которым нужна конкретная маленькая матрица,
+     * передают путь к своему JSON-фикстур-файлу той же формы (`{from, to,
+     * category, isAi}`).
      */
     public function __construct(
         private readonly ?WorkerCapabilityRepository $repository = null,
-        private readonly ?CacheInterface $cache = null,
         private readonly ?LoggerInterface $logger = null,
+        private readonly ?string $catalogPath = null,
     ) {
     }
 
@@ -145,6 +170,51 @@ class ConversionRegistry
     public function isSupported(string $from, string $to): bool
     {
         return isset($this->getMatrix()[$from][$to]);
+    }
+
+    /**
+     * Same shape/policy as {@see getSupportedFormats()}, but the matrix is built
+     * from an INJECTED list of capability blobs instead of {@see getMatrix()}
+     * (the catalog file) — no repository, no container, no DB, no filesystem
+     * required. Runs the exact same reduction ({@see reduceCapabilities()}) that
+     * (until CNV-71-02) also fed the live routing matrix from the DB, so
+     * category/isAi/precedence policy has exactly ONE implementation (CNV-71-01:
+     * the static `config/catalog/conversion_pairs.json` generator is the caller —
+     * see `App\Command\GenerateConversionPairsCommand`).
+     *
+     * `ocrCapable` is computed the same way as {@see getSupportedFormats()}
+     * ({@see isOcrSupported()} is a pure constant lookup, independent of matrix
+     * source) — no divergence between the DB-backed and blob-backed outputs.
+     *
+     * @param list<array<string, mixed>> $blobs raw register-payload blobs — same
+     *   shape as the `capabilities` column / `config/catalog/worker_capabilities.json`
+     *   entries, each carrying its own `workerType` key.
+     * @return list<array{from: string, to: string, category: string, isAi: bool, ocrCapable: bool}>
+     */
+    public function getSupportedFormatsFromBlobs(array $blobs): array
+    {
+        $entries = array_map(
+            static fn (array $blob): array => [
+                'workerType' => (string) ($blob['workerType'] ?? ''),
+                'blob'       => $blob,
+            ],
+            $blobs,
+        );
+
+        $result = [];
+        foreach ($this->reduceCapabilities($entries) as $from => $targets) {
+            foreach ($targets as $to => $meta) {
+                $result[] = [
+                    'from'       => $from,
+                    'to'         => $to,
+                    'category'   => $meta['category']->value,
+                    'isAi'       => $meta['isAi'],
+                    'ocrCapable' => $this->isOcrSupported($from, $to),
+                ];
+            }
+        }
+
+        return $result;
     }
 
     /**
@@ -306,25 +376,16 @@ class ConversionRegistry
     }
 
     /**
-     * Сбрасывает кеш матрицы (per-request + cross-request).
-     * Вызывается register-эндпоинтом после upsert воркера.
-     */
-    public function invalidateMatrix(): void
-    {
-        $this->matrix = null;
-        $this->cache?->delete(self::CACHE_KEY);
-    }
-
-    /**
      * Admin-visible health signal: per AI worker (`isAi=true` in the registered
-     * capability blob), which `from` formats it declared in `matrix` but that
-     * got silently dropped from the routing matrix because `matrix_categories`
-     * has no (or an unresolvable) entry for them — see the `continue` in
-     * {@see buildMatrixFromCapabilities()}. Computed on the fly directly from
-     * the repository, independent of the (possibly cached) routing matrix, so
-     * it reflects the current DB state even when the matrix cache is warm.
-     * Only DB-backed registrations are considered (no repository / DB error /
-     * hardcoded fallback → no warnings, nothing to report on).
+     * capability blob), which `from` formats it declared in `matrix` but would
+     * get silently dropped by {@see reduceCapabilities()} (the same reduction
+     * catalog generation runs) because `matrix_categories` has no (or an
+     * unresolvable) entry for them — see the `continue` in that method's AI
+     * branch. Computed on the fly directly from the repository, entirely
+     * independent of the routing matrix (CNV-71-02: that matrix no longer reads
+     * the repository at all) — this is a live DB diagnostic, not a routing
+     * input. Only DB-backed registrations are considered (no repository / DB
+     * error → no warnings, nothing to report on).
      *
      * @return list<array{workerType: string, droppedFormats: list<string>, droppedCount: int, totalFormats: int}>
      */
@@ -385,110 +446,128 @@ class ConversionRegistry
     }
 
     /**
-     * Строит матрицу: из кеша (если есть) или прямым вызовом buildRoutingPairs().
-     *
-     * Пустой/ошибочный результат {@see buildRoutingPairs()} НЕ кешируется
-     * (`$save = false`) — иначе кратковременный сбой БД (или момент между
-     * `TRUNCATE` и повторным seed) замораживал бы честную пустую матрицу на
-     * весь TTL (1ч), превращая секундный blip в часовой отказ `/formats`.
-     * Непустой результат кешируется как раньше.
+     * Строит матрицу из статического каталога (per-request memo — {@see getMatrix()}
+     * вызывает этот метод максимум раз за запрос). Ловит ЛЮБУЮ ошибку загрузки
+     * (см. {@see loadCatalogMatrix()}) и перевыбрасывает с контекстом пути файла,
+     * не глотает молча.
      *
      * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
      */
     private function buildMatrix(): array
     {
-        if ($this->cache === null) {
-            return $this->buildRoutingPairs();
-        }
-
-        /** @var array<string, array<string, array{category: FileCategory, isAi: bool}>> */
-        return $this->cache->get(self::CACHE_KEY, function (ItemInterface $item, bool &$save): array {
-            $item->expiresAfter(3600); // 1ч — страховка; основная инвалидация через delete()
-
-            $pairs = $this->buildRoutingPairs();
-            $save  = $pairs !== [];
-
-            return $pairs;
-        });
+        return $this->loadCatalogMatrix($this->catalogPath ?? self::defaultCatalogPath());
     }
 
     /**
-     * Строит routing-пары ИСКЛЮЧИТЕЛЬНО из БД (registry-05: хардкод-фолбэк
-     * удалён). Три пути вырождаются в честную пустую матрицу — НИКОГДА не в
-     * непустой дефолт:
-     *   - `$repository === null` — только тестовый конструктор без аргументов
-     *     (production autowiring всегда даёт репозиторий); тихо, без лога.
-     *   - БД недоступна (исключение) — громкий `error`-лог, пустая матрица.
-     *   - таблица `worker_capabilities` пуста — громкий `error`-лог (после
-     *     registry-03 seed это ненормальное состояние — не пройдены миграции
-     *     или таблицу truncate-нули), пустая матрица.
-     * Пустая матрица здесь = честный ответ (b): `/formats` отдаёт `[]`, submit
-     * получает 400. Никакой другой непустой фолбэк (устаревший кеш, "last known
-     * good") не подставляется — это воспроизвело бы ровно ту проблему, которую
-     * снятие хардкода решает.
+     * Путь к коммиченному production-каталогу — вычисляется от расположения
+     * ЭТОГО файла (`src/Service/Conversion/`), три уровня вверх = корень
+     * `app-symfony/`. Используется, когда `$catalogPath` не передан в
+     * конструктор (DI обычно передаёт тот же путь явно — см.
+     * `config/services.yaml` — но unit-тесты, создающие `new ConversionRegistry()`
+     * напрямую без контейнера, должны видеть тот же реальный каталог).
+     */
+    private static function defaultCatalogPath(): string
+    {
+        return \dirname(__DIR__, 3) . self::DEFAULT_CATALOG_RELATIVE_PATH;
+    }
+
+    /**
+     * Читает и парсит резолвленный каталог пар (`{from, to, category, isAi}`,
+     * см. `App\Command\GenerateConversionPairsCommand`) в форму роутинг-матрицы.
+     *
+     * ГРОМКО падает (`\RuntimeException`) на: отсутствующий файл, ошибку чтения,
+     * невалидный JSON, JSON-корень не массив, ряд без обязательных ключей, а
+     * также на синтаксически валидный, но ПУСТОЙ массив `[]` (см. класс-докблок:
+     * пустая матрица означала бы полную потерю форматов сайтом — легитимного
+     * случая коммиченного пустого каталога не существует).
      *
      * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
      */
-    private function buildRoutingPairs(): array
+    private function loadCatalogMatrix(string $path): array
     {
-        if ($this->repository === null) {
-            return [];
+        if (! is_file($path)) {
+            throw new \RuntimeException(
+                "ConversionRegistry: файл каталога не найден: {$path}. Запустите `make formats-catalog` "
+                . 'и закоммитьте результат — это коммиченный, НЕ генерируемый на лету артефакт.',
+            );
+        }
+
+        $raw = file_get_contents($path);
+        if ($raw === false) {
+            throw new \RuntimeException("ConversionRegistry: не удалось прочитать файл каталога: {$path}");
         }
 
         try {
-            $capabilities = $this->repository->findAllCapabilities();
-        } catch (\Throwable $e) {
-            $this->logger?->error('ConversionRegistry: worker_capabilities БД недоступна — матрица пуста', [
-                'error' => $e->getMessage(),
-            ]);
-
-            return [];
-        }
-
-        if ($capabilities === []) {
-            $this->logger?->error(
-                'ConversionRegistry: таблица worker_capabilities пуста — матрица пуста, '
-                . '/formats и submit деградируют до честного 400. Проверьте миграции/seed.',
+            /** @var mixed $decoded */
+            $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            throw new \RuntimeException(
+                "ConversionRegistry: невалидный JSON в файле каталога {$path}: {$e->getMessage()}",
+                previous: $e,
             );
-
-            return [];
         }
 
-        return $this->buildMatrixFromCapabilities($capabilities);
+        if (! is_array($decoded)) {
+            throw new \RuntimeException(
+                "ConversionRegistry: файл каталога {$path} должен содержать JSON-массив, получено: "
+                . get_debug_type($decoded),
+            );
+        }
+
+        $matrix = [];
+        foreach ($decoded as $i => $row) {
+            if (
+                ! is_array($row)
+                || ! isset($row['from'], $row['to'], $row['category'], $row['isAi'])
+                || ! is_string($row['from']) || ! is_string($row['to']) || ! is_string($row['category'])
+            ) {
+                throw new \RuntimeException(
+                    "ConversionRegistry: файл каталога {$path}, ряд #{$i} — ожидались строковые "
+                    . 'from/to/category и булев isAi',
+                );
+            }
+
+            try {
+                $category = FileCategory::from($row['category']);
+            } catch (\ValueError $e) {
+                throw new \RuntimeException(
+                    "ConversionRegistry: файл каталога {$path}, ряд #{$i} — неизвестная category "
+                    . "\"{$row['category']}\": {$e->getMessage()}",
+                    previous: $e,
+                );
+            }
+
+            $matrix[$row['from']][$row['to']] = ['category' => $category, 'isAi' => (bool) $row['isAi']];
+        }
+
+        if ($matrix === []) {
+            throw new \RuntimeException(
+                "ConversionRegistry: файл каталога {$path} пуст — коммиченный каталог не должен быть "
+                . 'пустым (это означало бы полную потерю всех форматов сайтом). Запустите '
+                . '`make formats-catalog` и закоммитьте непустой результат.',
+            );
+        }
+
+        return $matrix;
     }
 
     /**
-     * Строит матрицу из зарегистрированных в БД возможностей воркеров.
-     * Политика коллизий: non-AI побеждает AI (независимо от порядка — non-AI
-     * всегда обрабатываются раньше по сортировке ниже); коллизия МЕЖДУ двумя
-     * non-AI воркерами на одну пару разрешается через {@see NON_AI_PRECEDENCE}
-     * (registry-03 tie-break, детерминированно, не зависит от порядка строк из
-     * БД); при равном ранге (тот же workerType, несколько инстансов) —
-     * last-write, как раньше.
+     * Pure reduction (CNV-71-01 seam): the ENTIRE collision/precedence policy
+     * (non-AI beats AI, {@see NON_AI_PRECEDENCE} tie-break, {@see resolveAiCategory()})
+     * over a list of (workerType, blob) pairs. No entity, no repository, no DB
+     * touched here — the sole remaining caller is {@see getSupportedFormatsFromBlobs()},
+     * which `App\Command\GenerateConversionPairsCommand` runs over the committed
+     * `worker_capabilities.json` to (re)generate `conversion_pairs.json` (the
+     * catalog {@see loadCatalogMatrix()} reads at runtime). CNV-71-02 removed the
+     * DB-backed twin of this reduction (`buildMatrixFromCapabilities()`, which
+     * ran the SAME policy over live `WorkerCapability[]` rows) — the routing
+     * matrix no longer touches the DB at all, so this method now runs ONLY at
+     * catalog-generation time, never per-request.
      *
-     * `$capabilities` — плоский список рядов, по ряду на пару (workerType,
-     * instanceId) (registry-02: ключ БД составной, несколько инстансов одного
-     * workerType — норма, напр. два хоста с одинаковым воркером). Цикл ниже НЕ
-     * группирует по workerType — он проходит по рядам как есть и накапливает
-     * пары в общий `$matrix`, поэтому несколько рядов одного workerType уже
-     * объединяются (union) построчно; повторяющиеся пары дедуплицируются самой
-     * структурой ассоциативного массива по правилу ранга выше.
-     *
-     * registry-06: {@see WorkerCapability::getStatus()} (liveness alive/
-     * disconnected/unknown) is DELIBERATELY never read here. Liveness is a
-     * monitoring signal, not a routing input (epic Decisions: "Eviction =
-     * long-TTL GC, NOT short liveness gating") — a `disconnected` instance
-     * keeps serving its declared pairs until GC actually removes its row
-     * (see {@see \App\Service\Worker\WorkerCapabilityGcService}). Do NOT add
-     * a `$cap->getStatus() === Disconnected → skip` filter to this loop; that
-     * is exactly the regression `[[registry-06-liveness-push]]` warns future
-     * changes against, and it is covered by a dedicated test
-     * (`ConversionRegistryLivenessStatusTest`).
-     *
-     * @param WorkerCapability[] $capabilities
+     * @param list<array{workerType: string, blob: array<string, mixed>}> $entries
      * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
      */
-    private function buildMatrixFromCapabilities(array $capabilities): array
+    private function reduceCapabilities(array $entries): array
     {
         $matrix = [];
         // Ранг non-AI победителя текущей пары (registry-03 tie-break, см.
@@ -496,13 +575,13 @@ class ConversionRegistry
         $nonAiRank = [];
 
         // Сортировка: non-AI обрабатываются раньше, AI — только для незанятых пар
-        usort($capabilities, static fn (WorkerCapability $a, WorkerCapability $b): int
-            => (int) ($a->getCapabilities()['isAi'] ?? false)
-            <=> (int) ($b->getCapabilities()['isAi'] ?? false));
+        usort($entries, static fn (array $a, array $b): int
+            => (int) ($a['blob']['isAi'] ?? false)
+            <=> (int) ($b['blob']['isAi'] ?? false));
 
-        foreach ($capabilities as $cap) {
-            $blob   = $cap->getCapabilities();
-            $stream = $cap->getWorkerType();
+        foreach ($entries as $entry) {
+            $blob   = $entry['blob'];
+            $stream = $entry['workerType'];
             $isAi   = (bool) ($blob['isAi'] ?? false);
 
             /** @var array<string, list<string>> $rawMatrix */
@@ -575,7 +654,7 @@ class ConversionRegistry
 
     /**
      * AI `matrix_categories` value → FileCategory, or null when missing/unresolvable.
-     * Single source of truth shared by {@see buildMatrixFromCapabilities()} (drops
+     * Single source of truth shared by {@see reduceCapabilities()} (drops
      * the pair) and {@see getCapabilityWarnings()} (reports it as dropped).
      */
     private static function resolveAiCategory(string $catStr): ?FileCategory

@@ -4,22 +4,41 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Service\Conversion;
 
-use App\Entity\WorkerCapability;
 use App\Enum\FileCategory;
-use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionRegistry;
 use App\Tests\Support\SeedsConversionRegistry;
 use PHPUnit\Framework\TestCase;
-use Symfony\Component\Cache\Adapter\ArrayAdapter;
 
 /**
  * Phase 0 (CNV-5): {@see ConversionRegistry::findPath()} — BFS over the routing
  * matrix. Manager will prefer {@see ConversionRegistry::isSupported()} before
  * chaining; findPath may still return a length-1 direct edge.
+ *
+ * CNV-71-02: synthetic tiny matrices (BFS edge cases below — max-depth, AI-hop
+ * preference, virtual-key exclusion) are no longer built by stubbing
+ * `WorkerCapabilityRepository` (the routing matrix doesn't read it anymore) —
+ * {@see registryFromPairs()} writes an already-resolved pair list to a temp
+ * catalog JSON and points a fresh `ConversionRegistry` at it, same shape as
+ * the real `config/catalog/conversion_pairs.json`.
  */
 final class ConversionRegistryFindPathTest extends TestCase
 {
     use SeedsConversionRegistry;
+
+    /** @var list<string> temp files created by {@see registryFromPairs()}, removed in tearDown() */
+    private array $tmpFiles = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->tmpFiles as $file) {
+            if (is_file($file)) {
+                unlink($file);
+            }
+        }
+        $this->tmpFiles = [];
+
+        parent::tearDown();
+    }
 
     public function testDirectEdgeIsLengthOnePath(): void
     {
@@ -45,8 +64,8 @@ final class ConversionRegistryFindPathTest extends TestCase
 
     public function testNoPathWithinMaxDepthReturnsNull(): void
     {
-        $registry = $this->registryFromCapabilities([
-            $this->cap('image', false, ['jpg' => ['png']]),
+        $registry = $this->registryFromPairs([
+            ['from' => 'jpg', 'to' => 'png', 'category' => 'image', 'isAi' => false],
         ]);
 
         self::assertNull($registry->findPath('jpg', 'webp'));
@@ -57,7 +76,7 @@ final class ConversionRegistryFindPathTest extends TestCase
     {
         $registry = $this->newSeedRegistry();
 
-        // epub→pdf is NOT direct in the seed document matrix; epub→docx→pdf is.
+        // epub→pdf is NOT direct in the catalog document matrix; epub→docx→pdf is.
         self::assertFalse($registry->isSupported('epub', 'pdf'));
 
         $path = $registry->findPath('epub', 'pdf');
@@ -84,17 +103,11 @@ final class ConversionRegistryFindPathTest extends TestCase
     public function testPrefersFewerAiHopsAmongEqualLengthPaths(): void
     {
         // a→c length-2: a→b→c (0 AI) vs a→x→c (1 AI hop on a→x). Prefer non-AI.
-        $registry = $this->registryFromCapabilities([
-            $this->cap('document', false, [
-                'a' => ['b'],
-                'b' => ['c'],
-                'x' => ['c'],
-            ]),
-            $this->cap('ai', true, [
-                'a' => ['x'],
-            ], [
-                'a' => 'document',
-            ]),
+        $registry = $this->registryFromPairs([
+            ['from' => 'a', 'to' => 'b', 'category' => 'document', 'isAi' => false],
+            ['from' => 'b', 'to' => 'c', 'category' => 'document', 'isAi' => false],
+            ['from' => 'x', 'to' => 'c', 'category' => 'document', 'isAi' => false],
+            ['from' => 'a', 'to' => 'x', 'category' => 'document', 'isAi' => true],
         ]);
 
         $path = $registry->findPath('a', 'c');
@@ -111,15 +124,9 @@ final class ConversionRegistryFindPathTest extends TestCase
 
     public function testReturnsAiPathWhenItIsTheOnlyOption(): void
     {
-        $registry = $this->registryFromCapabilities([
-            $this->cap('document', false, [
-                'x' => ['c'],
-            ]),
-            $this->cap('ai', true, [
-                'a' => ['x'],
-            ], [
-                'a' => 'document',
-            ]),
+        $registry = $this->registryFromPairs([
+            ['from' => 'x', 'to' => 'c', 'category' => 'document', 'isAi' => false],
+            ['from' => 'a', 'to' => 'x', 'category' => 'document', 'isAi' => true],
         ]);
 
         $path = $registry->findPath('a', 'c');
@@ -134,12 +141,11 @@ final class ConversionRegistryFindPathTest extends TestCase
     {
         // Without the `_` filter, mp3→mp3_stt→txt would be a 2-hop path.
         // With the filter, only mp3→wav→txt remains.
-        $registry = $this->registryFromCapabilities([
-            $this->cap('audio', false, [
-                'mp3'     => ['mp3_stt', 'wav'],
-                'mp3_stt' => ['txt'],
-                'wav'     => ['txt'],
-            ]),
+        $registry = $this->registryFromPairs([
+            ['from' => 'mp3', 'to' => 'mp3_stt', 'category' => 'audio', 'isAi' => false],
+            ['from' => 'mp3', 'to' => 'wav', 'category' => 'audio', 'isAi' => false],
+            ['from' => 'mp3_stt', 'to' => 'txt', 'category' => 'audio', 'isAi' => false],
+            ['from' => 'wav', 'to' => 'txt', 'category' => 'audio', 'isAi' => false],
         ]);
 
         $path = $registry->findPath('mp3', 'txt');
@@ -154,11 +160,9 @@ final class ConversionRegistryFindPathTest extends TestCase
         self::assertNull($registry->findPath('mp3', 'mp3_stt'));
 
         // Only virtual bridge → no path
-        $virtualOnly = $this->registryFromCapabilities([
-            $this->cap('audio', false, [
-                'mp3'     => ['mp3_stt'],
-                'mp3_stt' => ['txt'],
-            ]),
+        $virtualOnly = $this->registryFromPairs([
+            ['from' => 'mp3', 'to' => 'mp3_stt', 'category' => 'audio', 'isAi' => false],
+            ['from' => 'mp3_stt', 'to' => 'txt', 'category' => 'audio', 'isAi' => false],
         ]);
         self::assertNull($virtualOnly->findPath('mp3', 'txt'));
     }
@@ -167,8 +171,8 @@ final class ConversionRegistryFindPathTest extends TestCase
     {
         // isOcrSupported(jpg,txt) is true from the hard-coded OCR set, but the
         // pair is absent from this fixture matrix → findPath must not invent it.
-        $registry = $this->registryFromCapabilities([
-            $this->cap('image', false, ['jpg' => ['png']]),
+        $registry = $this->registryFromPairs([
+            ['from' => 'jpg', 'to' => 'png', 'category' => 'image', 'isAi' => false],
         ]);
 
         self::assertTrue($registry->isOcrSupported('jpg', 'txt'));
@@ -176,26 +180,34 @@ final class ConversionRegistryFindPathTest extends TestCase
         self::assertNull($registry->findPath('jpg', 'txt'));
     }
 
-    public function testEmptyMatrixReturnsNull(): void
+    /**
+     * CNV-71-02 review fix: пустой каталог — не легитимный вырожденный случай,
+     * а громкая ошибка (см. {@see ConversionRegistry::loadCatalogMatrix()}), так
+     * что `findPath()` до пустой матрицы просто не доходит — исключение летит
+     * из построения матрицы раньше.
+     */
+    public function testEmptyMatrixThrows(): void
     {
-        $registry = new ConversionRegistry();
+        $registry = $this->registryFromPairs([]);
 
-        self::assertNull($registry->findPath('jpg', 'png'));
+        $this->expectException(\RuntimeException::class);
+
+        $registry->findPath('jpg', 'png');
     }
 
-    public function testUsesSameMatrixAsIsSupportedIncludingWarmCache(): void
+    public function testTwoRegistryInstancesAgreeOnSameCatalog(): void
     {
-        $cache    = new ArrayAdapter();
-        $registry = $this->newSeedRegistry($cache);
+        // CNV-71-02: no more cross-request cache to warm — two independent
+        // instances just both read the same committed catalog file and must
+        // naturally agree; nothing to share/warm between them anymore.
+        $registry = $this->newSeedRegistry();
 
-        // Cold build
         self::assertTrue($registry->isSupported('docx', 'pdf'));
         $direct = $registry->findPath('docx', 'pdf');
         self::assertNotNull($direct);
         self::assertCount(1, $direct);
 
-        // Warm: second instance shares cache — findPath must still match isSupported
-        $registryB = $this->newSeedRegistry($cache);
+        $registryB = $this->newSeedRegistry();
         self::assertTrue($registryB->isSupported('docx', 'pdf'));
         $directB = $registryB->findPath('docx', 'pdf');
         self::assertNotNull($directB);
@@ -217,35 +229,19 @@ final class ConversionRegistryFindPathTest extends TestCase
     }
 
     /**
-     * @param array<string, list<string>> $matrix
-     * @param array<string, string>       $matrixCategories
+     * @param list<array{from: string, to: string, category: string, isAi: bool}> $pairs
      */
-    private function cap(string $workerType, bool $isAi, array $matrix, array $matrixCategories = []): WorkerCapability
+    private function registryFromPairs(array $pairs): ConversionRegistry
     {
-        $blob = [
-            'workerType'        => $workerType,
-            'isAi'              => $isAi,
-            'streams'           => [$workerType],
-            'routingKeys'       => [$workerType],
-            'matrix'            => $matrix,
-            'matrix_categories' => $matrixCategories,
-            'image'             => null,
-            'version'           => 'test',
-        ];
+        $path             = sys_get_temp_dir() . '/find_path_test_' . bin2hex(random_bytes(8)) . '.json';
+        $this->tmpFiles[] = $path;
 
-        $cap = $this->createStub(WorkerCapability::class);
-        $cap->method('getWorkerType')->willReturn($workerType);
-        $cap->method('getCapabilities')->willReturn($blob);
+        $encoded = array_map(
+            static fn (array $p): array => [...$p, 'ocrCapable' => false],
+            $pairs,
+        );
+        file_put_contents($path, json_encode($encoded, JSON_THROW_ON_ERROR));
 
-        return $cap;
-    }
-
-    /** @param WorkerCapability[] $capabilities */
-    private function registryFromCapabilities(array $capabilities): ConversionRegistry
-    {
-        $repo = $this->createStub(WorkerCapabilityRepository::class);
-        $repo->method('findAllCapabilities')->willReturn($capabilities);
-
-        return new ConversionRegistry($repo);
+        return new ConversionRegistry(catalogPath: $path);
     }
 }

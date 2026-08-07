@@ -12,6 +12,7 @@ use App\Enum\ConversionStatus;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
 use App\Exception\InsufficientBalanceException;
+use App\Exception\WorkerUnavailableException;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionRegistry;
@@ -97,6 +98,7 @@ class ConversionController extends AbstractController
     #[OA\Response(response: 415, description: 'Неподдерживаемый тип содержимого')]
     #[OA\Response(response: 422, description: 'Неподдерживаемая конвертация (в т.ч. бинарный source_format в text-режиме)')]
     #[OA\Response(response: 429, description: 'Превышена квота / слишком много запросов')]
+    #[OA\Response(response: 503, description: 'Воркер такого типа никогда не регистрировался (конвертация временно недоступна)')]
     public function convert(Request $request, #[CurrentUser] ?User $user): JsonResponse
     {
         if ($user === null) {
@@ -193,6 +195,14 @@ class ConversionController extends AbstractController
             return $this->json(
                 ['error' => 'conversion_disabled', 'message' => $e->getMessage()],
                 Response::HTTP_CONFLICT,
+            );
+        } catch (WorkerUnavailableException $e) {
+            // CNV-71-03: воркер такого типа никогда не регистрировался (нет
+            // строки в worker_capabilities) → временная недоступность сервиса,
+            // не ошибка клиента.
+            return $this->json(
+                ['error' => 'worker_unavailable', 'message' => $e->getMessage()],
+                Response::HTTP_SERVICE_UNAVAILABLE,
             );
         } catch (\InvalidArgumentException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
@@ -534,6 +544,7 @@ class ConversionController extends AbstractController
     #[OA\Response(response: 409, description: 'Конвертация отключена админом')]
     #[OA\Response(response: 410, description: 'Исходник истёк в S3')]
     #[OA\Response(response: 429, description: 'Превышена квота')]
+    #[OA\Response(response: 503, description: 'Воркер такого типа никогда не регистрировался')]
     public function retry(int $id, #[CurrentUser] ?User $user): JsonResponse
     {
         if ($user === null) {
@@ -551,6 +562,13 @@ class ConversionController extends AbstractController
             return $this->json(
                 ['error' => 'conversion_disabled', 'message' => $e->getMessage()],
                 Response::HTTP_CONFLICT,
+            );
+        } catch (WorkerUnavailableException $e) {
+            // CNV-71-03: тот же гейт "воркер существует", что и в /convert (см.
+            // catch выше в convert()) — теперь и у retry.
+            return $this->json(
+                ['error' => 'worker_unavailable', 'message' => $e->getMessage()],
+                Response::HTTP_SERVICE_UNAVAILABLE,
             );
         } catch (GoneHttpException $e) {
             return $this->json(

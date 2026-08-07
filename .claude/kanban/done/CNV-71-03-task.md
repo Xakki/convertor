@@ -28,4 +28,14 @@
 **Decisions:** *(resolved grooming questions — keep on the card after `todo/` so the rationale survives)*
 - Критерий «воркер есть» — наличие строки в `worker_capabilities`, не статус alive — подтверждено пользователем 2026-08-04
 - Гибрид: строка есть (offline) → ждать с таймаутом; строки никогда не было → немедленный отказ — подтверждено пользователем 2026-08-04
-</content>
+
+**Execution Log:**
+- Гейт `existsForWorkerType` — в `createSingleHop`/`createChain`/`retryConversion`, до любых quota/S3-эффектов → 503 `worker_unavailable`, текст «Конвертация временно недоступна». Инъекция репозитория в прод-контейнере подтверждена через `debug:container`.
+- Протухание: свип в `workers/gateway/expiry.py` — «никому не доставлялась» = backlog строго за `last-delivered-id` группы, возраст из ms-префикса id записи; перед действием повторная проверка `last-delivered-id`, `XDEL` только после успешного ответа PHP.
+- Эндпоинт `POST /api/v1/internal/worker/expire` → статус `Expired` (значение уже было в enum), возврат квоты/баланса, идемпотентность по всем терминальным статусам.
+- Таймаут `WORKER_CLAIM_TIMEOUT_MINUTES=60` в корневом `.env`, прокинут в `ws-gateway`.
+- Гонка возвратов: guard в `ConversionResultPersister` — под `LockMode::PESSIMISTIC_WRITE`; до этого два конкурентных вызова могли вернуть деньги дважды.
+- Крайние случаи: неразбираемый payload → в `conv.dead` + ERROR-лог, не тихий дроп; 404 от `/expire` → терминально, запись удаляется; 5xx/сеть → ретрай.
+- Фронтенд: `expired` с текстом про возврат оплаты; клиентский кап опроса больше не выставляет ложный `failed`, показывает «ещё в очереди» со ссылкой на историю.
+- Ограничение: ветка «строки воркера нет» недостижима e2e до CNV-71-04 (есть `__seed__`-строки); покрыта юнит- и функциональным тестом с откатом транзакции.
+- Итог: `phpstan` OK, `cs-check` OK (0/274), `test-php` 729 тестов, 2 failure (оба — `ConversionTextInputControllerTest`, известный BillingMode-enum блокер CNV-60, не регрессия), `test-gateway` 214 passed/1 skipped (опциональная зависимость pdf2image, не связано), `test-drift` 22 passed, `docker-check` dev+test ok.

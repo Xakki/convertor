@@ -119,6 +119,24 @@ class Config:
     ws_reconnect_backoff_max_s: float = 30.0
     ws_reconnect_backoff_factor: float = 2.0
 
+    # --- Accepted-but-never-claimed job expiry (CNV-71-03) ---
+    # Таймаут (минуты) на claim принятой в стрим задачи. Единое значение для
+    # всех типов воркеров (в отличие от per-type RECLAIM_IDLE_MS_* — это НЕ
+    # reclaim, а detection "никто вообще не читал эту запись", см.
+    # workers/gateway/expiry.py). Источник истины — WORKER_CLAIM_TIMEOUT_MINUTES
+    # в корневом .env, тот же knob читает ConversionManager (PHP-сторона) для
+    # текста ошибки/документации, здесь — для самого detection.
+    worker_claim_timeout_minutes: int = 60
+    # Интервал между прогонами expiry-sweep (секунды). Таймаут — десятки
+    # минут, быстрый тик не нужен: держим ЗАМЕТНО реже reclaim_interval_s
+    # (60s) — отдельный тик, а не тот же самый, чтобы не тащить в reclaim.py
+    # семантику "никогда не доставленных" записей (см. expiry.py docstring).
+    expiry_sweep_interval_s: float = 300.0
+    # Верхняя граница записей backlog'а (XRANGE COUNT), обрабатываемых за один
+    # проход sweep'а на один conv.<type> стрим — не сканируем backlog целиком
+    # за раз, даже если протухших записей накопилось много.
+    expiry_sweep_batch: int = 50
+
     # --- Liveness push (registry-06) — see workers/gateway/liveness.py ---
     # Batch-push interval to PHP's internal `/liveness` endpoint. Independent of
     # worker-side WS_PING_INTERVAL_S (~20s default, s1-08): batching trades a bit
@@ -181,6 +199,9 @@ def load_config() -> Config:
         reclaim_idle_ms_video=_getenv_int("RECLAIM_IDLE_MS_VIDEO", 600_000),
         reclaim_idle_ms_data=_getenv_int("RECLAIM_IDLE_MS_DATA", 180_000),
         reclaim_idle_ms_ai=_getenv_int("RECLAIM_IDLE_MS_AI", 300_000),
+        worker_claim_timeout_minutes=_getenv_int("WORKER_CLAIM_TIMEOUT_MINUTES", 60),
+        expiry_sweep_interval_s=_getenv_float("EXPIRY_SWEEP_INTERVAL_S", 300.0),
+        expiry_sweep_batch=_getenv_int("EXPIRY_SWEEP_BATCH", 50),
         liveness_push_interval_s=_getenv_float("LIVENESS_PUSH_INTERVAL_S", 30.0),
         liveness_snapshot_warmup_s=_getenv_float("LIVENESS_SNAPSHOT_WARMUP_S", 60.0),
         liveness_reregister_cooldown_s=_getenv_float(

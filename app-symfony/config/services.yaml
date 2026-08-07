@@ -47,9 +47,9 @@ parameters:
     env(FILE_RETENTION_HOURS_CATEGORY_VIDEO): '48'    # ось category: video
 
     # Long-TTL GC worker_capabilities (registry-06, Symfony Scheduler, ежечасно).
-    # Часы; строки с last_seen старше — удаляются, КРОМЕ seed (instance_id=
-    # '__seed__', см. WorkerCapabilityGcService). 168 = 7 суток — "long-TTL":
-    # заведомо больше любого разумного окна простоя/деплоя воркера.
+    # Часы; строки с last_seen старше — удаляются (см. WorkerCapabilityGcService).
+    # 168 = 7 суток — "long-TTL": заведомо больше любого разумного окна
+    # простоя/деплоя воркера.
     env(WORKER_CAPABILITY_GC_TTL_HOURS): '168'
 
     # Окно тишины сверки liveness (registry-09, WorkerLivenessReconciler).
@@ -262,13 +262,19 @@ services:
         arguments:
             $graylogUrl: '%env(GRAYLOG_URL)%'
 
-    # registry-04: `public: true` ТОЛЬКО для CLI-тулинга `bin/dump-matrix.php` —
-    # это standalone-скрипт (не App\Command\*), который сам грузит Kernel и
-    # достаёт сервисы напрямую из контейнера, а не через autowire-конструктор.
-    # Application-код эти сервисы никогда так не получает — везде обычный DI.
+    # CNV-71-02: путь к резолвленному каталогу пар — единственный источник
+    # роутинг-матрицы (см. ConversionRegistry класс-докблок). Явный DI-биндинг
+    # (а не только внутренний дефолт в самом ConversionRegistry), чтобы путь был
+    # виден/настраиваем на уровне контейнера — тесты, создающие сервис вручную
+    # (`new ConversionRegistry()`), используют внутренний дефолт (тот же файл).
     App\Service\Conversion\ConversionRegistry:
         public: true
+        arguments:
+            $catalogPath: '%kernel.project_dir%/config/catalog/conversion_pairs.json'
 
+    # `public: true` — устаревшая причина (registry-04, standalone `bin/dump-matrix.php`)
+    # больше не актуальна для ConversionRegistry (dump-matrix.php больше не грузит
+    # Kernel/DI, см. его докблок), но остаётся полезной для консистентности CLI-тулинга.
     App\Repository\WorkerCapabilityRepository:
         public: true
 

@@ -186,25 +186,36 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 ## Матрица поддерживаемых конвертаций
 
-| Категория | Исходные форматы | Целевые форматы | Движок | AI? | MVP-статус |
-|-----------|-----------------|-----------------|--------|-----|------------|
-| **Документы** | doc, docx, odt, rtf, txt, html, htm, md; epub (только →md) | docx, odt, pdf, txt, html, md, rtf, epub | LibreOffice + Pandoc | — | Стадия 1 |
-| **PDF операции** | pdf | docx, txt, md | pdftotext + Pandoc / LibreOffice | — | Стадия 1 |
-| **Данные** | csv, json, xml, yaml/yml, toml | csv, json, xml, yaml/yml, toml | Python (pandas/lxml/tomllib) | — | Стадия 1 |
-| **Изображения** | jpg/jpeg, png, gif, bmp, webp, tiff/tif, ico | jpg, png, gif, bmp, webp, tiff, ico, pdf (+ txt, md, docx через OCR) | ImageMagick / Pillow | — | Стадия 1 |
-| **OCR (флаг `ocr`)** | — (не отдельный набор пар в `/formats`) | — | Tesseract в image-воркере | — | Стадия 1: `ocrCapable` на jpg/jpeg, png, tiff/tif → txt, md, docx; pdf с `ocr=true` — тот же путь |
-| **Аудио** | mp3, wav, ogg, flac, aac, m4a, opus, wma | mp3, wav, ogg, flac, aac, m4a, opus | FFmpeg | — | Стадия 1 |
-| **Видео** | mp4, avi, mkv, mov, webm, flv, wmv, 3gp | mp4, avi, mkv, mov, webm (+ mp3, wav, ogg, flac) | FFmpeg | — | Стадия 1 |
-| **Речь → Текст** | mp3, wav, ogg, flac, aac, m4a, opus (+ из видео; ≤2ч) | txt, srt, vtt | Whisper (local) / внешние API | ✅ | Стадия 2 |
-| **Текст → Речь** | txt, md (≤10 000 символов) | mp3, wav, ogg | TTS (local espeak/Coqui) / внешние API | ✅ | Стадия 2 |
-| **Разметка (отложено)** | rst, latex, wiki | md, rst, html, pdf, docx | Pandoc | — | Стадия 7 (md/html/htm — live в «Документы») |
-| **Документы (отложено)** | pages; epub (полный input) | как в «Документы» | LibreOffice + Pandoc | — | Стадия 7 |
-| **PDF→изображение** | pdf | jpg | pdftoppm | — | Стадия 7 |
-| **Изображения (отложено)** | svg, heic, avif | jpg, png, webp, avif, … | ImageMagick / Pillow | — | Стадия 7 |
-| **Архивы** | zip, tar, gz, bz2, 7z | zip, tar.gz | Python (zipfile/tarfile/py7zr) | — | Стадия 7 |
-| **CAD/DWG** | dwg, dxf | pdf, svg, png | LibreOffice Draw / ezdxf | — | Стадия 7 |
-| **Электронные таблицы** | xls, xlsx, ods | xlsx, ods, csv, pdf | LibreOffice Calc | — | Стадия 7 (csv — live в «Данные») |
-| **Презентации** | ppt, pptx, odp | pptx, odp, pdf | LibreOffice Impress | — | Стадия 7 |
+> **CNV-71-02**: точный список пар (from/to/category/isAi) — ТОЛЬКО в коммиченном
+> каталоге [`app-symfony/config/catalog/conversion_pairs.json`](app-symfony/config/catalog/conversion_pairs.json)
+> (394 пары на момент правки; регенерируется `make formats-catalog`, защищён
+> drift-тестами `ConversionPairsCatalogDriftTest`/`ConversionRegistryGoldenTest`
+> от расхождения с воркерами). Таблица ниже больше НЕ перечисляет точные
+> списки форматов по категориям — это и было источником дрейфа (rst/latex/tex/
+> wiki/pages числились «отложено», хотя уже жили в каталоге; «Электронные
+> таблицы» заявляли выходы xlsx/ods/csv, которых каталог не отдаёт — реально
+> xls/xlsx/ods маршрутизируются в общий office-набор целей). Ниже — только
+> категориальный обзор движков (низкий риск устаревания) и Stage-7 wishlist
+> (то, чего в каталоге ДЕЙСТВИТЕЛЬНО нет).
+
+| Категория | Движок | AI? | MVP-статус |
+|-----------|--------|-----|------------|
+| **Документы** (офисные форматы, разметка, PDF-текст) | LibreOffice + Pandoc + pdftotext | — | Стадия 1 |
+| **Данные** (csv/json/xml/yaml/toml) | Python (pandas/lxml/tomllib) | — | Стадия 1 |
+| **Изображения** | ImageMagick / Pillow | — | Стадия 1 |
+| **OCR (флаг `ocr`)** | Tesseract в image-воркере | — | Стадия 1 |
+| **Аудио** | FFmpeg | — | Стадия 1 |
+| **Видео** | FFmpeg | — | Стадия 1 |
+| **Речь → Текст** (≤2ч) | Whisper (local) / внешние API | ✅ | Стадия 2 |
+| **Текст → Речь** (≤10 000 символов) | TTS (local espeak/Coqui) / внешние API | ✅ | Стадия 2 |
+
+**Stage 7 — реально НЕ реализовано** (нет в каталоге; спланировано):
+
+| Категория | Форматы (план) | Движок (план) |
+|-----------|-----------------|----------------|
+| **Архивы** | zip, tar, gz, bz2, 7z → zip, tar.gz | Python (zipfile/tarfile/py7zr) |
+| **CAD/DWG** | dwg, dxf → pdf, svg, png | LibreOffice Draw / ezdxf |
+| **Изображения (доп. форматы)** | svg, heic, avif → jpg, png, webp, avif, … | ImageMagick / Pillow |
 
 ## Лимиты и тарифы
 
@@ -214,7 +225,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 > (`tier = isAi ? AI : mapCategory(category)`).
 
 **Тиры (4):**
-- **T1 Light**: document, data (CPU-дёшево). Enum `markup` / `archive` в `FileCategory` зарезервированы для routing fold и Stage 7 — в seed __seed__ **0 live-пар** с этими категориями.
+- **T1 Light**: document, data (CPU-дёшево). Enum `markup` / `archive` в `FileCategory` зарезервированы для routing fold и Stage 7 — в статическом каталоге `config/catalog/conversion_pairs.json` **0 live-пар** с этими категориями.
 - **T2 Medium**: image (**вкл. OCR** — локальный Tesseract, image-воркер), audio.
 - **T3 Heavy**: video (тяжёлый транскод).
 - **T4 AI**: только STT/TTS (`isAi`, remote GPU, внешняя стоимость).

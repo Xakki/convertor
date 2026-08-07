@@ -12,9 +12,9 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Юнит-тесты сборщика списка воркеров (registry-07): застаб-репозиторий, без
- * БД. Покрывает seed-флаг/статус, TTL-based `stale` (тот же TTL, что реальный
- * GC — {@see \App\Service\Worker\WorkerCapabilityGcService}), подсчёт пар и
- * порядок сортировки (seed первой в своей группе workerType).
+ * БД. Покрывает TTL-based `stale` (тот же TTL, что реальный GC —
+ * {@see \App\Service\Worker\WorkerCapabilityGcService}), подсчёт пар и
+ * порядок сортировки (workerType asc, затем instanceId asc).
  */
 final class WorkerStatsProviderTest extends TestCase
 {
@@ -58,32 +58,17 @@ final class WorkerStatsProviderTest extends TestCase
         self::assertSame([], $data['workers']);
     }
 
-    public function testSeedRowIsFlaggedIsSeedWithUnknownStatusRegardlessOfAge(): void
-    {
-        $ancient = (new \DateTimeImmutable())->modify('-10 years');
-        $cap     = $this->stubCap('document', '__seed__', $ancient, WorkerLivenessStatus::Unknown);
-
-        $data = $this->provider([$cap])->collect();
-
-        self::assertCount(1, $data['workers']);
-        $row = $data['workers'][0];
-        self::assertTrue($row['isSeed']);
-        self::assertSame('unknown', $row['status']);
-        self::assertTrue($row['stale'], 'raw stale computation is still honest — UI decides how to present it');
-    }
-
-    public function testFreshNonSeedInstanceIsNotStale(): void
+    public function testFreshInstanceIsNotStale(): void
     {
         $cap = $this->stubCap('image', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive);
 
         $row = $this->provider([$cap])->collect()['workers'][0];
 
-        self::assertFalse($row['isSeed']);
         self::assertFalse($row['stale']);
         self::assertSame('alive', $row['status']);
     }
 
-    public function testOldNonSeedInstanceIsStale(): void
+    public function testOldInstanceIsStale(): void
     {
         $old = (new \DateTimeImmutable())->modify('-1000 hours');
         $cap = $this->stubCap('image', 'host-a:1', $old, WorkerLivenessStatus::Alive, []);
@@ -239,16 +224,16 @@ final class WorkerStatsProviderTest extends TestCase
         self::assertNull($row['inflight']);
     }
 
-    /** Sort: workerType asc, then seed-row first within its group, then instanceId asc. */
-    public function testSortsSeedFirstWithinWorkerTypeGroupThenByInstanceId(): void
+    /** Sort: workerType asc, then instanceId asc. */
+    public function testSortsByWorkerTypeThenInstanceId(): void
     {
         $now = new \DateTimeImmutable();
 
         $capabilities = [
             $this->stubCap('image', 'host-b:1', $now, WorkerLivenessStatus::Alive),
+            $this->stubCap('document', 'host-b:1', $now, WorkerLivenessStatus::Alive),
+            $this->stubCap('image', 'host-c:1', $now, WorkerLivenessStatus::Alive),
             $this->stubCap('document', 'host-a:1', $now, WorkerLivenessStatus::Alive),
-            $this->stubCap('image', '__seed__', $now, WorkerLivenessStatus::Unknown),
-            $this->stubCap('document', '__seed__', $now, WorkerLivenessStatus::Unknown),
             $this->stubCap('image', 'host-a:1', $now, WorkerLivenessStatus::Alive),
         ];
 
@@ -260,11 +245,11 @@ final class WorkerStatsProviderTest extends TestCase
         );
 
         self::assertSame([
-            'document/__seed__',
             'document/host-a:1',
-            'image/__seed__',
+            'document/host-b:1',
             'image/host-a:1',
             'image/host-b:1',
+            'image/host-c:1',
         ], $order);
     }
 
@@ -339,8 +324,8 @@ final class WorkerStatsProviderTest extends TestCase
     /**
      * cpu/mem/load = {avg, max} over workers that ACTUALLY reported metrics;
      * a worker with no metrics is excluded from the average, not counted as 0.
-     * images/versions are distinct+sorted, hasAi/hasSeed are true if ANY
-     * worker on the host has that flag.
+     * images/versions are distinct+sorted, hasAi is true if ANY worker on the
+     * host has that flag.
      */
     public function testCollectHostsAveragesMetricsAndCollectsDistinctImagesVersionsAndFlags(): void
     {
@@ -351,7 +336,7 @@ final class WorkerStatsProviderTest extends TestCase
             'image'   => 'harbor.example/worker-ai:1.2',
             'version' => '1.2',
         ], metrics: ['cpu' => 10.0, 'mem' => 20.0, 'load' => 0.5], host: 'ubook');
-        $b = $this->stubCap('image', '__seed__', $now, WorkerLivenessStatus::Unknown, [
+        $b = $this->stubCap('image', 'w2', $now, WorkerLivenessStatus::Alive, [
             'image'   => 'harbor.example/worker-ai:1.3',
             'version' => '1.3',
         ], host: 'ubook');
@@ -367,7 +352,6 @@ final class WorkerStatsProviderTest extends TestCase
         self::assertSame(['harbor.example/worker-ai:1.2', 'harbor.example/worker-ai:1.3'], $host['images']);
         self::assertSame(['1.2', '1.3'], $host['versions']);
         self::assertTrue($host['hasAi']);
-        self::assertTrue($host['hasSeed']);
     }
 
     /**
@@ -410,7 +394,6 @@ final class WorkerStatsProviderTest extends TestCase
         self::assertSame([], $host['images']);
         self::assertSame([], $host['versions']);
         self::assertFalse($host['hasAi']);
-        self::assertFalse($host['hasSeed']);
     }
 
     public function testCollectHostsTtlHoursEchoedInResponse(): void

@@ -20,7 +20,11 @@ pdf→jpg: pdftoppm рендерит постранично; 1 стр. → од�
 (`page-001.jpg`, …) — тот же паттерн упаковки, что у multi-page OCR-текста
 (несколько страниц → один составной артеfact, здесь zip вместо concat).
 
-`pages` (Apple Pages): только если в образе есть libetonyek (probe при import).
+`pages` (Apple Pages): безусловно в матрице (официальный образ всегда содержит
+libetonyek — сборка падает без него, см. docker/workers/libreoffice.Dockerfile).
+Проба libetonyek — только execution-time guard: сторонний образ без библиотеки
+роняет job с pages-источником явной permanent-ошибкой, а не невнятным
+soffice-фейлом.
 
 soffice runs in a private UserInstallation per job so concurrent conversions
 don't fight over ~/.config/libreoffice.
@@ -58,9 +62,14 @@ def _libetonyek_available() -> bool:
     )
 
 
+# Execution-time guard (НЕ matrix-gate): `pages` — безусловная запись в _MATRIX
+# (см. ниже), т.к. официальный document-worker образ всегда содержит libetonyek
+# (docker/workers/libreoffice.Dockerfile хард-фейлит билд без неё). Проба нужна
+# только для стороннего образа без библиотеки — convert() ловит этот случай и
+# роняет job permanent-ошибкой (ValueError) до попытки soffice-импорта.
 _PAGES_IMPORT_OK = _libetonyek_available()
 if not _PAGES_IMPORT_OK:
-    logger.info("libetonyek not found — Apple Pages source dropped from matrix")
+    logger.info("libetonyek not found — Apple Pages source will fail at conversion time")
 
 # MIME types for output formats (docx/pdf/txt/md — общие, из workers.common.mime)
 _MIME: dict[str, str] = {
@@ -127,7 +136,8 @@ _IMPRESS_TARGETS: set[str] = {"pptx", "odp", "pdf"}
 
 # Conversion matrix the worker advertises (CAPABILITIES) and validates against.
 # Stage-7: spreadsheets, presentations, markup (rst/latex/wiki), epub-input,
-# pdf→jpg. epub→pdf blocked (conversion-chaining). pages — только с libetonyek.
+# pdf→jpg. epub→pdf blocked (conversion-chaining). pages — безусловно в матрице
+# (libetonyek — execution-time guard в convert(), не matrix-gate, см. выше).
 _OFFICE_TARGETS: set[str] = {"docx", "odt", "pdf", "txt", "html", "md", "rtf", "epub"}
 _EPUB_PANDOC_TARGETS: set[str] = {"md", "docx", "odt", "html", "rtf", "txt"}
 _MARKUP_TARGETS: set[str] = set(_OFFICE_TARGETS)
@@ -160,10 +170,10 @@ _MATRIX: dict[str, set[str]] = {
     "ppt":   _IMPRESS_TARGETS,
     "pptx":  _IMPRESS_TARGETS,
     "odp":   _IMPRESS_TARGETS,
+    # Apple Pages (Stage-7+): безусловная запись — см. докстринг модуля и
+    # _PAGES_IMPORT_OK выше про execution-time guard в convert().
+    "pages": _OFFICE_TARGETS,
 }
-
-if _PAGES_IMPORT_OK:
-    _MATRIX["pages"] = _OFFICE_TARGETS
 
 
 # --------------------------------------------------------------------------
@@ -352,6 +362,11 @@ class LibreOfficeWorker(StreamConsumerBase):
             raise ValueError(f"unsupported source format: {src_fmt!r}")
         if target_fmt not in _MATRIX[src_fmt]:
             raise ValueError(f"unsupported conversion: {src_fmt} → {target_fmt}")
+        if src_fmt == "pages" and not _PAGES_IMPORT_OK:
+            raise ValueError(
+                "pages source requires libetonyek, which is missing from this "
+                "worker image — cannot import Apple Pages files"
+            )
 
         out_dir = Path(job.get("_jobDir") or str(WORK_DIR))
         out_dir.mkdir(parents=True, exist_ok=True)

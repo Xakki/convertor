@@ -627,6 +627,11 @@ services:
             LIVENESS_SNAPSHOT_WARMUP_S: ${LIVENESS_SNAPSHOT_WARMUP_S:-60}
             LIVENESS_REREGISTER_COOLDOWN_S: ${LIVENESS_REREGISTER_COOLDOWN_S:-300}
             GATEWAY_ID: ${GATEWAY_ID:-}
+            # CNV-71-03: таймаут ожидания claim принятой, но никем не взятой
+            # задачи — gateway детектит и релеит POST /internal/worker/expire.
+            WORKER_CLAIM_TIMEOUT_MINUTES: ${WORKER_CLAIM_TIMEOUT_MINUTES:-60}
+            EXPIRY_SWEEP_INTERVAL_S: ${EXPIRY_SWEEP_INTERVAL_S:-300}
+            EXPIRY_SWEEP_BATCH: ${EXPIRY_SWEEP_BATCH:-50}
         depends_on:
             keydb:
                 condition: service_healthy

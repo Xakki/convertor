@@ -6,7 +6,6 @@ namespace App\Controller\Admin\Api;
 
 use App\Repository\WorkerCapabilityRepository;
 use App\Service\Admin\WorkerStatsProvider;
-use App\Service\Conversion\ConversionRegistry;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -29,7 +28,6 @@ class WorkerController extends AbstractController
     public function __construct(
         private readonly WorkerStatsProvider $stats,
         private readonly WorkerCapabilityRepository $workerCapabilities,
-        private readonly ConversionRegistry $conversionRegistry,
     ) {
     }
 
@@ -89,23 +87,17 @@ class WorkerController extends AbstractController
      * страницы — не заменяет и не трогает расписание/поведение
      * {@see \App\Service\Worker\WorkerCapabilityGcService} (та чистит по
      * возрасту `last_seen`, эта — по статусу, независимо от возраста).
-     * Seed-строки (`instance_id='__seed__'`) исключены на уровне репозитория
-     * ({@see WorkerCapabilityRepository::deleteStaleByStatus()}) — они
-     * статус `unknown` имеют по DB-дефолту, но не воркер, а канонический
-     * снимок матрицы (registry-03), сносить его нельзя.
      *
      * Ничего не совпало → честный `{"deleted": 0}`, HTTP 200 (не ошибка).
+     *
+     * CNV-71-02: больше НЕ трогает роутинг-матрицу (`ConversionRegistry`) — та
+     * строится из статического каталога, не из `worker_capabilities`, и не
+     * реагирует на удаление рядов этой таблицы. `/formats` не меняется.
      */
     #[Route('/workers/stale', name: 'admin_api_workers_delete_stale', methods: ['DELETE'])]
     public function deleteStale(): JsonResponse
     {
         $deleted = $this->workerCapabilities->deleteStaleByStatus();
-
-        if ($deleted > 0) {
-            // Как и GC (WorkerCapabilityGcService::run()) — не ждать TTL
-            // кеша матрицы, удалённые пары должны пропасть из /formats сразу.
-            $this->conversionRegistry->invalidateMatrix();
-        }
 
         return $this->json(['deleted' => $deleted]);
     }

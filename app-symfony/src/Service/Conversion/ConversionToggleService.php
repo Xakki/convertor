@@ -18,11 +18,15 @@ use Symfony\Contracts\Cache\ItemInterface;
  * включено), а отключённых пар мало → множество компактно, а per-submit проверка
  * = один cache-hit + in-memory lookup.
  *
- * Кеш — тот же Symfony `cache.app`, что использует {@see ConversionRegistry}
- * (не заводим отдельное подключение). Инвалидация зеркалит
- * {@see ConversionRegistry::invalidateMatrix()}: сброс per-request memo + delete
- * cross-request. Memo обязателен к сбросу: WebTestCase переиспользует один
- * контейнер между запросами, иначе устаревший memo переживёт delete().
+ * Кеш — тот же Symfony `cache.app`, что раньше использовала (до CNV-71-02)
+ * {@see ConversionRegistry} для своей routing-матрицы (`conv.worker.matrix`,
+ * убран вместе с DB-источником — та матрица теперь читает статический каталог
+ * и кешу не нужна). У ЭТОГО сервиса кеш остаётся: toggle-флаги — отдельная
+ * персистентная сущность (`ConversionToggle`), меняющаяся admin-действием, а
+ * не релизом кода, инвалидация нужна на каждый {@see setEnabled()}: сброс
+ * per-request memo + delete cross-request. Memo обязателен к сбросу: WebTestCase
+ * переиспользует один контейнер между запросами, иначе устаревший memo
+ * переживёт delete().
  */
 class ConversionToggleService
 {
@@ -70,8 +74,7 @@ class ConversionToggleService
     }
 
     /**
-     * Сброс кеша (per-request memo + cross-request). Зеркалит
-     * {@see ConversionRegistry::invalidateMatrix()}.
+     * Сброс кеша (per-request memo + cross-request).
      */
     public function invalidate(): void
     {

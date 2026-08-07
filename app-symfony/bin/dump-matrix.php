@@ -3,44 +3,44 @@
 declare(strict_types=1);
 
 /**
- * Regenerates the golden routing snapshot consumed by
+ * Prints the routing snapshot consumed by
  * {@see App\Tests\Unit\Service\Conversion\ConversionRegistryGoldenTest} and
  * the Python drift test (`workers/tests/test_routing_drift.py`).
  *
  * Restored 2026-07-22 (registry-04) after accidental deletion by commit
  * `2105d70` (2026-07-10, unrelated auth feature) — the Python drift test has
  * no fallback for a missing tool other than `pytest.skip()`, so its two
- * assertions silently stopped running for ~12 days instead of failing.
+ * assertions silently stopped running for ~12 days instead of failing. That
+ * "must never skip silently" contract is why this tool still hard-fails
+ * (exit 1) rather than printing an empty document on any error below.
  *
- * Rewritten (registry-04) to build the matrix through the real DI container
- * (`App\Kernel`), reading `ConversionRegistry` backed by the LIVE
- * `WorkerCapabilityRepository`/DB — deliberately NOT `new ConversionRegistry()`
- * with no constructor args. At the time this reasoning was written, that would
- * have resurrected the hardcoded fallback path (dead at runtime on any migrated
- * environment since the registry-03 seed migration made the capability table
- * non-empty) and made this tool validate nothing while still printing a
- * plausible-looking snapshot. registry-05 later deleted that fallback outright
- * — repository=null now yields an EMPTY matrix — so the same no-args call
- * would instead make every downstream check below (`$capabilities === []`,
- * `$formats === []`) fire immediately; the outcome (refuse to print, exit 1)
- * is the same, but going through the container is still correct: it's the
- * only way this script exercises the REAL DB state instead of a guaranteed-empty
- * stub.
+ * REWRITTEN (CNV-71-02): no more Kernel boot, no more DI container, no more
+ * `WorkerCapabilityRepository`/DB dependency AT ALL. `ConversionRegistry`'s
+ * routing matrix (`isSupported()`/`getCategory()`/`streamFor()`) now comes
+ * from the committed static catalog `config/catalog/conversion_pairs.json`
+ * (see the class docblock) — `new ConversionRegistry()` with no arguments
+ * already resolves to that real file (`ConversionRegistry::defaultCatalogPath()`),
+ * so this script just needs the Composer autoloader, nothing else. This is a
+ * strict simplification: the tool used to require a migrated, seeded
+ * `convertor-test`/dev DB just to dump what is now a committed, versioned
+ * file — `workers/tests/test_routing_drift.py` (which shells this tool out as
+ * a subprocess) now gets a faster, DB-free dependency for the exact same
+ * `--json` contract, unchanged below.
  *
- * `ConversionRegistry`/`WorkerCapabilityRepository` are marked `public: true`
- * in `config/services.yaml` specifically so this CLI script can fetch them —
- * see the comment there; application code never does this, it always uses
- * normal constructor autowiring.
+ * `ConversionRegistry` no longer needs `public: true` in `config/services.yaml`
+ * for THIS script's sake (that historical reason from registry-04 is gone),
+ * but the flag is left in place — see the comment there.
  *
- * Usage (from app-symfony/, inside the php container):
+ * Usage (from app-symfony/, inside the php container — no DB/env needed):
  *     php bin/dump-matrix.php           # print snapshot to stdout (text)
  *     php bin/dump-matrix.php --json    # print snapshot as JSON (for drift tests)
  *     php bin/dump-matrix.php --write   # overwrite tests/Fixtures/conversion_matrix.golden.txt
  *
  * Only run with --write after reviewing the diff and confirming the routing
- * change is intentional.
+ * change is intentional (i.e. after regenerating and reviewing
+ * `config/catalog/conversion_pairs.json` itself via `make formats-catalog`).
  *
- * --json output contract:
+ * --json output contract (UNCHANGED from the DB-backed version):
  *     {
  *       "routingKeys": ["ai", "audio", "data", "document", "image", "video"],
  *       "matrix": [
@@ -61,70 +61,36 @@ declare(strict_types=1);
  *
  * Exit codes:
  *   0 — snapshot printed/written successfully.
- *   1 — the capability table is unreachable or empty, OR a non-empty
- *       capability set still produced an empty matrix. Either way this
- *       refuses to print an empty-but-valid document: a drift test diffing
- *       against "nothing" would silently pass, exactly the failure mode that
- *       cost 12 days of dead CI coverage when this file itself went missing.
+ *   1 — the catalog file is missing/malformed (`ConversionRegistry` throws
+ *       loudly — see its `loadCatalogMatrix()`) or produced zero pairs.
+ *       Refuses to print an empty-but-valid document either way: a drift test
+ *       diffing against "nothing" would silently pass, exactly the failure
+ *       mode that cost 12 days of dead CI coverage when this file itself went
+ *       missing.
  */
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
-use App\Kernel;
-use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionRegistry;
-use Symfony\Component\Dotenv\Dotenv;
 
 // PHPStan (level 8) не знает CLI-суперглобал `$argv`; берём из $_SERVER.
 /** @var list<string> $cliArgv */
 $cliArgv = array_values(array_map(strval(...), \is_array($_SERVER['argv'] ?? null) ? $_SERVER['argv'] : []));
 
-// Same `.env`/`.env.local`/`.env.<env>[.local]` loading bin/console and
-// public/index.php get via symfony/runtime — needed because config like
-// DATABASE_URL is resolved from these files, not raw container env vars.
-(new Dotenv())->bootEnv(dirname(__DIR__) . '/.env');
-
-$appEnv   = $_SERVER['APP_ENV'] ?? 'dev';
-$appDebug = (bool) ($_SERVER['APP_DEBUG'] ?? ($appEnv !== 'prod'));
-
-$kernel = new Kernel($appEnv, $appDebug);
-$kernel->boot();
-$container = $kernel->getContainer();
-
-/** @var WorkerCapabilityRepository $repository */
-$repository = $container->get(WorkerCapabilityRepository::class);
+$registry = new ConversionRegistry();
 
 try {
-    $capabilities = $repository->findAllCapabilities();
-} catch (\Throwable $e) {
-    fwrite(STDERR, "dump-matrix: worker_capabilities DB unreachable: {$e->getMessage()}\n");
+    $formats = $registry->getSupportedFormats();
+} catch (\RuntimeException $e) {
+    fwrite(STDERR, "dump-matrix: не удалось прочитать каталог: {$e->getMessage()}\n");
     exit(1);
 }
-
-if ($capabilities === []) {
-    fwrite(
-        STDERR,
-        "dump-matrix: worker_capabilities table is EMPTY — refusing to silently fall back to the "
-        . "hardcoded matrix (that would validate nothing; see registry-03/registry-04). Run the "
-        . "registry-03 seed migration or register a worker first.\n",
-    );
-    exit(1);
-}
-
-/** @var ConversionRegistry $registry */
-$registry = $container->get(ConversionRegistry::class);
-// Force a fresh DB read: the container's cache.app pool is shared (Redis)
-// across processes, so a warm cache from an earlier run could otherwise mask
-// the current DB state — exactly what a diagnostic/drift tool must not do.
-$registry->invalidateMatrix();
-
-$formats = $registry->getSupportedFormats();
 
 if ($formats === []) {
     fwrite(
         STDERR,
-        "dump-matrix: registry produced an EMPTY matrix from a non-empty capability set "
-        . "(" . count($capabilities) . " row(s) — all unparseable?) — refusing to print an empty document.\n",
+        "dump-matrix: каталог пуст (0 пар) — отказываюсь печатать пустой документ. Если это "
+        . "ожидаемо, проверьте config/catalog/conversion_pairs.json вручную.\n",
     );
     exit(1);
 }

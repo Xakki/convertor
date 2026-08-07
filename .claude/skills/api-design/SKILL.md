@@ -26,7 +26,12 @@ description: Convertor REST API conventions — /api/v1 prefix and versioning, J
   нет — каждый контроллер сам ловит доменные исключения и решает HTTP-код
   (см. `ConversionController::convert()`, строки ~139-158). Новый эндпоинт должен
   следовать этому же паттерну: `{"error": ...}` + осмысленный HTTP-статус
-  (400/401/403/404/409/422/429/500), не голый 500 с трассой. Коды CNV-28
+  (400/401/403/404/409/422/429/500), не голый 500 с трассой. `worker_unavailable`
+  (503 — CNV-71-03: для нужного workerType пары НЕТ НИ ОДНОЙ строки в
+  `worker_capabilities` — инфраструктурная временная недоступность, не ошибка
+  клиента; строка есть, даже offline, → задача принимается штатно, см.
+  `ConversionManager::createSingleHop()`/`createChain()` и
+  `App\Exception\WorkerUnavailableException`). Коды CNV-28
   (pay-per-use / top-up): `insufficient_balance` (429 — квота исчерпана, баланса
   не хватает), `unknown_pack` (404 — неизвестный pack в top-up),
   `telegram_link_required` (403 — нет привязки Telegram для invoice).
@@ -120,7 +125,12 @@ firewall rules ДО guest-префикса + `#[IsGranted('ROLE_USER')]`):
 
 **`src/Controller/Api/InternalWorkerController.php`** (`/api/v1/internal/worker`,
 firewall `GatewayInternalAuthenticator`, только для gateway, НЕ в Nelmio):
-`POST /result`, `POST /fail`, `POST /dlq-fail`, `POST /liveness` (registry-06:
+`POST /result`, `POST /fail`, `POST /dlq-fail`, `POST /expire` (CNV-71-03:
+принятая, но никем не взятая за `WORKER_CLAIM_TIMEOUT_MINUTES` задача — gateway
+детектит таймаут сам и релеит сюда `{conversionId, reason:"worker_timeout"}`;
+переводит в `ConversionStatus::Expired` + refund через тот же
+`ConversionResultPersister`, что и fail/dlq-fail; идемпотентно — терминальный
+статус, включая уже `Expired`, → no-op 200), `POST /liveness` (registry-06:
 батч-пуш liveness от WS-Gateway, обновляет `last_seen` по составному ключу
 `(workerType, instanceId)` — UPDATE ONLY, никогда не создаёт capability-строки).
 

@@ -238,3 +238,43 @@ The gateway handles persist via the internal relay endpoint:
 
 Stream `conv.result` and command `app:queue:result-consumer` are retired.
 See `docs/superpowers/specs/2026-07-02-ws-worker-transport-design.md` §3/§5.
+
+### Expiry path — never-claimed jobs (CNV-71-03)
+
+`ConversionManager::createSingleHop()`/`createChain()` accept a job as soon as
+ANY `worker_capabilities` row exists for the target `workerType` — even
+offline/disconnected (the "worker existence" gate only checks the row exists,
+not liveness). If no worker of that type ever actually connects, the stream
+entry is never delivered to any consumer (`XREADGROUP`), so it never enters a
+PEL and idle-reclaim (§6.3 of the design spec) structurally cannot see it.
+
+The gateway's own expiry-sweep (`workers/gateway/expiry.py`, on its own
+`EXPIRY_SWEEP_INTERVAL_S` tick, default 300s) closes this gap: for each
+`conv.<type>` it scans the backlog strictly after the consumer group's
+last-delivered-id, and for any entry older than `WORKER_CLAIM_TIMEOUT_MINUTES`
+(default 60 min) it calls:
+
+```
+POST /api/v1/internal/worker/expire
+Body: {"conversionId": <int>, "reason": "worker_timeout"}
+```
+
+Symfony (`InternalWorkerController::expire()`) relays this straight into
+`ConversionResultPersister::persist()` with `state: 'expired'` — the exact
+same terminal-write shape as `state: 'failed'` (status, error message, quota/
+prepaid refund, `ConversionFailed` chain-propagation), except the target
+status is `ConversionStatus::Expired` and the error message is a fixed
+Russian string authored server-side (the gateway's `reason` is accepted but
+not echoed verbatim). **Idempotent**, same terminal-status guard as
+`completed`/`failed`: a conversion already Completed/Failed/Expired is a
+200 no-op, so a redelivered/duplicate expire call (or one racing a genuine
+`/result`/`/fail` for the same conversionId) never double-refunds — the guard
+is evaluated under a `SELECT … FOR UPDATE` lock on the `Conversion` row (see
+`ConversionResultPersister`'s class docblock) specifically to make concurrent
+callers for the same conversionId safe. On the gateway side, the stream entry
+is `XDEL`-ed only AFTER a 2xx response — a non-2xx (incl. PHP being down)
+leaves the entry for the next sweep tick, and a re-check of last-delivered-id
+right before deleting minimizes (does not eliminate) the race against a worker
+that connects and claims the job in the same narrow window; the persister's
+lock/guard is what makes either outcome deterministic regardless of which
+finalizer — the tardy worker or the sweep — wins.

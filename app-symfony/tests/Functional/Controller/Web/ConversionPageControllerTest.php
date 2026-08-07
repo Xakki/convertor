@@ -71,8 +71,9 @@ final class ConversionPageControllerTest extends WebTestCase
 
     public function testSelfConversionPairIs404(): void
     {
-        // csv→csv не входит в матрицу (from===to пары отфильтрованы в
-        // ConversionRegistry::buildRoutingPairs()) — тоже 404, не 200 с "пустой" парой.
+        // csv→csv не входит в матрицу (from===to пары отфильтрованы при
+        // редукции каталога — ConversionRegistry::reduceCapabilities()) —
+        // тоже 404, не 200 с "пустой" парой.
         $client = static::createClient();
         $client->request('GET', '/convert/csv-to-csv');
 

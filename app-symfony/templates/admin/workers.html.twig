@@ -30,12 +30,6 @@
    валидный HTML5 (table внутри td — штатный кейс) и вдобавок у воркер-уровня
    свой набор колонок, отличный от хост-уровня.
 
-   Seed-строки (instanceId='__seed__', registry-03) — НЕ мёртвые воркеры, а
-   статичный снимок матрицы; их lastSeen всегда старый (миграция применилась
-   один раз, liveness-пуш они никогда не получают) — поэтому показываем их с
-   отдельным нейтральным бейджем "Seed" ВМЕСТО alive/stale-индикатора, а не
-   как воркер, который вот-вот истечёт по TTL.
-
    `status` (alive/disconnected/unknown) и `stale` (lastSeen старше TTL) —
    ДВА РАЗНЫХ факта, показываем раздельными бейджами, не схлопываем в один
    светофор: воркер может быть alive по статусу, но давно не пинговать (или
@@ -167,7 +161,6 @@
                         <td class="px-4 py-3">
                             <div class="flex items-center gap-1.5 text-xs">
                                 <span x-show="host.hasAi" x-cloak class="rounded-full bg-indigo-500/15 px-2 py-0.5 text-indigo-300">AI</span>
-                                <span x-show="host.hasSeed" x-cloak class="rounded-full bg-zinc-700 px-2 py-0.5 text-zinc-300">Seed</span>
                             </div>
                         </td>
                     </tr>
@@ -232,11 +225,6 @@
                                                             <span>
                                                                 <div class="font-mono text-white" x-text="w.workerType"></div>
                                                                 <div class="flex items-center gap-1.5 text-xs text-zinc-500">
-                                                                    <span x-show="w.isSeed" x-cloak
-                                                                          class="rounded-full bg-zinc-700 px-2 py-0.5 text-zinc-300"
-                                                                          title="Статичный снимок матрицы из registry-03 seed-миграции, не живой процесс">
-                                                                        Seed
-                                                                    </span>
                                                                     <span x-show="w.isAi" x-cloak
                                                                           class="rounded-full bg-indigo-500/15 px-2 py-0.5 text-indigo-300"
                                                                           title="Воркер объявил isAi=true в capabilities">
@@ -250,40 +238,27 @@
                                                     <td class="px-4 py-3">
                                                         {# Факт №1: liveness-статус (alive/disconnected/unknown) —
                                                            НЕ то же самое, что свежесть lastSeen (соседняя колонка). #}
-                                                        <template x-if="w.isSeed">
-                                                            <span class="rounded-full bg-zinc-700 px-2.5 py-0.5 text-xs text-zinc-300">
-                                                                не отслеживается (seed)
-                                                            </span>
-                                                        </template>
-                                                        <template x-if="!w.isSeed">
-                                                            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs"
-                                                                  :class="statusClass(w.status)">
-                                                                <span class="h-1.5 w-1.5 rounded-full" :class="statusDotClass(w.status)"></span>
-                                                                <span x-text="statusLabel(w.status)"></span>
-                                                            </span>
-                                                        </template>
+                                                        <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs"
+                                                              :class="statusClass(w.status)">
+                                                            <span class="h-1.5 w-1.5 rounded-full" :class="statusDotClass(w.status)"></span>
+                                                            <span x-text="statusLabel(w.status)"></span>
+                                                        </span>
                                                     </td>
                                                     <td class="px-4 py-3">
-                                                        {# Факт №2: возраст lastSeen относительно GC-TTL. Для seed —
-                                                           дата seed-миграции, без alive/stale-тревоги (не воркер). #}
-                                                        <template x-if="w.isSeed">
-                                                            <span class="text-xs text-zinc-500" x-text="fmtDate(w.lastSeen)"></span>
-                                                        </template>
-                                                        <template x-if="!w.isSeed">
-                                                            <div>
-                                                                <span class="rounded-full px-2.5 py-0.5 text-xs"
-                                                                      :class="w.stale ? 'bg-red-500/15 text-red-400' : 'bg-green-500/15 text-green-400'"
-                                                                      x-text="w.stale ? 'устарел' : 'свежий'"></span>
-                                                                <div class="mt-1 text-xs text-zinc-500" x-text="fmtDate(w.lastSeen)"></div>
-                                                            </div>
-                                                        </template>
+                                                        {# Факт №2: возраст lastSeen относительно GC-TTL. #}
+                                                        <div>
+                                                            <span class="rounded-full px-2.5 py-0.5 text-xs"
+                                                                  :class="w.stale ? 'bg-red-500/15 text-red-400' : 'bg-green-500/15 text-green-400'"
+                                                                  x-text="w.stale ? 'устарел' : 'свежий'"></span>
+                                                            <div class="mt-1 text-xs text-zinc-500" x-text="fmtDate(w.lastSeen)"></div>
+                                                        </div>
                                                     </td>
                                                     <td class="px-4 py-3 text-xs">
                                                         <div class="font-mono text-zinc-300" x-text="w.version || '—'"></div>
                                                         <div class="font-mono text-zinc-600" x-text="w.image || ''"></div>
                                                     </td>
                                                     <td class="px-4 py-3 text-xs text-zinc-500">
-                                                        <span x-text="w.isSeed ? 'из seed-миграции' : 'из register()'"></span>
+                                                        из register()
                                                     </td>
                                                     <td class="px-4 py-3 text-right font-mono" x-text="w.pairCount"></td>
                                                     <td class="px-4 py-3 text-right font-mono text-xs" x-text="fmtWorkerInflight(w.inflight)"></td>
@@ -376,7 +351,7 @@
     // hosts[] — массив записей уровня 1, каждая:
     //   { key, host, workers, alive, disconnected, unknown, stale, lastSeen,
     //     inflight, inflightKnown, cpu, mem, load, images, versions,
-    //     hasAi, hasSeed,
+    //     hasAi,
     //     // UI-состояние, НЕ трогается при merge-in-place с бэка:
     //     expanded, loaded, loading, error, workersList }
     // host.workersList[] — записи уровня 2 (тот же shape, что раньше в
@@ -438,8 +413,7 @@
 
             // CNV-61: глобальная кнопка «Удалить отключённых» — DELETE
             // /api/v1/admin/workers/stale (backend удаляет только
-            // disconnected/unknown, seed-строки исключены на бэке). Действие
-            // необратимо → подтверждение с явным предупреждением про
+            // disconnected/unknown). Действие необратимо → подтверждение с явным предупреждением про
             // временное исчезновение живого, но флапающего воркера (gateway
             // попросит его переподключиться, но это не мгновенно — до ~5
             // минут, если недавно уже был nudge, cooldown 300с). staleDeleting/
@@ -448,7 +422,7 @@
             // трогать уже отрисованную таблицу при неудаче.
             async deleteStale() {
                 const confirmed = confirm(
-                    'Удалить из БД все строки воркеров со статусом «не подключён» или «нет данных» (кроме seed-строк с матрицей форматов)?\n\n'
+                    'Удалить из БД все строки воркеров со статусом «не подключён» или «нет данных»?\n\n'
                     + 'Это необратимо. Если какой-то из них на самом деле ещё жив (просто отвалился/флапает) — '
                     + 'gateway попросит его переподключиться, но это займёт от ~30 секунд до 5 минут, '
                     + 'и на это время он пропадёт со страницы.',
@@ -531,7 +505,6 @@
                     images: sh.images || [],
                     versions: sh.versions || [],
                     hasAi: !!sh.hasAi,
-                    hasSeed: !!sh.hasSeed,
                 };
             },
 

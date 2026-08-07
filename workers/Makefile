@@ -91,6 +91,14 @@ metrics-exporter-recreate: ## Force-recreate metrics-exporter (profile monitorin
 gateway-logs: ## Tail логи ws-gateway
 	$(DC) logs -f ws-gateway
 
+.PHONY: gateway-image-info
+gateway-image-info: ## RO: image id + build time образа ws-gateway (свежесть перед/после recreate)
+	docker inspect $(IMG)/ws-gateway:$(IMAGE_TAG) --format 'ImageID: {{.Id}} | Created: {{.Created}}'
+
+.PHONY: gateway-verify-code
+gateway-verify-code: ## RO: скопировать dlq_consumer.py ИЗ контейнера ws-gateway (только OUT, никогда cp внутрь bind-mount) и найти DLQ_AUDIT_LOG_MARKER
+	@tmp=$$(mktemp); $(DC) cp ws-gateway:/app/workers/gateway/dlq_consumer.py $$tmp && grep -n DLQ_AUDIT_LOG_MARKER $$tmp; rm -f $$tmp
+
 .PHONY: build-workers
 build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway ## Build все on-server образы КРОМЕ worker-ai (у него своя двухступенчатая сборка: build-ai-cpu / build-ai-cuda)
 
@@ -264,6 +272,23 @@ queue-status: ## Показать длины стримов conv.* в KeyDB (и�
 	@docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) \
 	    eval "local ks=redis.call('keys','conv.*') local out={} for _,k in ipairs(ks) do out[#out+1]=k..': '..redis.call('xlen',k) end return out" 0
 
+# RO-диагностика стрима: XINFO/XRANGE/XPENDING — никогда XDEL/XTRIM/XACK.
+.PHONY: dlq-inspect
+dlq-inspect: ## RO-инспекция DLQ-стрима STREAM=conv.dead (default): XINFO STREAM/GROUPS + XRANGE + XPENDING/группа
+	@S="$(if $(STREAM),$(STREAM),conv.dead)"; \
+	echo "== XINFO STREAM $$S =="; \
+	docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) XINFO STREAM "$$S"; \
+	echo "== XRANGE $$S - + =="; \
+	docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) XRANGE "$$S" - +; \
+	echo "== XINFO GROUPS $$S =="; \
+	docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) XINFO GROUPS "$$S"; \
+	echo "== XINFO CONSUMERS per group (idle ms = liveness) =="; \
+	docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) \
+	    eval "local out={} local groups=redis.call('xinfo','groups',KEYS[1]) for _,g in ipairs(groups) do local name for i=1,#g,2 do if g[i]=='name' then name=g[i+1] end end local cs=redis.call('xinfo','consumers',KEYS[1],name) out[#out+1]=name..': '..cjson.encode(cs) end return out" 1 "$$S"; \
+	echo "== XPENDING per group =="; \
+	docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) \
+	    eval "local out={} local groups=redis.call('xinfo','groups',KEYS[1]) for _,g in ipairs(groups) do local name for i=1,#g,2 do if g[i]=='name' then name=g[i+1] end end local p=redis.call('xpending',KEYS[1],name) out[#out+1]=name..': '..cjson.encode(p) end return out" 1 "$$S"
+
 ##@ Worker tests
 
 # Per-worker unit runs: тесты каждого воркера идут внутри pre-baked :test образа
@@ -311,10 +336,28 @@ test-python-ai: build-ffmpeg-test ## Unit тесты AI-воркера + dev-ser
 # из workers/*/worker.py (stdlib only, без httpx/Pillow — CI .venv-ci = pytest).
 # test_worker_type_drift.py — второй guard: text-parse PHP-enum WorkerType vs
 # 3 статических зеркала (ws_client.py, keydb.py, messenger.yaml).
+# test_catalog_drift.py — третий guard (CNV-71-01): committed
+# app-symfony/config/catalog/worker_capabilities.json vs свежий AST-extract;
+# bare-host, тех же зависимостей что и test_routing_drift.py не требует.
+# test_capabilities_mutation_guard.py — hardening-guard самого экстрактора
+# (CNV-71 post-71-01): пост-присваивание мутации (subscript/augassign/
+# .update()/…), которые он должен ловить как CapabilitiesExtractionError,
+# а не молча терять из графа CAPABILITIES; bare-host, тех же зависимостей
+# что и test_catalog_drift.py не требует.
 .PHONY: test-drift
-test-drift: ## Drift guards: routing (dump-matrix.php vs CAPABILITIES) + worker-type (enum vs 3 зеркала)
+test-drift: ## Drift guards: routing (dump-matrix.php vs CAPABILITIES) + worker-type (enum vs 3 зеркала) + каталог форматов + mutation-guard
 	$(REQUIRE_TEST)
-	PYTHONPATH=. pytest workers/tests/test_routing_drift.py workers/tests/test_worker_type_drift.py -v
+	PYTHONPATH=. pytest workers/tests/test_routing_drift.py workers/tests/test_worker_type_drift.py workers/tests/test_catalog_drift.py workers/tests/test_capabilities_mutation_guard.py -v
+
+# Регенерация каталога — 2 стадии. Stage 1: bare host, stdlib only (тот же
+# принцип, что и test-drift Python-сторона) — gen_worker_capabilities.py не
+# тянет worker-рантайм зависимости, docker не нужен. Stage 2: PHP-редукция
+# (CNV-71-01) через ConversionRegistry — требует поднятый php-контейнер
+# ($(CONSOLE) = docker exec, определён в app-symfony/Makefile).
+.PHONY: formats-catalog
+formats-catalog: ## Regen каталог форматов: CAPABILITIES воркеров → worker_capabilities.json → conversion_pairs.json (нужен `make up`)
+	PYTHONPATH=. python3 workers/tools/gen_worker_capabilities.py
+	$(CONSOLE) app:catalog:generate-conversion-pairs
 
 .PHONY: test-gateway
 test-gateway: build-data-test ## KeyDB-слой WS-Gateway на РЕАЛЬНОМ keydb тест-стенда (async, pytest-asyncio)
@@ -325,7 +368,7 @@ test-gateway: build-data-test ## KeyDB-слой WS-Gateway на РЕАЛЬНОМ
 	    -e REDIS_HOST=$(KEYDB_CONT) -e REDIS_DB=$(REDIS_QUEUE_DB) \
 	    -v "$(CURDIR):/src:ro" -w /src -e PYTHONPATH=/src -e HOME=/tmp \
 	    $(IMG)/worker-data:test \
-	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_liveness_push.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_dlq_consumer.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
+	    python3 -m pytest workers/tests/test_gateway_keydb.py workers/tests/test_gateway_ws.py workers/tests/test_gateway_relay.py workers/tests/test_gateway_liveness.py workers/tests/test_gateway_liveness_push.py workers/tests/test_gateway_reclaim_dlq.py workers/tests/test_gateway_dlq_consumer.py workers/tests/test_gateway_expiry.py workers/tests/test_gateway_progress_status.py workers/tests/test_ws_client.py workers/tests/test_ws_transport_integration.py -p no:cacheprovider -ra -v
 
 # Общий docker-run для e2e/smoke (KeyDB+S3+DB env → pytest -m e2e).
 define RUN_E2E_PYTEST

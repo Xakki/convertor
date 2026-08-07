@@ -15,6 +15,7 @@ use App\Service\Queue\ConversionResultPersister;
 use App\Service\Quota\QuotaService;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 use Symfony\Component\EventDispatcher\EventDispatcher;
@@ -45,10 +46,28 @@ final class ConversionResultPersisterTest extends TestCase
         return $registry;
     }
 
-    public function testUnknownConversionReturnsNormally(): void
+    /**
+     * persist() now wraps its whole read-guard-write body (lock + terminal-
+     * status guard + write) in ONE `wrapInTransaction()` call (CNV-71-03
+     * review fix — see ConversionResultPersister's class docblock
+     * "CONCURRENCY"). EVERY test needs this passthrough configured, or the
+     * closure never runs at all and `->never()` assertions on flush/dispatch/
+     * refund would pass vacuously without exercising the guard.
+     */
+    private function makeEm(?Conversion $conversion): EntityManagerInterface&MockObject
     {
         $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn(null);
+        $em->method('find')->willReturn($conversion);
+        $em->method('wrapInTransaction')->willReturnCallback(
+            static fn (callable $fn): mixed => $fn($em),
+        );
+
+        return $em;
+    }
+
+    public function testUnknownConversionReturnsNormally(): void
+    {
+        $em = $this->makeEm(null);
         $em->expects($this->never())->method('flush');
 
         $persister = $this->makePersister($this->makeRegistry($em));
@@ -76,8 +95,7 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion->method('getStatus')->willReturn(ConversionStatus::Completed);
         $conversion->method('getChainId')->willReturn(null);
 
-        $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn($conversion);
+        $em = $this->makeEm($conversion);
         $em->expects($this->never())->method('flush');
 
         $dispatcher = $this->createMock(EventDispatcher::class);
@@ -105,8 +123,7 @@ final class ConversionResultPersisterTest extends TestCase
             ->with('chain-rearm', 1)
             ->willReturn($next);
 
-        $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn($conversion);
+        $em = $this->makeEm($conversion);
         $em->expects($this->never())->method('flush');
 
         $dispatched = null;
@@ -138,8 +155,7 @@ final class ConversionResultPersisterTest extends TestCase
             ->with('chain-done', 2)
             ->willReturn(null);
 
-        $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn($conversion);
+        $em = $this->makeEm($conversion);
         $em->expects($this->never())->method('flush');
 
         $dispatcher = $this->createMock(EventDispatcher::class);
@@ -157,8 +173,7 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion = $this->createStub(Conversion::class);
         $conversion->method('getStatus')->willReturn(ConversionStatus::Failed);
 
-        $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn($conversion);
+        $em = $this->makeEm($conversion);
         $em->expects($this->never())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);
@@ -172,6 +187,9 @@ final class ConversionResultPersisterTest extends TestCase
 
     public function testEmIsObtainedFromRegistryOnEachCall(): void
     {
+        // Plain stub, not makeEm(): this test only cares about registry's
+        // getManager() call count, which happens BEFORE wrapInTransaction() is
+        // even reached — no need for the wrapInTransaction passthrough here.
         $em = $this->createStub(EntityManagerInterface::class);
         $em->method('find')->willReturn(null);
 
@@ -205,8 +223,7 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion->method('getStatus')->willReturn(ConversionStatus::Processing);
         $conversion->method('getAttempt')->willReturn(1);
 
-        $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn($conversion);
+        $em = $this->makeEm($conversion);
         $em->expects($this->never())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);
@@ -240,9 +257,7 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion->method('getEffectiveBillingMode')->willReturn(BillingMode::PlanQuota);
         $conversion->method('getId')->willReturn(1);
 
-        $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn($conversion);
-        $em->method('wrapInTransaction')->willReturnCallback(static fn (callable $fn): mixed => $fn($em));
+        $em = $this->makeEm($conversion);
         $em->expects($this->once())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);
@@ -271,9 +286,7 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion->method('getEffectiveBillingMode')->willReturn(BillingMode::PlanQuota);
         $conversion->method('getId')->willReturn(1);
 
-        $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn($conversion);
-        $em->method('wrapInTransaction')->willReturnCallback(static fn (callable $fn): mixed => $fn($em));
+        $em = $this->makeEm($conversion);
         $em->expects($this->once())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);
@@ -296,12 +309,7 @@ final class ConversionResultPersisterTest extends TestCase
         $conversion->method('getEffectiveBillingMode')->willReturn(BillingMode::PlanQuota);
         $conversion->method('getId')->willReturn(1);
 
-        $em = $this->createMock(EntityManagerInterface::class);
-        $em->method('find')->willReturn($conversion);
-        // Продакшн оборачивает refund+flush в wrapInTransaction (атомарность
-        // decrement'а с переходом в терминальный статус). Мок обязан РЕАЛЬНО
-        // выполнить замыкание, иначе внутренние refund()/flush() не сработают.
-        $em->method('wrapInTransaction')->willReturnCallback(static fn (callable $fn): mixed => $fn($em));
+        $em = $this->makeEm($conversion);
         $em->expects($this->once())->method('flush');
 
         $quota = $this->createMock(QuotaService::class);

@@ -6,7 +6,6 @@ namespace App\Controller\Api;
 
 use App\Enum\WorkerType;
 use App\Repository\WorkerCapabilityRepository;
-use App\Service\Conversion\ConversionRegistry;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Storage\S3Storage;
 use App\Service\Worker\ResultKeyBuilder;
@@ -56,14 +55,15 @@ final class WorkerController extends AbstractController
         private readonly ResultKeyBuilder $keyBuilder,
         private readonly LoggerInterface $logger,
         private readonly WorkerCapabilityRepository $workerCapabilityRepository,
-        private readonly ConversionRegistry $registry,
     ) {
     }
 
     /**
      * POST /api/v1/worker/register
      * Регистрирует возможности воркера; upsert по составному ключу (workerType,
-     * instanceId), инвалидирует кеш матрицы.
+     * instanceId). CNV-71-02: больше НЕ инвалидирует роутинг-матрицу — та с этой
+     * задачи строится из статического каталога (`ConversionRegistry`), а не из
+     * `worker_capabilities`, и не зависит от регистрации воркера.
      */
     #[Route('/register', methods: ['POST'])]
     public function register(Request $request): JsonResponse
@@ -86,7 +86,6 @@ final class WorkerController extends AbstractController
         $host = isset($data['host']) && is_string($data['host']) && $data['host'] !== '' ? $data['host'] : null;
 
         $this->workerCapabilityRepository->upsert((string) $data['workerType'], (string) $data['instanceId'], $data, $host);
-        $this->registry->invalidateMatrix();
 
         return $this->json(['ok' => true]);
     }

@@ -13,6 +13,7 @@ from contextlib import suppress
 from workers.common.logging_config import configure_logging
 from workers.gateway.config import load_config
 from workers.gateway.dlq_consumer import run_dlq_consumer_loop
+from workers.gateway.expiry import run_expiry_loop
 from workers.gateway.keydb import WORKER_TYPES, KeyDbGateway, build_client
 from workers.gateway.liveness import run_liveness_push_loop
 from workers.gateway.reclaim import run_reclaim_loop
@@ -34,10 +35,14 @@ async def main() -> None:
     # циклы/aclose, без общего connection-pool с ack-путём result/fail.
     dlq_relay = RelayClient(cfg.symfony_internal_url, cfg.gateway_internal_token)
     liveness_relay = RelayClient(cfg.symfony_internal_url, cfg.gateway_internal_token)
+    # Отдельный relay-клиент для expiry-sweep (CNV-71-03) — тот же принцип
+    # изоляции жизненного цикла/connection-pool, что dlq_relay/liveness_relay.
+    expiry_relay = RelayClient(cfg.symfony_internal_url, cfg.gateway_internal_token)
 
     reclaim_task: asyncio.Task | None = None
     dlq_task: asyncio.Task | None = None
     liveness_task: asyncio.Task | None = None
+    expiry_task: asyncio.Task | None = None
     try:
         await client.ping()
         # Idle-reclaim (s1-06): запускаем после ping — KeyDB точно доступен.
@@ -63,6 +68,13 @@ async def main() -> None:
             ),
             name="liveness-push",
         )
+        # Expiry-sweep (CNV-71-03): принятая, но никем не взятая за
+        # WORKER_CLAIM_TIMEOUT_MINUTES задача → PHP /internal/worker/expire.
+        # Свой отдельный тик (expiry_sweep_interval_s), см. expiry.py docstring.
+        expiry_task = asyncio.create_task(
+            run_expiry_loop(keydb, expiry_relay, cfg),
+            name="expiry-sweep",
+        )
         logger.info(
             "ws-gateway starting",
             extra={
@@ -74,20 +86,24 @@ async def main() -> None:
                 "reclaimIntervalS": cfg.reclaim_interval_s,
                 "dlqConsumerBlockMs": cfg.dlq_consumer_block_ms,
                 "livenessPushIntervalS": cfg.liveness_push_interval_s,
+                "expirySweepIntervalS": cfg.expiry_sweep_interval_s,
+                "workerClaimTimeoutMinutes": cfg.worker_claim_timeout_minutes,
                 "streams": [f"conv.{t}" for t in WORKER_TYPES],
             },
         )
         await gateway.serve_forever()
     finally:
-        for task in (reclaim_task, dlq_task, liveness_task):
+        tasks = (reclaim_task, dlq_task, liveness_task, expiry_task)
+        for task in tasks:
             if task is not None:
                 task.cancel()
-        for task in (reclaim_task, dlq_task, liveness_task):
+        for task in tasks:
             if task is not None:
                 with suppress(asyncio.CancelledError):
                     await task
         await dlq_relay.aclose()
         await liveness_relay.aclose()
+        await expiry_relay.aclose()
         await client.aclose()
 
 

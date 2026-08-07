@@ -25,7 +25,7 @@ use Psr\Log\LoggerInterface;
  *       авторитетным (`authoritative: true` — gateway прогрелся);
  *   (b) её `(workerType, instanceId)` НЕТ в этом снапшоте;
  *   (c) её `lastSeen` старше окна тишины `silenceSeconds`;
- *   (d) это не seed-строка и её текущий статус — `alive`.
+ *   (d) её текущий статус — `alive`.
  *
  * ПОЧЕМУ ИМЕННО ТАК, а не «нет в снапшоте → сразу offline»: снапшот
  * авторитетен только для тех инстансов, о которых ЭТОТ gateway вообще может
@@ -46,9 +46,10 @@ use Psr\Log\LoggerInterface;
  *    погашения «потому что пуш пришёл пустым» не бывает.
  *
  * ЧЕГО ЭТОТ ПРОХОД НЕ ДЕЛАЕТ (осознанно):
- *  - НЕ трогает маршрутизацию. `status` не входит в критерии
- *    {@see \App\Service\Conversion\ConversionRegistry} — она читает только
- *    `capabilities` (это зафиксировано тестом `ConversionRegistryLivenessStatusTest`).
+ *  - НЕ трогает маршрутизацию. С CNV-71-02
+ *    {@see \App\Service\Conversion\ConversionRegistry} вообще не читает
+ *    `worker_capabilities` (ни `status`, ни `capabilities`) для роутинга —
+ *    та строится из статического каталога `config/catalog/conversion_pairs.json`.
  *  - НЕ удаляет строки — удаление остаётся исключительно за долгим TTL-GC.
  *  - НЕ двигает `lastSeen` — он вход GC и колонки «Свежесть» админки.
  *  - ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ push-модели: если gateway лежит целиком, пушей нет

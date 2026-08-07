@@ -1,34 +1,47 @@
-"""Register-round-trip routing-contract drift test (registry-04).
+"""Routing-contract drift test (registry-04; CNV-71-02 review update).
 
 What this checks: what Python workers actually DECLARE in their CAPABILITIES
-(union across every `workers/*/worker.py`) vs what the LIVE PHP registry
-reports via `bin/dump-matrix.php --json` — the same tool a worker's
-`POST /api/v1/worker/register` call feeds into (`WorkerCapabilityRepository` →
-`ConversionRegistry`). There is no PHP hardcode fallback in this comparison
-any more: since registry-03 seeded the DB, `ConversionRegistry`'s hardcoded
-`workerCapabilities()` path is unreachable in any migrated environment, and
-`dump-matrix.php` forces a fresh DB read (`invalidateMatrix()`) rather than
-trusting a possibly-stale cache — see its docblock for the full contract.
+(union across every `workers/*/worker.py`) vs what `bin/dump-matrix.php --json`
+reports. CNV-71-02 rewrote `dump-matrix.php` to read the committed static
+catalog (`config/catalog/conversion_pairs.json` via `ConversionRegistry`), NOT
+the DB — it no longer touches `WorkerCapabilityRepository`, no live registry
+read, and no `register()` round-trip. "LIVE PHP registry"/"register
+round-trip" in earlier versions of this docstring described the pre-CNV-71-02
+DB-backed tool; that is no longer what runs here. What IS still checked is
+identical in shape: the same `dump-matrix.php --json` output, now sourced from
+the static catalog.
 
 Two assertions:
 
-(A) Every routing-key (`stream`, i.e. `streamFor()` output) the live registry
-    can route a job to has ≥1 Python worker declaring it in `routing_keys`.
-    Catches "stream without consumer" — a job would pile up forever.
+(A) Every routing-key (`stream`, i.e. `streamFor()` output) the catalog can
+    route a job to has ≥1 Python worker declaring it in `routing_keys`.
+    Catches "stream without consumer" — a job would pile up forever. This
+    assertion is INDEPENDENT of `test_catalog_drift.py` below — nothing else
+    in the suite checks routing-key coverage — and remains meaningful.
 
 (B) Every (from→to) pair a Python worker declares in CAPABILITIES.matrix is
-    present in the live registry. A worker cannot be handed a pair the
-    registry doesn't know about — it would never get routed there.
-    Direction matters and is intentionally ONE-WAY: the registry can contain
+    present in the catalog. A worker cannot be handed a pair the catalog
+    doesn't know about — it would never get routed there.
+    Direction matters and is intentionally ONE-WAY: the catalog can contain
     pairs no *currently loaded* worker code declares without that being
-    drift. Per the epic's eviction design (registry-00: "long-TTL GC, not
-    liveness gating"), a capability row survives long after the worker that
-    registered it goes away or gets redeployed with a different matrix — the
-    DB can legitimately lag a code change until that worker instance
-    re-registers. Enforcing registry ⊆ workers here would make the test flap
-    on ordinary operational staleness, not genuine drift; enforcing
-    workers ⊆ registry (this assertion) is what actually gates "this worker's
-    code declares something the router has never heard of."
+    drift (e.g. a worker temporarily rolled back to an older matrix).
+    Enforcing catalog ⊆ workers here would flap on ordinary operational
+    differences, not genuine drift; enforcing workers ⊆ catalog (this
+    assertion) is what actually gates "this worker's code declares something
+    the router has never heard of."
+
+    NOTE — largely subsumed by `test_catalog_drift.py`: since CNV-71-02 the
+    catalog is a pure, deterministic reduction of the SAME committed
+    `worker_capabilities.json` that `test_catalog_drift.py` diffs byte-for-byte
+    against a fresh AST extraction of `workers/*/worker.py` (with a much more
+    precise diff — full line-level unified diff vs. this assertion's
+    pair-list). If `worker_capabilities.json` matches the workers' source,
+    the catalog matches it too, and assertion (B) here can only fail in the
+    same situations `test_catalog_drift.py` already catches — plus format
+    aliasing (yml/yaml, jpeg/jpg, tif/tiff, htm/html), which is the one thing
+    `test_catalog_drift.py` does not normalise. Do not treat (B) as a
+    stronger or independent guarantee than it actually gives; assertion (A)
+    has no such overlap and stays fully independent.
 
     `category` vs `stream`: dump-matrix.php's per-pair `category` (raw stored
     FileCategory) can differ from `stream` (actual `streamFor()` routing
@@ -43,21 +56,19 @@ accidentally deleted 2026-07-10 by an unrelated commit (`2105d70`). The old
 version of this test reacted to the missing tool with `pytest.skip()` —
 so for ~12 days this drift guard reported a green "skipped" result while
 checking literally nothing, and nobody noticed. `_load_registry()` below
-therefore treats every failure mode (tool missing/non-executable, DB
-unreachable, non-zero exit, unparsable output) as a hard `pytest.fail()`.
+therefore treats every failure mode (tool missing/non-executable, catalog
+missing/empty, non-zero exit, unparsable output) as a hard `pytest.fail()`.
 If you are tempted to add a `pytest.skip()` back to "unblock CI" — don't;
 that is the exact regression this file exists to prevent. Fix the actual
-tool/DB/environment problem instead.
+tool/catalog/environment problem instead.
 
-Run standalone:      make test-drift
-Wiring caveat (verified 2026-07-22): `make test-drift` is NOT a prerequisite
-of `make test` or `make test-python` — `test-python`'s own `##` help text
-says "excludes e2e + routing-drift; see test-e2e / test-drift", and `test`
-= `test-php test-python` only. There is also no CI workflow config in this
-repo (no `.github/workflows`, no `.gitlab-ci.yml`) that would invoke it
-automatically. So today this guard ONLY runs when a human/agent calls
-`make test-drift` by hand — reported to the team-lead as-is; NOT fixed here
-(out of the Python zone / needs a Makefile-wiring decision).
+Run standalone: `make test-drift` (from repo root) — and it is wired into the
+`make test` chain (root `Makefile`: `test: test-up → test-php test-python
+test-drift`). BUT it does NOT actually execute in a normal `make test` run
+today: `test-php` currently fails first on the known
+`ConversionTextInputControllerTest` BillingMode-mock failures (CNV-60), and
+Make stops the chain there before `test-python`/`test-drift` ever run. Run
+`make TEST=1 test-drift` directly until CNV-60 is fixed.
 
 If either assertion FAILS, it means there is a real routing gap. Do NOT
 suppress the failure by loosening the assertions or patching routing. File a
@@ -65,7 +76,6 @@ grooming card and fix the underlying mismatch.
 """
 from __future__ import annotations
 
-import ast
 import json
 import os
 import shutil
@@ -105,13 +115,14 @@ def _canon(fmt: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# PHP registry loader — register-round-trip source of truth
+# PHP catalog-snapshot loader — dump-matrix.php --json wrapper
 # ---------------------------------------------------------------------------
 
 def _container_name() -> str:
     # Makefile exports COMPOSE_PROJECT_NAME for the stand it runs against (the
     # test stand under `make test`), so the env wins over the tracked .env file —
-    # otherwise this drift check would read the DEV database's matrix.
+    # keeps the docker-exec fallback pointed at the same php container/checkout
+    # as the rest of the test-stand run, not a stray dev container.
     project = os.environ.get("COMPOSE_PROJECT_NAME", "").strip()
     if project:
         return f"{project}-php"
@@ -152,7 +163,7 @@ def _parse_registry_json(stdout: str, *, source: str) -> dict[str, Any]:
 
 
 def _load_registry() -> dict[str, Any]:
-    """Run `dump-matrix.php --json` and return the parsed live registry snapshot.
+    """Run `dump-matrix.php --json` and return the parsed catalog snapshot.
 
     NEVER skips (see module docstring). Tries native `php` first (portable
     when a compatible host PHP is installed), then falls back to `docker exec`
@@ -189,7 +200,7 @@ def _load_registry() -> dict[str, Any]:
         detail = f"\nNative path already failed:\n{native_diag}" if native_diag else ""
         pytest.fail(
             "Neither a working native `php` nor `docker` is available to run "
-            f"{PHP_SCRIPT} --json — cannot execute the register-round-trip drift "
+            f"{PHP_SCRIPT} --json — cannot execute the routing drift "
             "test in this environment. Install one of them; do NOT skip this "
             "test to work around it (see module docstring — that is exactly the "
             f"regression that hid a real drift for ~12 days).{detail}"
@@ -210,7 +221,7 @@ def _load_registry() -> dict[str, Any]:
         pytest.fail(
             f"{PHP_SCRIPT} --json failed inside container {container!r} "
             f"(exit {res.returncode}) — this is a genuine drift-test failure "
-            f"(DB unreachable/empty, missing tool, or a tool bug), not a "
+            f"(catalog missing/empty, missing tool, or a tool bug), not a "
             f"missing-tool skip:\n{res.stderr.strip()[:2000]}{detail}"
         )
     return _parse_registry_json(res.stdout, source=f"docker exec {container}")
@@ -226,194 +237,30 @@ def _load_registry() -> dict[str, Any]:
 # references same-file module-level literal matrices). Static extract keeps
 # `make TEST=1 test-drift` green on a bare host venv without weakening coverage
 # or installing worker runtime deps just for this guard.
+#
+# The extractor itself lives in workers/tools/capabilities_ast.py (registry-05:
+# shared with gen_worker_capabilities.py, the format-catalog generator) — this
+# file only wires its CapabilitiesExtractionError into pytest.fail() so failure
+# messages/behaviour stay identical to the old inline implementation.
 # ---------------------------------------------------------------------------
 
-def _eval_caps_node(node: ast.AST, env: dict[str, Any]) -> Any:
-    """Evaluate a narrow subset of AST nodes used by CAPABILITIES / matrices.
-
-    Supported: constants, Names resolved from *env*, list/tuple/set/dict
-    literals, and set-union via `|` (BitOr) — enough for every current
-    workers/*/worker.py CAPABILITIES graph. Anything else raises ValueError
-    so callers can skip non-capability assignments (e.g. `**imported_dict`).
-    """
-    if isinstance(node, ast.Constant):
-        return node.value
-    if isinstance(node, ast.Name):
-        if node.id not in env:
-            raise ValueError(f"unresolved name {node.id!r}")
-        return env[node.id]
-    if isinstance(node, ast.Set):
-        return {_eval_caps_node(elt, env) for elt in node.elts}
-    if isinstance(node, ast.List):
-        return [_eval_caps_node(elt, env) for elt in node.elts]
-    if isinstance(node, ast.Tuple):
-        return tuple(_eval_caps_node(elt, env) for elt in node.elts)
-    if isinstance(node, ast.Dict):
-        out: dict[Any, Any] = {}
-        for key_node, val_node in zip(node.keys, node.values, strict=True):
-            if key_node is None:
-                raise ValueError("dict **unpack not supported in CAPABILITIES graph")
-            out[_eval_caps_node(key_node, env)] = _eval_caps_node(val_node, env)
-        return out
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-        return _eval_caps_node(node.left, env) | _eval_caps_node(node.right, env)
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
-        return +_eval_caps_node(node.operand, env)
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        return -_eval_caps_node(node.operand, env)
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "set"
-    ):
-        if not node.args:
-            return set()
-        if len(node.args) == 1:
-            return set(_eval_caps_node(node.args[0], env))
-    raise ValueError(f"unsupported AST node {type(node).__name__}")
-
-
-def _try_store_name(target: ast.AST, value: ast.AST, env: dict[str, Any]) -> None:
-    if not isinstance(target, ast.Name):
-        return
-    try:
-        env[target.id] = _eval_caps_node(value, env)
-    except ValueError:
-        # Non-literal / unresolved (imports, **unpack, calls) — irrelevant for
-        # CAPABILITIES as long as the capability graph itself stays evaluable.
-        pass
-
-
-def _extract_capabilities_ast(worker_file: Path) -> dict[str, Any] | None:
-    """Return CAPABILITIES dict from worker.py via AST, or None if absent.
-
-    Prefers a module-level CAPABILITIES (ai worker) over a class attribute
-    (data/ffmpeg/image/libreoffice) — same precedence as the old exec path.
-    """
-    try:
-        source = worker_file.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(worker_file))
-    except (OSError, SyntaxError) as exc:
-        pytest.fail(
-            f"Could not parse CAPABILITIES from {worker_file.relative_to(REPO_ROOT)}:\n"
-            f"{exc}"
-        )
-
-    env: dict[str, Any] = {}
-    module_caps: dict[str, Any] | None = None
-    class_caps: dict[str, Any] | None = None
-
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                _try_store_name(target, node.value, env)
-                if (
-                    isinstance(target, ast.Name)
-                    and target.id == "CAPABILITIES"
-                    and "CAPABILITIES" in env
-                    and isinstance(env["CAPABILITIES"], dict)
-                ):
-                    module_caps = env["CAPABILITIES"]
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            _try_store_name(node.target, node.value, env)
-            if (
-                isinstance(node.target, ast.Name)
-                and node.target.id == "CAPABILITIES"
-                and "CAPABILITIES" in env
-                and isinstance(env["CAPABILITIES"], dict)
-            ):
-                module_caps = env["CAPABILITIES"]
-        elif isinstance(node, ast.ClassDef):
-            for item in node.body:
-                caps_value: ast.AST | None = None
-                if isinstance(item, ast.Assign):
-                    for target in item.targets:
-                        if isinstance(target, ast.Name) and target.id == "CAPABILITIES":
-                            caps_value = item.value
-                            break
-                elif (
-                    isinstance(item, ast.AnnAssign)
-                    and item.value is not None
-                    and isinstance(item.target, ast.Name)
-                    and item.target.id == "CAPABILITIES"
-                ):
-                    caps_value = item.value
-                if caps_value is None:
-                    continue
-                try:
-                    evaluated = _eval_caps_node(caps_value, env)
-                except ValueError as exc:
-                    pytest.fail(
-                        f"Could not statically evaluate class CAPABILITIES in "
-                        f"{worker_file.relative_to(REPO_ROOT)}:\n{exc}"
-                    )
-                if isinstance(evaluated, dict):
-                    class_caps = evaluated
-
-    return module_caps if module_caps is not None else class_caps
-
-
-def _serialize_capabilities(caps: dict[str, Any]) -> dict[str, Any]:
-    """Normalize CAPABILITIES for JSON-stable comparison (sets → sorted lists)."""
-    missing_keys = [k for k in ("routing_keys", "matrix") if k not in caps]
-    if missing_keys:
-        pytest.fail(
-            f"CAPABILITIES missing required key(s): {missing_keys}"
-        )
-
-    def ser(v: Any) -> list[Any]:
-        if isinstance(v, (set, frozenset, list)):
-            return sorted(v)
-        return sorted(str(x) for x in v)
-
-    return {
-        "routing_keys": list(caps["routing_keys"]),
-        "matrix": {k: ser(v) for k, v in caps["matrix"].items()},
-    }
+from workers.tools.capabilities_ast import (
+    CapabilitiesExtractionError,
+    load_worker_capabilities,
+)
 
 
 def _load_workers() -> list[tuple[str, dict[str, Any]]]:
     """Return [(worker_name, capabilities), …] for every workers/*/worker.py.
 
-    Fails loudly rather than silently shrinking its own output — two distinct risks
-    of that shape, both closed here (registry-04 review):
-    (1) a worker.py exists but no CAPABILITIES can be located in it — previously a
-        silent `continue` dropped that worker from the comparison's input entirely;
-    (2) the directory scan itself turns up zero worker.py files (wrong REPO_ROOT,
-        moved directory, empty checkout) — previously nothing would have noticed,
-        and both drift assertions below would have passed vacuously against nothing.
+    Thin pytest.fail() wrapper around
+    workers.tools.capabilities_ast.load_worker_capabilities — see that
+    module's docstring for the fail-loud rationale (registry-04/registry-05).
     """
-    results: list[tuple[str, dict[str, Any]]] = []
-    found_any_worker_file = False
-    for worker_dir in sorted(WORKERS_DIR.iterdir()):
-        if not worker_dir.is_dir():
-            continue
-        worker_file = worker_dir / "worker.py"
-        if not worker_file.exists():
-            # Not every workers/* directory is a worker package — common/, gateway/,
-            # metrics_exporter/, tests/ have no worker.py by design. This is a
-            # structural skip, not an input-completeness risk.
-            continue
-        found_any_worker_file = True
-        raw = _extract_capabilities_ast(worker_file)
-        if raw is None:
-            pytest.fail(
-                f"workers/{worker_dir.name}/worker.py has no CAPABILITIES (neither a "
-                "module-level constant nor a class attribute) — silently dropping this "
-                "worker from the drift comparison is exactly the failure mode this test "
-                "file exists to prevent (see module docstring). If this worker genuinely "
-                "must not declare capabilities, exclude it here explicitly with a comment "
-                "explaining why — do not let it vanish via a silent `None`."
-            )
-        results.append((worker_dir.name, _serialize_capabilities(raw)))
-    if not found_any_worker_file:
-        pytest.fail(
-            f"Found ZERO workers/*/worker.py files under {WORKERS_DIR} — the worker scan "
-            "came back empty. Both drift assertions would otherwise pass vacuously while "
-            "comparing against nothing, which is exactly the silent-guard failure mode "
-            "this test file exists to prevent."
-        )
-    return results
+    try:
+        return load_worker_capabilities(WORKERS_DIR)
+    except CapabilitiesExtractionError as exc:
+        pytest.fail(str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +319,7 @@ def workers() -> list[tuple[str, dict[str, Any]]]:
 
 
 # ---------------------------------------------------------------------------
-# Assertion (A): every live registry routing-key is consumed by ≥1 worker
+# Assertion (A): every catalog routing-key is consumed by ≥1 worker
 # ---------------------------------------------------------------------------
 
 def test_all_routing_keys_have_worker(
@@ -480,13 +327,13 @@ def test_all_routing_keys_have_worker(
     workers: list[tuple[str, dict[str, Any]]],
 ) -> None:
     """
-    Every stream the live registry can route a job to must have at least one
+    Every stream the catalog can route a job to must have at least one
     Python worker that declares it in routing_keys. A missing worker means
     jobs pile up in that stream forever.
     """
     uncovered = _uncovered_routing_keys(registry, workers)
     assert not uncovered, (
-        "Routing keys emitted by the live PHP registry with NO Python worker:\n"
+        "Routing keys emitted by the catalog with NO Python worker:\n"
         + "\n".join(f"  - {k}" for k in sorted(uncovered))
         + "\n\nFor each key above: either add the missing worker, or the "
         + "registered capability that advertises this stream is stale/wrong."
@@ -494,7 +341,7 @@ def test_all_routing_keys_have_worker(
 
 
 # ---------------------------------------------------------------------------
-# Assertion (B): worker matrix ⊆ live registry (register-round-trip)
+# Assertion (B): worker matrix ⊆ catalog
 # ---------------------------------------------------------------------------
 
 def test_worker_matrix_subset_of_registry(
@@ -502,18 +349,23 @@ def test_worker_matrix_subset_of_registry(
     workers: list[tuple[str, dict[str, Any]]],
 ) -> None:
     """
-    Every (from→to) pair a worker's CAPABILITIES.matrix declares must round-trip
-    through register() into the live PHP registry. A worker cannot convert a
-    pair the registry doesn't know about — it would never be routed there.
+    Every (from→to) pair a worker's CAPABILITIES.matrix declares must be
+    present in the catalog (`dump-matrix.php --json`). A worker cannot
+    convert a pair the catalog doesn't know about — it would never be
+    routed there.
 
     One-directional on purpose — see module docstring ("category vs stream").
     Format aliases (yml/yaml, jpeg/jpg, tif/tiff, htm/html) are normalised on
     both sides before comparison. Genuine format differences are NOT
-    normalised and will surface as failures if missing from the registry.
+    normalised and will surface as failures if missing from the catalog.
+
+    See the module docstring for why this assertion is largely subsumed by
+    `test_catalog_drift.py` (both ultimately compare against the same
+    `worker_capabilities.json` source), while assertion (A) above is not.
     """
     failures = _worker_pairs_missing_from_registry(registry, workers)
     assert not failures, (
-        f"Worker pairs absent from the live PHP registry — {len(failures)} violation(s):\n"
+        f"Worker pairs absent from the catalog — {len(failures)} violation(s):\n"
         + "\n".join(sorted(failures))
         + "\n\nFor each pair above: either the worker never (re-)registered this "
         + "pair, or the pair was dropped/renamed on the registry side — "

@@ -30,10 +30,12 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  *
  * `warnings` — доп. сигнал конфигурации (не про очередь-стрим, а про полноту
  * capability-данных воркера в БД): AI-воркер объявил в `matrix` from-формат,
- * для которого нет `matrix_categories` → пара молча дропается при построении
- * routing-матрицы ({@see ConversionRegistry::buildMatrixFromCapabilities()}).
- * Раньше это тонуло в `logger->warning`; теперь видно в admin. Считается «на
- * лету» через {@see ConversionRegistry::getCapabilityWarnings()}.
+ * для которого нет `matrix_categories` → пара молча дропается редукцией
+ * ({@see ConversionRegistry} `reduceCapabilities()`) — той же, что каталог-
+ * генератор (`App\Command\GenerateConversionPairsCommand`) прогоняет над
+ * `worker_capabilities.json` (CNV-71-02: routing-матрица сама эту таблицу уже
+ * не читает). Раньше это тонуло в `logger->warning`; теперь видно в admin.
+ * Считается «на лету» через {@see ConversionRegistry::getCapabilityWarnings()}.
  */
 final readonly class QueueStatsProvider
 {

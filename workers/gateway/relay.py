@@ -26,6 +26,10 @@ DLQ_FAIL_PATH = "/api/v1/internal/worker/dlq-fail"
 # см. workers/gateway/liveness.py. UPDATE-ONLY на стороне PHP — сюда НЕ идёт
 # ack/кредит-логика result/fail, короче таймаут (телеметрия, не персист задачи).
 LIVENESS_PATH = "/api/v1/internal/worker/liveness"
+# Accepted-but-never-claimed expiry (CNV-71-03): expiry-sweep (см.
+# workers/gateway/expiry.py) → Symfony по conversionId (та же форма вызова,
+# что post_dlq_fail — expired-запись тоже не несёт jobId к моменту detection).
+EXPIRE_PATH = "/api/v1/internal/worker/expire"
 # Таймаут одного relay-запроса. Persist (S3+БД) обычно быстрый; при зависании
 # лучше не ack'ать и дать записи остаться pending, чем висеть на сокете.
 RELAY_TIMEOUT_S = 30.0
@@ -151,6 +155,42 @@ class RelayClient:
             )
             return True
         return False
+
+    async def post_expire(self, conversion_id: int, reason: str) -> tuple[bool, int | None]:
+        """expire → Symfony (CNV-71-03: принятая, но никем не взятая за
+        `WORKER_CLAIM_TIMEOUT_MINUTES` задача).
+
+        Terminal-4xx whitelist (тот же паттерн, что `post_dlq_fail`, но УЖЕ:
+        ТОЛЬКО `404` — "Conversion not found", строка удалена раньше, чем
+        задачу вообще кто-то забрал → отмечать нечего, повтор того же запроса
+        даст тот же 404 навсегда, оставлять backlog-запись висеть в стриме
+        бессмысленно (review-находка CNV-71-03: без этого sweep ретраил бы её
+        каждый тик вечно — постоянный шум в логах). `400` СОЗНАТЕЛЬНО НЕ в
+        whitelist'е (в отличие от `post_dlq_fail`) — здесь `400` означал бы
+        баг самого gateway (невалидный payload запроса), не факт об удалённой
+        Conversion, и не должен тихо ack'аться. Возвращает `(True, 404)` в
+        этом случае — WARNING логируется ЗДЕСЬ (не в `expiry.py`), вызывающий
+        просто видит `ok=True` и удаляет backlog-запись обычной веткой.
+
+        Любой другой не-2xx (иные 4xx, 5xx, сеть) — `(False, status)`, как и
+        раньше: backlog-запись остаётся нетронутой, следующий тик повторит.
+        Возвращает `(ok, status)` как `post_result`/`_post_with_status` —
+        `status` — HTTP-код или `None` при сетевой ошибке (для логов
+        вызывающего).
+        """
+        payload = {"conversionId": conversion_id, "reason": reason}
+        ok, status = await self._post_with_status(
+            EXPIRE_PATH, payload, f"conv:{conversion_id}"
+        )
+        if ok:
+            return True, status
+        if status == 404:
+            logger.warning(
+                "expire relay 404 — conversion not found, treating as terminal (not retrying)",
+                extra={"conversionId": conversion_id, "status": status},
+            )
+            return True, status
+        return False, status
 
     async def _post(self, path: str, payload: dict, job_id: str) -> bool:
         """POST JSON; True ⇢ 2xx (можно ack'ать), False ⇢ сеть/не-2xx (НЕ ack)."""
