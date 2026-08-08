@@ -174,6 +174,61 @@ docker compose up -d --no-deps worker-ai
 несуществующем теге; `build` заставляет `pull` пропустить сервис, Skipped).
 Шаблон `.env.local_worker_example` уже задаёт это верно для обоих случаев.
 
+### Одноразовая миграция legacy Compose-томов
+
+В корневом `docker-compose.yml` кэш моделей и рабочая overlay-папка AI-воркера
+изолированы именем Compose-проекта: `${COMPOSE_PROJECT_NAME}-worker-ai-models`
+и `${COMPOSE_PROJECT_NAME}-worker-ai-data`. Старые глобальные тома назывались
+`worker-ai-models` и `worker-ai-data`. `deploy/docker-compose.yml` в эту
+миграцию не входит.
+
+**Безопасный простой вариант:** остановить текущий стек через `make down`, затем
+запустить его через `make up`. Новые тома будут созданы пустыми; модели скачаются
+лениво, а overlay будет создана заново. Не удаляйте legacy-тома, пока новый
+`worker-ai` не проверен и старый кэш больше не нужен.
+
+Чтобы сохранить кэш, на обслуживаемом хосте остановите стек через `make down`
+(не используйте `make down-v`), задайте `PROJECT` равным фактическому
+`COMPOSE_PROJECT_NAME` этого стека и скопируйте каждый том только в пустой
+целевой том:
+
+```bash
+PROJECT='your-compose-project-name' # например: xakki-convertor
+
+docker volume inspect worker-ai-models worker-ai-data
+for volume in "${PROJECT}-worker-ai-models" "${PROJECT}-worker-ai-data"; do
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    echo "Целевой том $volume уже существует; остановитесь, не объединяйте данные."
+    exit 1
+  fi
+done
+
+docker volume create --label "com.docker.compose.project=${PROJECT}" \
+  --label "com.docker.compose.volume=worker-ai-models" \
+  "${PROJECT}-worker-ai-models"
+docker volume create --label "com.docker.compose.project=${PROJECT}" \
+  --label "com.docker.compose.volume=worker-ai-data" \
+  "${PROJECT}-worker-ai-data"
+
+docker run --rm -v worker-ai-models:/from:ro \
+  -v "${PROJECT}-worker-ai-models":/to alpine:3.21 \
+  sh -ec 'cd /from && tar cf - . | tar xpf - -C /to'
+docker run --rm -v worker-ai-data:/from:ro \
+  -v "${PROJECT}-worker-ai-data":/to alpine:3.21 \
+  sh -ec 'cd /from && tar cf - . | tar xpf - -C /to'
+
+docker volume inspect "${PROJECT}-worker-ai-models" \
+  "${PROJECT}-worker-ai-data"
+make up
+```
+
+The two `docker run` calls are Docker volume-copy helpers, not Compose commands;
+all Compose lifecycle commands remain Make targets. The explicit labels let
+Compose recognise the pre-created destination volumes. If a destination already
+exists, stop rather than merging data into it; retain the legacy volumes until
+the restarted worker is healthy, then remove them manually only after confirming
+they are unused.
+
 ## Переменные окружения
 
 Читаются в `workers/ai/config.py` (весь `os.getenv` — там) и

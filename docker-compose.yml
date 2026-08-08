@@ -704,6 +704,6 @@ volumes:
     php-socket:
         name: "${COMPOSE_PROJECT_NAME}-php-socket"
     worker-ai-models:
-        name: "worker-ai-models"
+        name: "${COMPOSE_PROJECT_NAME}-worker-ai-models"
     worker-ai-data:
-        name: "worker-ai-data"
+        name: "${COMPOSE_PROJECT_NAME}-worker-ai-data"
