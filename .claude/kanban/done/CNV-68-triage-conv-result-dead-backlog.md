@@ -114,4 +114,109 @@ consumer loop started" на каждом. Эмпирически провере�
 **Контекст:** найдено в ходе диагностического прогона 2026-08-04; `conv.dead`
 половина разобрана и закрыта в рамках CNV-71 (2026-08-07).
 
-**Status:** todo
+**Execution Log:**
+
+- 2026-08-08 — карта переведена `todo → progress` проектным
+  `kanban-move.sh` (CNV-68); работа ограничена dev KeyDB, DB 2, и только
+  легаси-стримом `conv.result.dead`.
+- 2026-08-08 — read-only снимок: `make dlq-inspect STREAM=conv.result.dead`.
+  `XINFO STREAM`: `length=11`, `groups=0`; `XRANGE` вернул 11 записей.
+  Ввиду отсутствия групп `XINFO GROUPS`, `XINFO CONSUMERS` и `XPENDING` пусты.
+  Ниже сохранён полный исторический инвентарь до удаления. Время — UTC,
+  вычислено из millisecond-части stream ID. Поле `data` — payload легаси
+  result-consumer; `_original_id` — исходный ID, сохранённый в записи.
+
+  1. `stream ID=1781958817947-0`, `UTC=2026-06-20 12:33:37.947`,
+     `_original_id=1781958817937-0`; `conversionId=4`; payload:
+     `state=failed`, `outputBucket=null`, `outputKey=null`,
+     `outputMime=null`, `outputSize=null`, `processingMs=0`,
+     `error="max_retries (3) exceeded"`. Результат/output отсутствуют.
+  2. `stream ID=1782055768805-0`, `UTC=2026-06-21 15:29:28.805`,
+     `_original_id=1782055768726-0`; `conversionId=9055767614`; payload:
+     `state=completed`, `error=null`, `processingMs=851`,
+     `outputBucket=convertor-dev-results`,
+     `outputKey=results/2026/06-21/9055767614.json`,
+     `outputMime=application/json`, `outputSize=177`.
+  3. `stream ID=1782055827930-0`, `UTC=2026-06-21 15:30:27.930`,
+     `_original_id=1782055827930-0`; `conversionId=9055826385`; payload:
+     `state=completed`, `error=null`, `processingMs=604`,
+     `outputBucket=convertor-dev-results`,
+     `outputKey=results/2026/06-21/9055826385.mp4`,
+     `outputMime=video/mp4`, `outputSize=27003`.
+  4. `stream ID=1782055828933-0`, `UTC=2026-06-21 15:30:28.933`,
+     `_original_id=1782055828933-0`; `conversionId=9055828613`; payload:
+     `state=completed`, `error=null`, `processingMs=61`,
+     `outputBucket=convertor-dev-results`,
+     `outputKey=results/2026/06-21/9055828613.json`,
+     `outputMime=application/json`, `outputSize=177`.
+  5. `stream ID=1782056415056-0`, `UTC=2026-06-21 15:40:15.056`,
+     `_original_id=1782056415055-0`; `conversionId=11130999638`; payload:
+     `state=completed`, `error=null`, `processingMs=548`,
+     `outputBucket=convertor-dev-results`,
+     `outputKey=results/2026/06-21/11130999638.mp4`,
+     `outputMime=video/mp4`, `outputSize=27003`.
+  6. `stream ID=1782056416402-0`, `UTC=2026-06-21 15:40:16.402`,
+     `_original_id=1782056416401-0`; `conversionId=12866306008`; payload:
+     `state=completed`, `error=null`, `processingMs=370`,
+     `outputBucket=convertor-dev-results`,
+     `outputKey=results/2026/06-21/12866306008.json`,
+     `outputMime=application/json`, `outputSize=177`.
+  7. `stream ID=1782056715681-0`, `UTC=2026-06-21 15:45:15.681`,
+     `_original_id=1782056715680-0`; `conversionId=9055765613`; payload:
+     `state=failed`, `outputBucket=null`, `outputKey=null`,
+     `outputMime=null`, `outputSize=null`, `processingMs=0`,
+     `error="max_retries (3) exceeded"`. Результат/output отсутствуют.
+  8. `stream ID=1782062391778-0`, `UTC=2026-06-21 17:19:51.778`,
+     `_original_id=1782062391708-0`; `conversionId=11127998756`; payload:
+     `state=completed`, `error=null`, `processingMs=652`,
+     `outputBucket=convertor-dev-results`,
+     `outputKey=test_results/2026/06-21/11127998756.mp4`,
+     `outputMime=video/mp4`, `outputSize=27003`.
+  9. `stream ID=1782062393398-0`, `UTC=2026-06-21 17:19:53.398`,
+     `_original_id=1782062393396-0`; `conversionId=11252716369`; payload:
+     `state=completed`, `error=null`, `processingMs=770`,
+     `outputBucket=convertor-dev-results`,
+     `outputKey=test_results/2026/06-21/11252716369.json`,
+     `outputMime=application/json`, `outputSize=177`.
+  10. `stream ID=1782062429286-0`, `UTC=2026-06-21 17:20:29.286`,
+      `_original_id=1782062429285-0`; `conversionId=10552294370`; payload:
+      `state=completed`, `error=null`, `processingMs=580`,
+      `outputBucket=convertor-dev-results`,
+      `outputKey=test_results/2026/06-21/10552294370.mp4`,
+      `outputMime=video/mp4`, `outputSize=27003`.
+  11. `stream ID=1782062431037-0`, `UTC=2026-06-21 17:20:31.037`,
+      `_original_id=1782062431036-0`; `conversionId=11186773458`; payload:
+      `state=completed`, `error=null`, `processingMs=808`,
+      `outputBucket=convertor-dev-results`,
+      `outputKey=test_results/2026/06-21/11186773458.json`,
+      `outputMime=application/json`, `outputSize=177`.
+
+  Ограничение исторических данных: `error` сохраняет только строку
+  `"max_retries (3) exceeded"` для двух failed-записей; первичное исключение
+  persister-а, stack trace и причина исчерпания попыток в payload не retained,
+  поэтому восстановить их из этого стрима невозможно. Для девяти
+  `completed`-записей `error=null`; это не доказывает, что первичного сбоя
+  persister-а не было, только фиксирует сохранённый payload.
+- 2026-08-08 — отдельная read-only проверка актуального `conv.dead` до операции:
+  `length=0`, группа `convertor`, `pending=0`, `XRANGE` пуст. Этот стрим не
+  является объектом удаления и не изменялся.
+- 2026-08-08 — независимый предудалительный контроль повторным
+  `make dlq-inspect STREAM=conv.result.dead`: снова `length=11`, `groups=0`,
+  `XRANGE=11`; все stream ID и payload совпали с инвентарём выше. Скриптная
+  сверка карты: `card_inventory_count=11`, `card_unique_count=11`,
+  `card_ids_match_expected=True`, ограничение по первичному исключению есть.
+  Только после этой сверки допустимо удаление.
+- 2026-08-08 — ровно одно узко ограниченное удаление, без `docker compose`:
+  `docker exec xakki-convertor-keydb keydb-cli -n 2 DEL conv.result.dead`.
+  Ответ KeyDB: `1` (удалён именно один ключ/стрим). Имя dev-контейнера
+  получено из `$(KEYDB_CONT)` Makefile; `REDIS_QUEUE_DB=2` подтверждён
+  `make -pn`. Другие команды записи в KeyDB не выполнялись.
+- 2026-08-08 — post-delete read-only `make dlq-inspect
+  STREAM=conv.result.dead`: `XINFO STREAM` и `XINFO GROUPS` ответили
+  `ERR no such key`, `XRANGE` пуст — легаси-стрим более не существует.
+- 2026-08-08 — post-delete read-only `make dlq-inspect STREAM=conv.dead`:
+  `length=0`, `XRANGE` пуст; единственная группа `convertor` имеет
+  `pending=0` (`XPENDING: [0,false,false,false]`). `conv.dead` не удалялся
+  и не изменялся.
+
+**Status:** ready
