@@ -70,8 +70,8 @@ phpstan: ## Run PHPStan static analysis
 
 .PHONY: cs
 cs: ## Fix code style with php-cs-fixer
-	$(PHP_EXEC) php vendor/bin/php-cs-fixer fix --allow-risky=yes
+	$(PHP_EXEC) php vendor/bin/php-cs-fixer fix --allow-risky=yes --sequential --show-progress=none
 
 .PHONY: cs-check
 cs-check: ## Check code style with php-cs-fixer (no changes)
-	$(PHP_EXEC) php vendor/bin/php-cs-fixer fix --dry-run --diff --allow-risky=yes
+	$(PHP_EXEC) php vendor/bin/php-cs-fixer fix --dry-run --diff --allow-risky=yes --sequential --show-progress=none

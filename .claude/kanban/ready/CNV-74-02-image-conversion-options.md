@@ -51,6 +51,15 @@ format. В форме показывать сворачиваемый по ум�
 - 2026-08-15: localStorage общий для всех пользователей данного браузера, ключ —
   target format; серверная синхронизация не нужна.
 
+**Execution Log:**
+- 2026-08-15: добавлен полный контракт options: API whitelist и нормализация,
+  JSON-поле Conversion с миграцией, передача в ConversionMessage и повторное
+  использование при retry.
+- 2026-08-15: форма Symfony получила сворачиваемые настройки размера, качества
+  и JPEG-фона с безопасной загрузкой/сбросом localStorage по target format.
+- 2026-08-15: image-worker применяет bounding box без искажений, quality и
+  непрозрачный JPEG-фон; покрыто PHP API и Python worker тестами.
+
 **Affected zones:**
 - `app-front/js/upload.js`
 - `app-symfony/templates/conversion/*.html.twig`

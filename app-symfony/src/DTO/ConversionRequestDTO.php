@@ -33,6 +33,8 @@ class ConversionRequestDTO
         public readonly string $toFormat,
         public readonly bool $ocr = false,
         public readonly bool $privileged = true,
+        /** @var array<string, int|string> Разрешённые параметры результата изображения. */
+        public readonly array $options = [],
         /** Путь temp-файла для удаления после обработки (только text-вход, см. {@see fromText()}). */
         private readonly ?string $tempFilePath = null,
     ) {
@@ -75,7 +77,7 @@ class ConversionRequestDTO
 
         $file = new UploadedFile($path, 'text.' . $sourceFormat, null, null, true);
 
-        return new self($user, $file, $toFormat, false, $privileged, $path);
+        return new self($user, $file, $toFormat, false, $privileged, [], $path);
     }
 
     /**

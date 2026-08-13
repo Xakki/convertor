@@ -5,5 +5,7 @@
 # реальные синтаксис/тип-ошибки. Вызывается из `make phpstan`.
 parameters:
     level: 5
+    parallel:
+        maximumNumberOfProcesses: 1
     paths:
         - migrations

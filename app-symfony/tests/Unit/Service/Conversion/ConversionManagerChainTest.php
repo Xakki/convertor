@@ -25,6 +25,7 @@ use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\Messenger\Envelope;
@@ -34,6 +35,7 @@ use Symfony\Component\Messenger\MessageBusInterface;
  * CNV-5 Phase 1: ConversionManager::createConversion chain path (allowlist +
  * materialize hops + dispatch hop-1 only).
  */
+#[AllowMockObjectsWithoutExpectations]
 final class ConversionManagerChainTest extends TestCase
 {
     use SeedsConversionRegistry;

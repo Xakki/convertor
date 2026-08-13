@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Controller\Api;
 
 use App\Entity\Conversion;
+use App\Enum\BillingMode;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionChainFailPropagator;
@@ -115,6 +116,34 @@ final class ConversionTextInputControllerTest extends WebTestCase
         self::assertSame(422, $client->getResponse()->getStatusCode());
     }
 
+    public function testTextInputRejectsImageOptions(): void
+    {
+        $client = static::createClient();
+
+        $client->request('POST', '/api/v1/convert', [
+            'text'          => 'hello',
+            'source_format' => 'txt',
+            'to_format'     => 'md',
+            'options'       => ['width' => '100'],
+        ]);
+
+        self::assertSame(422, $client->getResponse()->getStatusCode());
+    }
+
+    public function testFileInputRejectsInvalidImageOptions(): void
+    {
+        $client = static::createClient();
+
+        $client->request(
+            'POST',
+            '/api/v1/convert',
+            ['to_format' => 'png', 'options' => ['quality' => '101']],
+            ['file'      => $this->uploadedJpg('photo.jpg')],
+        );
+
+        self::assertSame(422, $client->getResponse()->getStatusCode());
+    }
+
     public function testTextOnlySubmitReachesManagerMaterializedAndDispatchesToDocumentStream(): void
     {
         $client   = static::createClient();
@@ -162,6 +191,27 @@ final class ConversionTextInputControllerTest extends WebTestCase
         $message = $captured['message'];
         self::assertSame('jpg', $message->sourceFormat);
         self::assertSame('png', $message->targetFormat);
+        self::assertSame([], $message->options);
+    }
+
+    public function testFileInputPassesValidatedImageOptionsToWorkerMessage(): void
+    {
+        $client   = static::createClient();
+        $captured = ['message' => null];
+        static::getContainer()->set(ConversionManager::class, $this->stubbedManager($captured));
+
+        $client->request(
+            'POST',
+            '/api/v1/convert',
+            ['to_format' => 'webp', 'options' => ['width' => '100', 'quality' => '75']],
+            ['file'      => $this->uploadedJpg('photo.jpg')],
+        );
+
+        self::assertSame(202, $client->getResponse()->getStatusCode(), (string) $client->getResponse()->getContent());
+        self::assertNotNull($captured['message']);
+        /** @var ConversionMessage $message */
+        $message = $captured['message'];
+        self::assertSame(['width' => 100, 'quality' => 75], $message->options);
     }
 
     /**
@@ -172,6 +222,7 @@ final class ConversionTextInputControllerTest extends WebTestCase
     {
         $quota = $this->createStub(QuotaService::class);
         $quota->method('maxUploadBytes')->willReturn(500 * 1024 * 1024);
+        $quota->method('check')->willReturn(BillingMode::PlanQuota);
 
         $em = $this->createStub(EntityManagerInterface::class);
         $em->method('persist')->willReturnCallback(static function (object $entity): void {

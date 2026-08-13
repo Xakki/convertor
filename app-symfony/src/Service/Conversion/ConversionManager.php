@@ -77,11 +77,15 @@ class ConversionManager
         $toFormat   = $request->toFormat;
         $ocr        = $request->ocr;
         $privileged = $request->privileged;
+        $options    = $request->options;
 
         $fromFormat = strtolower($file->getClientOriginalExtension());
 
         // Explicit OCR intent: single-hop only (OCR never via chain BFS).
         if ($ocr) {
+            if ($options !== []) {
+                throw new \InvalidArgumentException('Image options are only supported for image conversions');
+            }
             if (! $this->registry->isOcrSupported($fromFormat, $toFormat)) {
                 throw new \InvalidArgumentException("Unsupported OCR conversion: {$fromFormat} → {$toFormat}");
             }
@@ -95,21 +99,32 @@ class ConversionManager
                 isAi: false,
                 ocr: true,
                 privileged: $privileged,
+                options: $options,
             );
         }
 
         // Direct single-worker pair ALWAYS preferred over chaining.
         if ($this->registry->isSupported($fromFormat, $toFormat)) {
+            $category = $this->registry->getCategory($fromFormat, $toFormat);
+            if ($options !== [] && $category !== FileCategory::Image) {
+                throw new \InvalidArgumentException('Image options are only supported for image conversions');
+            }
+
             return $this->createSingleHop(
                 $user,
                 $file,
                 $fromFormat,
                 $toFormat,
-                $this->registry->getCategory($fromFormat, $toFormat),
+                $category,
                 $this->registry->isAi($fromFormat, $toFormat),
                 ocr: false,
                 privileged: $privileged,
+                options: $options,
             );
+        }
+
+        if ($options !== []) {
+            throw new \InvalidArgumentException('Image options are only supported for direct conversions');
         }
 
         $path = $this->registry->findPath($fromFormat, $toFormat);
@@ -129,6 +144,8 @@ class ConversionManager
 
     /**
      * Обычная одношаговая конверсия (OCR / прямая isSupported-пара).
+     *
+     * @param array<string, int|string> $options
      */
     private function createSingleHop(
         User $user,
@@ -139,6 +156,7 @@ class ConversionManager
         bool $isAi,
         bool $ocr,
         bool $privileged,
+        array $options = [],
     ): Conversion {
         // Toggle-гейт: пара, отключённая админом, режется ДО любых quota/S3-
         // эффектов и до постановки в очередь. Проверка по паре (from→to) —
@@ -209,6 +227,7 @@ class ConversionManager
         $conversion->setCategory($category);
         $conversion->setIsAi($isAi);
         $conversion->setIsOcr($ocr);
+        $conversion->setOptions($options);
         $conversion->setBillingMode($billingMode);
 
         $this->em->persist($conversion);
@@ -387,6 +406,7 @@ class ConversionManager
         $isAi       = $source->isAi();
         $ocr        = $source->isOcr();
         $category   = $source->getCategory();
+        $options    = $source->getOptions();
 
         if ($this->toggleService !== null && ! $this->toggleService->isEnabled($fromFormat, $toFormat)) {
             throw new ConversionDisabledException('Конвертация временно отключена');
@@ -428,6 +448,7 @@ class ConversionManager
         $conversion->setCategory($category);
         $conversion->setIsAi($isAi);
         $conversion->setIsOcr($ocr);
+        $conversion->setOptions($options);
         $conversion->setBillingMode($billingMode);
 
         $this->em->persist($inputFile);
@@ -661,7 +682,7 @@ class ConversionManager
                 targetFormat: $conversion->getToFormat(),
                 category: $conversion->getCategory()->value,
                 isAi: $conversion->isAi(),
-                options: [],
+                options: $conversion->getOptions(),
                 attempt: (string) $conversion->getAttempt(),
             ),
             [new TransportNamesStamp(['conv_' . $key])],

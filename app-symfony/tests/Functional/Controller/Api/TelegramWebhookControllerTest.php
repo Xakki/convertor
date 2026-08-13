@@ -410,7 +410,7 @@ final class TelegramWebhookControllerTest extends WebTestCase
         $user->setTelegramId('12345');
 
         $users = $this->createMock(UserRepository::class);
-        $users->method('findByTelegramId')->with('12345')->willReturn($user);
+        $users->expects(self::any())->method('findByTelegramId')->with('12345')->willReturn($user);
         $container->set(UserRepository::class, $users);
 
         $topUp = $this->createMock(PaymentTopUpService::class);
@@ -440,7 +440,7 @@ final class TelegramWebhookControllerTest extends WebTestCase
         $user->setTelegramId('12345');
 
         $users = $this->createMock(UserRepository::class);
-        $users->method('findByTelegramId')->with('12345')->willReturn($user);
+        $users->expects(self::any())->method('findByTelegramId')->with('12345')->willReturn($user);
         $container->set(UserRepository::class, $users);
 
         $topUp = $this->createMock(PaymentTopUpService::class);
@@ -510,7 +510,7 @@ final class TelegramWebhookControllerTest extends WebTestCase
         $user->setTelegramId('12345');
 
         $users = $this->createMock(UserRepository::class);
-        $users->method('findByTelegramId')->with('12345')->willReturn($user);
+        $users->expects(self::any())->method('findByTelegramId')->with('12345')->willReturn($user);
         $container->set(UserRepository::class, $users);
 
         $topUp = $this->createMock(PaymentTopUpService::class);
@@ -541,7 +541,7 @@ final class TelegramWebhookControllerTest extends WebTestCase
         $user->setTelegramId('12345');
 
         $users = $this->createMock(UserRepository::class);
-        $users->method('findByTelegramId')->with('12345')->willReturn($user);
+        $users->expects(self::any())->method('findByTelegramId')->with('12345')->willReturn($user);
         $container->set(UserRepository::class, $users);
 
         $topUp = $this->createMock(PaymentTopUpService::class);
@@ -604,7 +604,7 @@ final class TelegramWebhookControllerTest extends WebTestCase
         $user->setTelegramId('12345');
 
         $users = $this->createMock(UserRepository::class);
-        $users->method('findByTelegramId')->with('12345')->willReturn($user);
+        $users->expects(self::any())->method('findByTelegramId')->with('12345')->willReturn($user);
         $container->set(UserRepository::class, $users);
 
         $topUp = $this->createMock(PaymentTopUpService::class);

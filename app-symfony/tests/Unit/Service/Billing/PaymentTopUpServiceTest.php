@@ -50,8 +50,8 @@ final class PaymentTopUpServiceTest extends TestCase
         $payment = $this->pendingPayment(11, $user, 100, 100);
 
         $paymentRepo = $this->createMock(PaymentRepository::class);
-        $paymentRepo->method('findByExternalId')->willReturn(null);
-        $paymentRepo->method('find')->with(11)->willReturn($payment);
+        $paymentRepo->expects(self::any())->method('findByExternalId')->willReturn(null);
+        $paymentRepo->expects(self::any())->method('find')->with(11)->willReturn($payment);
 
         $balance = $this->createMock(BalanceService::class);
         $balance->expects(self::once())
@@ -81,8 +81,8 @@ final class PaymentTopUpServiceTest extends TestCase
         $payment->setStatus(PaymentStatus::Completed)->setExternalId('charge-old');
 
         $paymentRepo = $this->createMock(PaymentRepository::class);
-        $paymentRepo->method('findByExternalId')->willReturn(null);
-        $paymentRepo->method('find')->with(11)->willReturn($payment);
+        $paymentRepo->expects(self::any())->method('findByExternalId')->willReturn(null);
+        $paymentRepo->expects(self::any())->method('find')->with(11)->willReturn($payment);
 
         $balance = $this->createMock(BalanceService::class);
         $balance->expects(self::never())->method('credit');
@@ -121,8 +121,8 @@ final class PaymentTopUpServiceTest extends TestCase
         $payment = $this->pendingPayment(11, $user, 100, 100);
 
         $paymentRepo = $this->createMock(PaymentRepository::class);
-        $paymentRepo->method('findByExternalId')->willReturn(null);
-        $paymentRepo->method('find')->with(11)->willReturn($payment);
+        $paymentRepo->expects(self::any())->method('findByExternalId')->willReturn(null);
+        $paymentRepo->expects(self::any())->method('find')->with(11)->willReturn($payment);
 
         $balance = $this->createMock(BalanceService::class);
         $balance->expects(self::once())->method('credit');
@@ -154,7 +154,7 @@ final class PaymentTopUpServiceTest extends TestCase
         $payment = $this->pendingPayment(5, $user, 100, 100);
 
         $paymentRepo = $this->createMock(PaymentRepository::class);
-        $paymentRepo->method('find')->with(5)->willReturn($payment);
+        $paymentRepo->expects(self::any())->method('find')->with(5)->willReturn($payment);
 
         $bot = $this->createMock(TelegramBotClient::class);
         $bot->expects(self::once())
@@ -171,7 +171,7 @@ final class PaymentTopUpServiceTest extends TestCase
         $payment = $this->pendingPayment(5, $user, 100, 100);
 
         $paymentRepo = $this->createMock(PaymentRepository::class);
-        $paymentRepo->method('find')->with(5)->willReturn($payment);
+        $paymentRepo->expects(self::any())->method('find')->with(5)->willReturn($payment);
 
         $bot = $this->createMock(TelegramBotClient::class);
         $bot->expects(self::once())

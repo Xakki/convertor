@@ -110,6 +110,7 @@ class ConversionController extends AbstractController
         $sourceFormat = $request->request->get('source_format');
         $toFormat     = $request->request->get('to_format');
         $ocr          = $request->request->getBoolean('ocr');
+        $options      = $request->request->all('options');
 
         $hasFile = $file !== null;
         // Пустой text (не отправлен ИЛИ пустая строка) неотличим от «нет text» —
@@ -123,12 +124,21 @@ class ConversionController extends AbstractController
         if (! $hasFile && ! $hasText) {
             return $this->json(['error' => 'Either file or text is required'], Response::HTTP_BAD_REQUEST);
         }
+        if ($hasText && $options !== []) {
+            return $this->json(['error' => 'Image options are only supported for file conversions'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
         if (! $toFormat) {
             return $this->json(['error' => 'to_format required'], Response::HTTP_BAD_REQUEST);
         }
 
         $toFormatLower = strtolower((string) $toFormat);
+
+        try {
+            $options = $this->validateImageOptions($options, $toFormatLower);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
         // Text-вход: source_format обязателен и валидируется КАК ТЕКСТОВЫЙ
         // источник реестра — ДО createConversion(), т.к. у пасченого текста
@@ -167,7 +177,7 @@ class ConversionController extends AbstractController
         if ($hasText) {
             $conversionRequest = ConversionRequestDTO::fromText($user, (string) $text, (string) $sourceFormatLower, $toFormatLower, $privileged);
         } elseif ($file !== null) {
-            $conversionRequest = new ConversionRequestDTO($user, $file, $toFormatLower, $ocr, $privileged);
+            $conversionRequest = new ConversionRequestDTO($user, $file, $toFormatLower, $ocr, $privileged, $options);
         } else {
             // Недостижимо: hasFile/hasText провалидированы выше (ровно один
             // вход присутствует) — узкая ветка только чтобы PHPStan видел
@@ -220,6 +230,59 @@ class ConversionController extends AbstractController
         } finally {
             $conversionRequest->cleanupTempFile();
         }
+    }
+
+    /**
+     * @param mixed $options
+     * @return array<string, int|string>
+     */
+    private function validateImageOptions(mixed $options, string $toFormat): array
+    {
+        if ($options === [] || $options === null) {
+            return [];
+        }
+        if (! is_array($options)) {
+            throw new \InvalidArgumentException('options must be an object');
+        }
+
+        $allowed = ['width', 'height'];
+        if (in_array($toFormat, ['jpg', 'jpeg', 'webp'], true)) {
+            $allowed[] = 'quality';
+        }
+        if (in_array($toFormat, ['jpg', 'jpeg'], true)) {
+            $allowed[] = 'background';
+        }
+        foreach ($options as $key => $_) {
+            if (! is_string($key) || ! in_array($key, $allowed, true)) {
+                throw new \InvalidArgumentException('Unsupported image option');
+            }
+        }
+
+        $normalized = [];
+        foreach (['width', 'height', 'quality'] as $key) {
+            if (! array_key_exists($key, $options)) {
+                continue;
+            }
+            $value = $options[$key];
+            if (! is_int($value) && (! is_string($value) || preg_match('/^[1-9][0-9]*$/', $value) !== 1)) {
+                throw new \InvalidArgumentException("{$key} must be an integer");
+            }
+            $int     = (int) $value;
+            $maximum = $key === 'quality' ? 100 : 10000;
+            if ($int < 1 || $int > $maximum) {
+                throw new \InvalidArgumentException("{$key} must be between 1 and {$maximum}");
+            }
+            $normalized[$key] = $int;
+        }
+        if (array_key_exists('background', $options)) {
+            $background = $options['background'];
+            if (! is_string($background) || preg_match('/^#[0-9a-fA-F]{6}$/', $background) !== 1) {
+                throw new \InvalidArgumentException('background must be a #RRGGBB colour');
+            }
+            $normalized['background'] = strtoupper($background);
+        }
+
+        return $normalized;
     }
 
     #[Route('/convert/{id}/status', methods: ['GET'])]

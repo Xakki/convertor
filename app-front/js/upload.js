@@ -66,6 +66,8 @@ function converter() {
     dragOver: false,
     availableFormats: {},
     pollTimer: null,
+    imageOptionsOpen: false,
+    imageOptions: { width: '', height: '', quality: '', background: '#FFFFFF' },
 
     // Computed
     get toFormats() {
@@ -84,8 +86,55 @@ function converter() {
       return ['uploading', 'pending', 'processing'].includes(this.status);
     },
 
+    get imageOptionsAvailable() {
+      return ['png', 'jpg', 'jpeg', 'webp'].includes(this.toFormat);
+    },
+
+    get imageQualityAvailable() {
+      return ['jpg', 'jpeg', 'webp'].includes(this.toFormat);
+    },
+
+    get imageBackgroundAvailable() {
+      return ['jpg', 'jpeg'].includes(this.toFormat);
+    },
+
     get statusInfo() {
       return formatStatus(this.status);
+    },
+
+    imageOptionsStorageKey() {
+      return `convertor:image-options:${this.toFormat}`;
+    },
+
+    resetImageOptions() {
+      this.imageOptions = { width: '', height: '', quality: '', background: '#FFFFFF' };
+      if (this.toFormat) localStorage.removeItem(this.imageOptionsStorageKey());
+    },
+
+    loadImageOptions() {
+      if (!this.imageOptionsAvailable) return this.resetImageOptions();
+      try {
+        const saved = JSON.parse(localStorage.getItem(this.imageOptionsStorageKey()) || '{}');
+        this.imageOptions = {
+          width: Number.isInteger(saved.width) && saved.width > 0 && saved.width <= 10000 ? String(saved.width) : '',
+          height: Number.isInteger(saved.height) && saved.height > 0 && saved.height <= 10000 ? String(saved.height) : '',
+          quality: Number.isInteger(saved.quality) && saved.quality > 0 && saved.quality <= 100 ? String(saved.quality) : '',
+          background: typeof saved.background === 'string' && /^#[0-9a-f]{6}$/i.test(saved.background) ? saved.background : '#FFFFFF',
+        };
+      } catch (e) {
+        this.resetImageOptions();
+      }
+    },
+
+    normalizedImageOptions() {
+      if (!this.imageOptionsAvailable) return {};
+      const result = {};
+      for (const key of ['width', 'height', 'quality']) {
+        const value = Number(this.imageOptions[key]);
+        if (Number.isInteger(value) && value > 0) result[key] = value;
+      }
+      if (this.imageBackgroundAvailable && /^#[0-9a-f]{6}$/i.test(this.imageOptions.background)) result.background = this.imageOptions.background;
+      return result;
     },
 
     // Initialize: load formats from API
@@ -139,6 +188,7 @@ function converter() {
       // Auto-select first available target format
       const targets = this.toFormats;
       if (targets.length) this.toFormat = targets[0];
+      this.loadImageOptions();
     },
 
     // Submit conversion job
@@ -154,6 +204,9 @@ function converter() {
         formData.append('file', this.file);
         formData.append('from_format', this.fromFormat);
         formData.append('to_format', this.toFormat);
+        const imageOptions = this.normalizedImageOptions();
+        for (const [key, value] of Object.entries(imageOptions)) formData.append(`options[${key}]`, value);
+        if (Object.keys(imageOptions).length > 0) localStorage.setItem(this.imageOptionsStorageKey(), JSON.stringify(imageOptions));
 
         const response = await apiFetch('/api/v1/convert', {
           method: 'POST',

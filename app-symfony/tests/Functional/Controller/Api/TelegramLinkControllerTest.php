@@ -9,6 +9,7 @@ use App\Service\Auth\TelegramLinkCodeStore;
 use App\Service\Auth\TelegramLinkNonceCookieFactory;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 use Symfony\Component\BrowserKit\Cookie as BrowserCookie;
@@ -17,6 +18,7 @@ use Symfony\Component\BrowserKit\Cookie as BrowserCookie;
  * Функциональные тесты POST/GET /api/v1/auth/telegram/link/* (CNV-59).
  * CodeStore мокается; JWT через Lexik.
  */
+#[AllowMockObjectsWithoutExpectations]
 final class TelegramLinkControllerTest extends WebTestCase
 {
     /** @var list<User> */

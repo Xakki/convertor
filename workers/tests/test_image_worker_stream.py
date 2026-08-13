@@ -26,6 +26,12 @@ def _make_png(tmp_path: Path, name: str = "input.png", size: tuple = (20, 20)) -
     return p
 
 
+def _make_transparent_png(tmp_path: Path, name: str = "transparent.png") -> Path:
+    p = tmp_path / name
+    Image.new("RGBA", (20, 10), color=(0, 0, 0, 0)).save(str(p), "PNG")
+    return p
+
+
 def _make_jpg(tmp_path: Path, name: str = "input.jpg") -> Path:
     p = tmp_path / name
     img = Image.new("RGB", (20, 20), color=(50, 100, 200))
@@ -127,6 +133,30 @@ class TestImageConvert:
         assert mime == "image/webp"
         with Image.open(out_path) as img:
             assert img.format == "WEBP"
+
+    def test_image_options_resize_preserves_aspect_ratio(self, tmp_path):
+        src = _make_png(tmp_path, size=(20, 10))
+        worker = _worker_with_share(tmp_path)
+        job = _make_job(14, src, "png", "webp")
+        job["options"] = {"width": 10, "quality": 20}
+
+        out_path, _, _ = worker.convert(job)
+
+        with Image.open(out_path) as image:
+            assert image.size == (10, 5)
+
+    def test_jpeg_background_replaces_transparency(self, tmp_path):
+        src = _make_transparent_png(tmp_path)
+        worker = _worker_with_share(tmp_path)
+        job = _make_job(15, src, "png", "jpg")
+        job["options"] = {"background": "#00FF00"}
+
+        out_path, _, _ = worker.convert(job)
+
+        with Image.open(out_path) as image:
+            assert image.mode == "RGB"
+            red, green, blue = image.getpixel((10, 5))
+            assert green > red and green > blue
 
     def test_png_to_bmp(self, tmp_path):
         src = _make_png(tmp_path)

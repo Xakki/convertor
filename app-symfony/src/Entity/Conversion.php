@@ -63,6 +63,10 @@ class Conversion
     #[ORM\Column(type: 'boolean')]
     private bool $isOcr = false;
 
+    /** @var array<string, int|string> Параметры результата, применяемые воркером. */
+    #[ORM\Column(type: 'json')]
+    private array $options = [];
+
     /**
      * Attempt/generation-маркер (requeue-attempt-generation-marker). 0 = первичный
      * сабмит, инкрементится оператором на каждый {@see \App\Controller\Admin\Api\DlqController::requeue()}.
@@ -252,6 +256,20 @@ class Conversion
     public function setIsOcr(bool $isOcr): self
     {
         $this->isOcr = $isOcr;
+
+        return $this;
+    }
+
+    /** @return array<string, int|string> */
+    public function getOptions(): array
+    {
+        return $this->options;
+    }
+
+    /** @param array<string, int|string> $options */
+    public function setOptions(array $options): self
+    {
+        $this->options = $options;
 
         return $this;
     }

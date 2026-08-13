@@ -14,6 +14,7 @@ use App\Service\Billing\BalanceService;
 use App\Service\Quota\QuotaService;
 use Doctrine\DBAL\Connection;
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -22,6 +23,7 @@ use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 /**
  * Юнит-покрытие QuotaService: даунгрейд плана + выбор SQL для charge/refund.
  */
+#[AllowMockObjectsWithoutExpectations]
 final class QuotaServiceTest extends TestCase
 {
     private function makeService(

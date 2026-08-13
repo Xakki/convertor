@@ -14,7 +14,11 @@ services:
             resources:
                 limits:
                     cpus: "1"
-                    memory: "512M"
+                    # Symfony/PHPStan одновременно загружают Doctrine metadata и
+                    # весь application graph; 512M приводит к OOM-kill даже при
+                    # последовательном анализе. 1G сохраняет лимит процесса и
+                    # позволяет выполнить обязательный quality gate.
+                    memory: "1G"
 
     cron:
         deploy:

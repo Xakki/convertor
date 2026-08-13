@@ -169,7 +169,7 @@
                 <select
                   id="from-format"
                   x-model="fromFormat"
-                  @change="toFormat = toFormats[0] || ''"
+                  @change="toFormat = toFormats[0] || ''; loadImageOptions()"
                   class="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   aria-label="Исходный формат файла">
                   <template x-for="fmt in Object.keys(availableFormats).length ? Object.keys(availableFormats) : Object.keys({'doc':'','docx':'','odt':'','pdf':'','jpg':'','png':'','mp4':'','mp3':'','csv':'','json':'','md':'','html':''})" :key="fmt">
@@ -193,6 +193,7 @@
                 <select
                   id="to-format"
                   x-model="toFormat"
+                  @change="loadImageOptions()"
                   class="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   aria-label="Целевой формат конвертации"
                   :disabled="!toFormats.length">
@@ -205,6 +206,19 @@
                 </select>
               </div>
             </div>
+
+            <section x-show="imageOptionsAvailable" x-cloak class="mt-4 rounded-xl border border-zinc-700 p-4">
+              <button type="button" @click="imageOptionsOpen = !imageOptionsOpen" :aria-expanded="imageOptionsOpen.toString()" class="flex w-full items-center justify-between text-left text-sm font-medium text-zinc-200">
+                <span>Настройки изображения</span><span x-text="imageOptionsOpen ? '−' : '+'"></span>
+              </button>
+              <div x-show="imageOptionsOpen" class="mt-4 grid gap-3 sm:grid-cols-2">
+                <label class="text-sm text-zinc-400">Ширина, px<input x-model="imageOptions.width" inputmode="numeric" type="number" min="1" max="10000" class="mt-1 w-full rounded border border-zinc-700 bg-zinc-800 px-3 py-2 text-white"></label>
+                <label class="text-sm text-zinc-400">Высота, px<input x-model="imageOptions.height" inputmode="numeric" type="number" min="1" max="10000" class="mt-1 w-full rounded border border-zinc-700 bg-zinc-800 px-3 py-2 text-white"></label>
+                <label x-show="imageQualityAvailable" class="text-sm text-zinc-400">Качество<input x-model="imageOptions.quality" inputmode="numeric" type="number" min="1" max="100" class="mt-1 w-full rounded border border-zinc-700 bg-zinc-800 px-3 py-2 text-white"></label>
+                <label x-show="imageBackgroundAvailable" class="text-sm text-zinc-400">Фон JPEG<input x-model="imageOptions.background" type="color" class="mt-1 block h-10 w-full rounded border border-zinc-700"></label>
+                <button type="button" @click="resetImageOptions" class="self-end text-sm text-indigo-400 hover:text-indigo-300">Сбросить</button>
+              </div>
+            </section>
 
             <!-- Convert button -->
             <button

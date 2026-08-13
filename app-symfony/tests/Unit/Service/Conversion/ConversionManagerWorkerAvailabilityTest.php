@@ -26,6 +26,7 @@ use AsyncAws\S3\Result\HeadObjectOutput;
 use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\Messenger\Envelope;
@@ -44,6 +45,7 @@ use Symfony\Component\Messenger\MessageBusInterface;
  * for the real-DB proof. This test stays at the unit level with a
  * stub/empty repository — cheaper and doesn't need a real DB connection.
  */
+#[AllowMockObjectsWithoutExpectations]
 final class ConversionManagerWorkerAvailabilityTest extends TestCase
 {
     use SeedsConversionRegistry;

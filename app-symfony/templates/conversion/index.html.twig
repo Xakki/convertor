@@ -181,6 +181,7 @@
                     <span class="mb-1 block text-sm font-medium text-slate-600">{{ 'home.target_format_label'|trans }}</span>
                     <select
                         x-model="toFormat"
+                        @change="loadImageOptions()"
                         :disabled="targets.length === 0"
                         class="w-full rounded border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:outline-none disabled:bg-slate-100"
                     >
@@ -191,6 +192,19 @@
                     </select>
                 </label>
             </div>
+
+            <section x-show="imageOptionsAvailable" x-cloak class="mt-4 rounded-lg border border-slate-200 p-4">
+                <button type="button" @click="imageOptionsOpen = !imageOptionsOpen" :aria-expanded="imageOptionsOpen.toString()" class="flex w-full items-center justify-between text-left text-sm font-medium text-slate-700">
+                    <span>Настройки изображения</span><span x-text="imageOptionsOpen ? '−' : '+'"></span>
+                </button>
+                <div x-show="imageOptionsOpen" class="mt-4 grid gap-3 sm:grid-cols-2">
+                    <label class="text-sm text-slate-600">Ширина, px<input x-model="imageOptions.width" inputmode="numeric" type="number" min="1" max="10000" class="mt-1 w-full rounded border border-slate-300 px-3 py-2"></label>
+                    <label class="text-sm text-slate-600">Высота, px<input x-model="imageOptions.height" inputmode="numeric" type="number" min="1" max="10000" class="mt-1 w-full rounded border border-slate-300 px-3 py-2"></label>
+                    <label x-show="imageQualityAvailable" class="text-sm text-slate-600">Качество<input x-model="imageOptions.quality" inputmode="numeric" type="number" min="1" max="100" class="mt-1 w-full rounded border border-slate-300 px-3 py-2"></label>
+                    <label x-show="imageBackgroundAvailable" class="text-sm text-slate-600">Фон JPEG<input x-model="imageOptions.background" type="color" class="mt-1 block h-10 w-full rounded border border-slate-300"></label>
+                    <button type="button" @click="resetImageOptions" class="self-end text-sm text-indigo-600 hover:text-indigo-800">Сбросить</button>
+                </div>
+            </section>
 
             {# OCR toggle: file-режим, только для растр/pdf источников с текстовым таргетом #}
             <label x-show="inputMode === 'file' && showOcr" x-cloak class="mt-4 flex items-center gap-2 text-sm text-slate-700">

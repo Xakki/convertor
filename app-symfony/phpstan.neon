@@ -3,6 +3,11 @@ includes:
 
 parameters:
     level: 8
+    # Dev/test PHP containers ограничены 512M; default-параллелизм PHPStan
+    # запускает до 10 дочерних процессов и OOM-kill'ится. Последовательный
+    # анализ остаётся полным, но укладывается в лимит контейнера.
+    parallel:
+        maximumNumberOfProcesses: 1
     paths:
         - src
         # Служебные CLI-утилиты проекта (не Symfony stubs вроде console/phpunit —

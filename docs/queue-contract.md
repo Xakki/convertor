@@ -179,7 +179,7 @@ name converter is configured), so the JSON keys are the property names verbatim.
 | `targetFormat` | string          | Target format. **Renamed from `outputFormat`** for contract parity. |
 | `category`     | string          | `FileCategory` value: document/image/audio/video/data/markup/archive. |
 | `isAi`         | bool            | AI job flag. Routing key = `isAi ? 'ai' : category`. |
-| `options`      | object/array    | Per-job options bag. **Empty = `[]`** (PHP empty array serializes to JSON `[]`, not `{}`) — workers must not assume a map when empty. |
+| `options`      | object/array    | Per-job options bag. Для image target: `width`/`height` (1–10000 px), `quality` (1–100 для JPEG/WebP), `background` (`#RRGGBB` для JPEG). **Empty = `[]`** (PHP empty array serializes to JSON `[]`, not `{}`) — workers must not assume a map when empty. |
 | `attempt`      | string (int)    | Generation/attempt marker of the `Conversion` (JSON string, e.g. `"0"`). Bumped by operator-requeue; echoed into the DLQ payload so a stale `dlq-fail` can be ignored (`ConversionResultPersister` stale-guard). Absent on legacy jobs → treated as `0`. |
 
 ---

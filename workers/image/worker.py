@@ -88,14 +88,49 @@ def _pillow_fmt(ext: str) -> str:
     return _PILLOW_FORMAT.get(ext, ext.upper())
 
 
-def _do_convert(src: Path, out_path: Path, out_ext: str) -> None:
+def _apply_image_options(image: Image.Image, options: dict[str, Any]) -> Image.Image:
+    """Применяет уже провалидированные API параметры к растровому изображению."""
+    width = options.get("width")
+    height = options.get("height")
+    if width is not None or height is not None:
+        source_width, source_height = image.size
+        if width is None:
+            assert height is not None
+            height = int(height)
+            width = max(1, round(source_width * height / source_height))
+        elif height is None:
+            width = int(width)
+            height = max(1, round(source_height * width / source_width))
+        image.thumbnail((int(width), int(height)), Image.Resampling.LANCZOS)
+    return image
+
+
+def _save_image(image: Image.Image, out_path: Path, out_ext: str, options: dict[str, Any]) -> None:
+    save_options: dict[str, Any] = {}
+    if out_ext in ("jpg", "jpeg"):
+        background = options.get("background", "#FFFFFF")
+        if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+            canvas = Image.new("RGB", image.size, background)
+            canvas.paste(image.convert("RGBA"), mask=image.convert("RGBA").getchannel("A"))
+            image = canvas
+        else:
+            image = image.convert("RGB")
+        if "quality" in options:
+            save_options["quality"] = int(options["quality"])
+        image.save(str(out_path), "JPEG", **save_options)
+        return
+    if out_ext == "webp" and "quality" in options:
+        save_options["quality"] = int(options["quality"])
+    image.save(str(out_path), _pillow_fmt(out_ext), **save_options)
+
+
+def _do_convert(src: Path, out_path: Path, out_ext: str, options: dict[str, Any]) -> None:
     with Image.open(src) as img:
+        img = _apply_image_options(img, options)
         if out_ext == "pdf":
             img.convert("RGB").save(str(out_path), "PDF", resolution=100.0)
-        elif out_ext in ("jpg", "jpeg"):
-            img.convert("RGB").save(str(out_path), "JPEG")
         else:
-            img.save(str(out_path), _pillow_fmt(out_ext))
+            _save_image(img, out_path, out_ext, options)
 
 
 def _reject_external_svg_resource(url: str, resource_type: str) -> bytes:
@@ -103,7 +138,7 @@ def _reject_external_svg_resource(url: str, resource_type: str) -> bytes:
     raise ValueError("external SVG resources are not allowed")
 
 
-def _do_svg_convert(src: Path, out_path: Path, out_ext: str) -> None:
+def _do_svg_convert(src: Path, out_path: Path, out_ext: str, options: dict[str, Any]) -> None:
     """Растеризует SVG, не позволяя его ссылкам выйти за пределы загрузки."""
     try:
         png_bytes = PNGSurface.convert(
@@ -111,14 +146,11 @@ def _do_svg_convert(src: Path, out_path: Path, out_ext: str) -> None:
             unsafe=False,
             url_fetcher=_reject_external_svg_resource,
         )
-        if out_ext == "png":
+        if out_ext == "png" and not options:
             out_path.write_bytes(png_bytes)
         else:
             with Image.open(BytesIO(png_bytes)) as image:
-                if out_ext in ("jpg", "jpeg"):
-                    image.convert("RGB").save(str(out_path), "JPEG")
-                else:
-                    image.save(str(out_path), _pillow_fmt(out_ext))
+                _save_image(_apply_image_options(image, options), out_path, out_ext, options)
     except Exception:
         try:
             out_path.unlink(missing_ok=True)
@@ -211,6 +243,9 @@ class ImageWorker(StreamConsumerBase):
         src = Path(job["_localInput"])
         target_fmt: str = job["targetFormat"].lower().lstrip(".")
         src_ext = str(job["sourceFormat"]).lower().lstrip(".")
+        options = job.get("options") or {}
+        if not isinstance(options, dict):
+            raise ValueError("invalid image options")
 
         if not src.is_file():
             raise FileNotFoundError(f"input not found: {src}")
@@ -231,9 +266,9 @@ class ImageWorker(StreamConsumerBase):
         out_path = out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
 
         if src_ext == "svg":
-            _do_svg_convert(src, out_path, target_fmt)
+            _do_svg_convert(src, out_path, target_fmt, options)
         else:
-            _do_convert(src, out_path, target_fmt)
+            _do_convert(src, out_path, target_fmt, options)
 
         if not out_path.exists():
             raise RuntimeError(f"image converter produced no output for conversionId={conv_id}")

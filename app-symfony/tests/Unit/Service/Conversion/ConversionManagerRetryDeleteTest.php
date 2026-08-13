@@ -206,7 +206,7 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         $s3Client->expects($this->never())->method('copyObject');
 
         $toggle = $this->createMock(ConversionToggleService::class);
-        $toggle->method('isEnabled')->with('jpg', 'png')->willReturn(false);
+        $toggle->expects(self::any())->method('isEnabled')->with('jpg', 'png')->willReturn(false);
 
         $repo = $this->createStub(ConversionRepository::class);
         $repo->method('find')->willReturn($source);

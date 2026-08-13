@@ -23,9 +23,11 @@ use AsyncAws\S3\Input\CopyObjectRequest;
 use AsyncAws\S3\Result\CopyObjectOutput;
 use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
+#[AllowMockObjectsWithoutExpectations]
 final class ConversionChainListenerTest extends TestCase
 {
     public function testAdvanceCopiesResultsToInputsAndDispatchesNextPendingHop(): void
