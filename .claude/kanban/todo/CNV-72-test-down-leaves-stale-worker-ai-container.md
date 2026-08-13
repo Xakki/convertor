@@ -36,12 +36,9 @@ xakki-convertor-test-worker-ai`), а `make test-down` в конце верифи
   (4-дневный воркер регистрируется как будто всё свежее).
 
 **Recommendation:**
-Один из вариантов (не выбран, решает команда):
-1. `test-down`/`down-v` всегда матчить ВСЕ профили (`COMPOSE_PROFILES=server,test,ai`
-   при вызове `down`), а не только `server,test` из `.env.test`.
-2. Отдельный `test-down` шаг `docker rm -f` по имени/лейблу compose-проекта
-   независимо от активных профилей.
-3. `test-e2e`/`smoke-run` сами гасят `ai`-профиль в конце (down --no-deps на нём).
+В `test-down` и `down-v` всегда вызывать cleanup с
+`COMPOSE_PROFILES=server,test,ai`. Это охватывает каждый профиль, который
+может поднять тестовый сценарий, не добавляя удаление по имени контейнера.
 
 **Acceptance Criteria:**
 - `make TEST=1 test-up` → (любой прогон, включая `test-e2e`/`smoke-run`) →
@@ -52,5 +49,8 @@ xakki-convertor-test-worker-ai`), а `make test-down` в конце верифи
 - (2026-08-06) Найдено побочно при верификации CNV-71-03 (gateway boot +
   expiry-loop). Не трогали контейнер руками (`docker rm`) — вне scope той
   задачи, оставлено на решение команды здесь.
+- 2026-08-14: выбран единый cleanup через `COMPOSE_PROFILES=server,test,ai`
+  в `test-down`/`down-v`; отдельное удаление по имени/лейблу и точечный down
+  из e2e/smoke не нужны.
 
 **Status:** grooming
