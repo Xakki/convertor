@@ -49,3 +49,8 @@ JPEG/JPG либо WebP через CairoSVG.
 - `workers/tests/test_image_worker*.py`
 - `app-front/js/upload.js`
 - API-каталог capabilities в `app-symfony`
+
+**Execution Log:**
+- 2026-08-15: задача переведена в progress; SVG-ветка использует CairoSVG с запретом внешних ресурсов, затем Pillow для JPEG/WebP.
+- 2026-08-15: обновлены сгенерированные capabilities-каталоги и fallback интерфейса; добавлены тесты целевых SVG-пар, блокировки внешнего ресурса и сокрытия деталей ошибки.
+- 2026-08-15: `make test-python-image`, `make TEST=1 test-drift` и `make TEST=1 test-php FILTER=FormatsCatalogIndependenceTest` успешны. `make phpstan` и `make cs-check` остановлены окружением с Error 9 на 0%% до анализа.

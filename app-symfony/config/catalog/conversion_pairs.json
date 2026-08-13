@@ -1911,6 +1911,34 @@
     "ocrCapable": false
   },
   {
+    "from": "svg",
+    "to": "jpeg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "svg",
+    "to": "jpg",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "svg",
+    "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "svg",
+    "to": "webp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
     "from": "tex",
     "to": "docx",
     "category": "document",

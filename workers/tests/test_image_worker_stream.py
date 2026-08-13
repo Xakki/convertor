@@ -7,7 +7,12 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
-from workers.image.worker import ImageWorker, _MIME, _MATRIX
+from workers.image.worker import (
+    ImageWorker,
+    _MIME,
+    _MATRIX,
+    _reject_external_svg_resource,
+)
 
 
 # --------------------------------------------------------------------------
@@ -25,6 +30,16 @@ def _make_jpg(tmp_path: Path, name: str = "input.jpg") -> Path:
     p = tmp_path / name
     img = Image.new("RGB", (20, 20), color=(50, 100, 200))
     img.save(str(p), "JPEG")
+    return p
+
+
+def _make_svg(tmp_path: Path, name: str = "input.svg") -> Path:
+    p = tmp_path / name
+    p.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">'
+        '<rect width="20" height="10" fill="#c86432"/></svg>',
+        encoding="utf-8",
+    )
     return p
 
 
@@ -77,6 +92,27 @@ class TestImageConvert:
         # Verify Pillow can open the output
         with Image.open(out_path) as img:
             assert img.format == "JPEG"
+
+    @pytest.mark.parametrize(
+        ("target_fmt", "expected_format"),
+        [("png", "PNG"), ("jpg", "JPEG"), ("jpeg", "JPEG"), ("webp", "WEBP")],
+    )
+    def test_svg_to_raster_targets(self, tmp_path, target_fmt, expected_format):
+        src = _make_svg(tmp_path)
+        worker = _worker_with_share(tmp_path)
+
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
+            out_path, mime, ext = worker.convert(
+                _make_job(11, src, "svg", target_fmt),
+            )
+
+        assert Path(out_path).exists()
+        assert ext == target_fmt
+        assert mime == _MIME[target_fmt]
+        with Image.open(out_path) as image:
+            assert image.format == expected_format
+            if target_fmt in ("jpg", "jpeg"):
+                assert image.mode == "RGB"
 
     def test_jpg_to_webp(self, tmp_path):
         src = _make_jpg(tmp_path)
@@ -166,15 +202,47 @@ class TestImageConvert:
 
 class TestImageConvertErrors:
 
-    def test_unsupported_source_raises(self, tmp_path):
+    def test_unsupported_svg_target_raises(self, tmp_path):
         worker = _worker_with_share(tmp_path)
-        fake_src = tmp_path / "doc.svg"
-        fake_src.write_bytes(b"<svg/>")
+        src = _make_svg(tmp_path)
 
         with patch("workers.image.worker.WORK_DIR", tmp_path):
-            job = _make_job(5, fake_src, "svg", "png")
-            with pytest.raises(ValueError, match="unsupported source format"):
+            job = _make_job(5, src, "svg", "pdf")
+            with pytest.raises(ValueError, match="unsupported conversion"):
                 worker.convert(job)
+
+    def test_svg_external_resource_is_blocked_without_leaking_details(self, tmp_path):
+        worker = _worker_with_share(tmp_path)
+        src = tmp_path / "external.svg"
+        src.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">'
+            '<image href="https://attacker.invalid/image.png" width="20" height="10"/></svg>',
+            encoding="utf-8",
+        )
+
+        with patch(
+            "workers.image.worker._reject_external_svg_resource",
+            wraps=_reject_external_svg_resource,
+        ) as fetcher:
+            with pytest.raises(RuntimeError, match=r"^SVG rasterization failed$"):
+                worker.convert(_make_job(12, src, "svg", "png"))
+
+        assert fetcher.call_args.args[0] == "https://attacker.invalid/image.png"
+        assert not list(tmp_path.glob("out-12-*"))
+
+    def test_svg_renderer_error_does_not_leak_input_details(self, tmp_path):
+        worker = _worker_with_share(tmp_path)
+        src = _make_svg(tmp_path)
+
+        with patch(
+            "workers.image.worker.PNGSurface.convert",
+            side_effect=ValueError("/private/input.svg: <svg> secret content"),
+        ) as render:
+            with pytest.raises(RuntimeError, match=r"^SVG rasterization failed$"):
+                worker.convert(_make_job(13, src, "svg", "png"))
+
+        assert render.call_args.kwargs["unsafe"] is False
+        assert not list(tmp_path.glob("out-13-*"))
 
     def test_unsupported_target_raises(self, tmp_path):
         src = _make_png(tmp_path)
@@ -197,6 +265,10 @@ class TestImageConvertErrors:
 # --------------------------------------------------------------------------
 # Matrix sanity
 # --------------------------------------------------------------------------
+
+def test_svg_matrix_has_only_raster_targets():
+    assert _MATRIX["svg"] == {"png", "jpg", "jpeg", "webp"}
+
 
 def test_matrix_mime_coverage():
     """Every target format in _MATRIX must have a MIME entry."""

@@ -24,7 +24,7 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  */
 final class FormatsCatalogIndependenceTest extends WebTestCase
 {
-    private const EXPECTED_CATALOG_PAIR_COUNT = 394;
+    private const EXPECTED_CATALOG_PAIR_COUNT = 398;
 
     private function withEmptyWorkerCapabilities(): void
     {
@@ -57,6 +57,9 @@ final class FormatsCatalogIndependenceTest extends WebTestCase
         );
         self::assertContains('docx->pdf', $pairs);
         self::assertContains('csv->json', $pairs);
+        foreach (['svg->png', 'svg->jpg', 'svg->jpeg', 'svg->webp'] as $svgPair) {
+            self::assertContains($svgPair, $pairs);
+        }
     }
 
     public function testConversionPairPageRendersWithEmptyWorkerCapabilitiesTable(): void

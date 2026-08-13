@@ -7,7 +7,6 @@ Supported:
     decides OCR by OUTPUT format: targetFormat ∈ {txt,md,docx} → OCR mode.
 
 Missing registry formats that need extra packages:
-  svg   → requires cairosvg  (not in base image)
   heic  → requires pillow-heif (not in base image)
   avif  (input only, partial) → Pillow >=10 + libavif at build time
 """
@@ -17,11 +16,13 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pdf2image
 import pytesseract
+from cairosvg.surface import PNGSurface
 from PIL import Image
 
 from workers.common.mime import DOC_TEXT_MIME
@@ -58,8 +59,12 @@ _PILLOW_FORMAT: dict[str, str] = {
     "tif":  "TIFF",
 }
 
-# Supported conversions (raster-native Pillow only).
-# svg/heic/avif excluded — need optional plugins not present in base image.
+# SVG растеризуется только в четыре явно разрешённых CairoSVG-формата.
+# Остальные векторные форматы вне зоны ответственности этого воркера.
+_SVG_TARGETS: set[str] = {"png", "jpg", "jpeg", "webp"}
+
+# Поддерживаемые конвертации: Pillow для растра и отдельная ветка CairoSVG.
+# heic/avif остаются исключёнными: для них нет optional-плагинов в базовом образе.
 # OCR targets (txt/md/docx) are advertised ONLY on the ROADMAP OCR-row sources
 # jpg/jpeg/png/tiff/tif (+ a pdf source that ONLY produces OCR text). They are
 # routing/advertisement hints; the OCR branch in convert() validates sources
@@ -74,6 +79,7 @@ _MATRIX: dict[str, set[str]] = {
     "tiff": {"jpg", "png", "gif", "bmp", "webp", "ico", "pdf", "txt", "md", "docx"},
     "tif":  {"jpg", "png", "gif", "bmp", "webp", "ico", "pdf", "txt", "md", "docx"},
     "ico":  {"jpg", "png", "gif", "bmp", "webp", "tiff", "pdf"},
+    "svg":  _SVG_TARGETS,
     "pdf":  {"txt", "md", "docx"},
 }
 
@@ -90,6 +96,35 @@ def _do_convert(src: Path, out_path: Path, out_ext: str) -> None:
             img.convert("RGB").save(str(out_path), "JPEG")
         else:
             img.save(str(out_path), _pillow_fmt(out_ext))
+
+
+def _reject_external_svg_resource(url: str, resource_type: str) -> bytes:
+    """Запрещает CairoSVG читать сетевые или файловые ссылки из SVG."""
+    raise ValueError("external SVG resources are not allowed")
+
+
+def _do_svg_convert(src: Path, out_path: Path, out_ext: str) -> None:
+    """Растеризует SVG, не позволяя его ссылкам выйти за пределы загрузки."""
+    try:
+        png_bytes = PNGSurface.convert(
+            bytestring=src.read_bytes(),
+            unsafe=False,
+            url_fetcher=_reject_external_svg_resource,
+        )
+        if out_ext == "png":
+            out_path.write_bytes(png_bytes)
+        else:
+            with Image.open(BytesIO(png_bytes)) as image:
+                if out_ext in ("jpg", "jpeg"):
+                    image.convert("RGB").save(str(out_path), "JPEG")
+                else:
+                    image.save(str(out_path), _pillow_fmt(out_ext))
+    except Exception:
+        try:
+            out_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RuntimeError("SVG rasterization failed") from None
 
 
 # --------------------------------------------------------------------------
@@ -195,10 +230,13 @@ class ImageWorker(StreamConsumerBase):
 
         out_path = out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
 
-        _do_convert(src, out_path, target_fmt)
+        if src_ext == "svg":
+            _do_svg_convert(src, out_path, target_fmt)
+        else:
+            _do_convert(src, out_path, target_fmt)
 
         if not out_path.exists():
-            raise RuntimeError(f"Pillow produced no output for conversionId={conv_id}")
+            raise RuntimeError(f"image converter produced no output for conversionId={conv_id}")
 
         mime = _MIME.get(target_fmt, "application/octet-stream")
         logger.info(

@@ -32,6 +32,7 @@ const FORMAT_GROUPS = {
   tiff:  ['jpg','png','gif','bmp','webp','ico','pdf','docx','md','txt'],
   tif:   ['jpg','png','gif','bmp','webp','ico','pdf','docx','md','txt'],
   ico:   ['png','jpg','gif','bmp','webp','tiff','pdf'],
+  svg:   ['png','jpg','jpeg','webp'],
   // Audio
   mp3:   ['wav','ogg','flac','aac','m4a','opus'],
   wav:   ['mp3','ogg','flac','aac','m4a','opus'],

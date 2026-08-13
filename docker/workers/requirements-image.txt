@@ -13,6 +13,7 @@ jmespath==1.1.0
 lxml==6.1.1
 multidict==6.7.1
 packaging==26.2
+cairosvg==2.8.2
 pdf2image==1.17.0
 pillow==12.2.0
 propcache==0.5.2

@@ -483,6 +483,12 @@
         "txt",
         "webp"
       ],
+      "svg": [
+        "jpeg",
+        "jpg",
+        "png",
+        "webp"
+      ],
       "tif": [
         "bmp",
         "docx",
