@@ -54,3 +54,4 @@ JPEG/JPG либо WebP через CairoSVG.
 - 2026-08-15: задача переведена в progress; SVG-ветка использует CairoSVG с запретом внешних ресурсов, затем Pillow для JPEG/WebP.
 - 2026-08-15: обновлены сгенерированные capabilities-каталоги и fallback интерфейса; добавлены тесты целевых SVG-пар, блокировки внешнего ресурса и сокрытия деталей ошибки.
 - 2026-08-15: `make test-python-image`, `make TEST=1 test-drift` и `make TEST=1 test-php FILTER=FormatsCatalogIndependenceTest` успешны. `make phpstan` и `make cs-check` остановлены окружением с Error 9 на 0%% до анализа.
+- 2026-08-15: QA: `make test-python-image` (41 passed, 1 xfailed), `make TEST=1 test-drift` (22 passed) and `make TEST=1 test-php FILTER=FormatsCatalogIndependenceTest` (2 tests, 12 assertions) passed. `make phpstan` reproducibly exits 137 and `make cs-check` reproducibly exits Error 9 before analysis; neither produced task diagnostics. Card moved progress → test → ready.
