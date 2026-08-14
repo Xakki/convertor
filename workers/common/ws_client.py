@@ -43,7 +43,7 @@ import socket
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -65,6 +65,13 @@ _REGISTER_MAX_ATTEMPTS = 3
 _REGISTER_BACKOFF_BASE_S = 1.0
 _REGISTER_BACKOFF_FACTOR = 2.0
 _REGISTER_BACKOFF_JITTER_S = 0.25
+
+# CNV-81-04: retry скачивания остаётся локальным в `_download_input`, а не общим
+# helper'ом: контракт транзиентности здесь отличается от best-effort register.
+_DOWNLOAD_MAX_ATTEMPTS = 3
+_DOWNLOAD_BACKOFF_BASE_S = 0.25
+_DOWNLOAD_BACKOFF_FACTOR = 2.0
+_DOWNLOAD_BACKOFF_JITTER_S = 0.1
 
 
 def _compose_version() -> str:
@@ -511,6 +518,7 @@ class WsClient:
         handle_job: HandleJob,
         *,
         http_client: httpx.AsyncClient | None = None,
+        download_client_factory: Callable[[httpx.Timeout], httpx.AsyncClient] | None = None,
         on_pong: Callable[[], None] | None = None,
         on_reconnect_start: Callable[[], None] | None = None,
         capabilities: dict | None = None,
@@ -519,6 +527,12 @@ class WsClient:
         self._handle_job = handle_job
         self._http = http_client          # инжектится в тестах; иначе lazy own (см. _get_http)
         self._own_http = http_client is None
+        # Фабрика download-клиента отделена от основного HTTP-клиента: без
+        # инъекции каждая попытка создаёт новый AsyncClient/TLS-сеанс. Явно
+        # переданный http_client остаётся собственностью вызывающего и не
+        # закрывается download-путём; тесты могут передать отдельную фабрику,
+        # чтобы также проверять fresh-client retry.
+        self._download_client_factory = download_client_factory
         self._on_pong = on_pong           # необязательный наблюдатель pong-событий
         self._on_reconnect_start = on_reconnect_start  # вызывается ПОСЛЕ обрыва, перед backoff
         self._capabilities = capabilities
@@ -1164,20 +1178,68 @@ class WsClient:
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._cfg.worker_api_token}"}
 
+    @asynccontextmanager
+    async def _new_download_client(self, timeout: httpx.Timeout):
+        """Открыть одну независимую download-сессию и закрыть только её."""
+        if self._download_client_factory is not None:
+            async with self._download_client_factory(timeout) as http:
+                yield http
+            return
+        if self._http is not None:
+            # Совместимость с существующей test/caller-инъекцией: не владеем этим
+            # клиентом и потому не закрываем его. Для retry с инъекцией вызывающий
+            # передаёт download_client_factory, если ему нужен новый клиент.
+            yield self._http
+            return
+        async with httpx.AsyncClient(timeout=timeout) as http:
+            yield http
+
     async def _download_input(self, job_id: str, dest: str) -> None:
         """Скачать вход в `dest`: GET /api/v1/worker/jobs/{id}/input (Symfony стримит из S3).
 
         Единственный способ получить вход — воркер прямого доступа к S3 не имеет. Стримим
         чанками на диск (без слёрпа в память). `dest` уже несёт исходное расширение —
         suffix-логика воркера продолжает работать. Частичный файл при обрыве чистит
-        вызывающий `_run_job.finally`."""
-        http = await self._get_http()
+        вызывающий `_run_job.finally`.
+
+        CNV-81-04: максимум три попытки для network/timeout ошибок и HTTP 5xx.
+        4xx (включая 401) и остальные ошибки протокола/декодирования поднимаются
+        сразу. На КАЖДУЮ попытку создаётся/закрывается отдельный AsyncClient,
+        чтобы retry получил новый TCP/TLS-сеанс, а не переиспользовал возможно
+        зависшее соединение. Таймауты всех фаз заданы явно: connect=10 с,
+        read=60 с; upload отсутствует, поэтому write=None; ожидание свободного
+        connection pool также не применяется.
+        """
         url = f"{self._cfg.api_base}/api/v1/worker/jobs/{job_id}/input"
-        async with http.stream("GET", url, headers=self._auth_headers()) as resp:
-            resp.raise_for_status()
-            with open(dest, "wb") as fh:
-                async for chunk in resp.aiter_bytes():
-                    fh.write(chunk)
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=None, pool=None)
+        for attempt in range(1, _DOWNLOAD_MAX_ATTEMPTS + 1):
+            retry_error: httpx.RequestError | httpx.HTTPStatusError | None = None
+            try:
+                async with self._new_download_client(timeout) as http:
+                    async with http.stream("GET", url, headers=self._auth_headers()) as resp:
+                        resp.raise_for_status()
+                        with open(dest, "wb") as fh:
+                            async for chunk in resp.aiter_bytes():
+                                fh.write(chunk)
+                return
+            except asyncio.CancelledError:
+                raise
+            except (httpx.NetworkError, httpx.TimeoutException) as exc:
+                retry_error = exc
+                if attempt == _DOWNLOAD_MAX_ATTEMPTS:
+                    raise
+            except httpx.HTTPStatusError as exc:
+                retry_error = exc
+                if exc.response.status_code < 500 or attempt == _DOWNLOAD_MAX_ATTEMPTS:
+                    raise
+            backoff = _DOWNLOAD_BACKOFF_BASE_S * (_DOWNLOAD_BACKOFF_FACTOR ** (attempt - 1))
+            backoff += random.uniform(0, _DOWNLOAD_BACKOFF_JITTER_S)
+            logger.debug(
+                "input download attempt %d/%d failed, retrying in %.2fs",
+                attempt, _DOWNLOAD_MAX_ATTEMPTS, backoff,
+                extra={"jobId": job_id, "error": str(retry_error)},
+            )
+            await asyncio.sleep(backoff)
 
     async def _upload_large(self, job_id: str, signal: ResultSignal) -> str:
         """Large-путь: POST /api/v1/worker/jobs/{id}/result (multipart, Bearer worker_api).

@@ -22,13 +22,21 @@
 <div
     x-show="filePreview.open"
     x-cloak
-    @keydown.escape.window="closeFilePreview()"
+    @keydown.escape.window="if (filePreview.open) closeFilePreview()"
     class="fixed inset-0 z-50 flex items-center justify-center p-4"
 >
     <div class="absolute inset-0 bg-slate-900/50" @click="closeFilePreview()"></div>
-    <div class="relative flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg shadow-xl {{ isDark ? 'border border-zinc-800 bg-zinc-900' : 'bg-white' }}">
+    <div
+        x-ref="filePreviewDialog"
+        @keydown.tab.window="trapFilePreviewFocus($event)"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="file-preview-title"
+        tabindex="-1"
+        class="relative flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg shadow-xl {{ isDark ? 'border border-zinc-800 bg-zinc-900' : 'bg-white' }}"
+    >
         <div class="flex items-center justify-between border-b px-4 py-3 {{ isDark ? 'border-zinc-800' : 'border-slate-200' }}">
-            <h3 class="text-sm font-semibold {{ isDark ? 'text-white' : 'text-slate-700' }}">{{ 'home.preview_title'|trans }}</h3>
+            <h3 id="file-preview-title" class="text-sm font-semibold {{ isDark ? 'text-white' : 'text-slate-700' }}">{{ 'home.preview_title'|trans }}</h3>
             <button
                 @click="closeFilePreview()"
                 class="rounded p-1 {{ isDark ? 'text-zinc-400 hover:bg-zinc-800 hover:text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600' }}"

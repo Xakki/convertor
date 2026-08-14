@@ -210,8 +210,7 @@
             historyPreviewIcon(c, side) {
                 const isSource = side === 'source';
                 if (isSource && this.sourceGone[c.id]) {
-                    this.filePreview = { open: true, kind: null, objectUrl: null, text: '', truncated: false, loading: false, error: FILE_PREVIEW_I18N.gone };
-                    return;
+                    return this.openFilePreview(null, null, null, { error: FILE_PREVIEW_I18N.gone });
                 }
                 const fmt = isSource ? c.from_format : c.to_format;
                 const mime = isSource ? c.source_mime : c.result_mime;

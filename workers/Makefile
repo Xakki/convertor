@@ -4,6 +4,10 @@
 # используют одни и те же образы).
 IMG = $(IMAGE_NS)
 
+# queue-inspect получает STREAM только через окружение рецепта, а не через
+# make-подстановку в shell-исходник.
+export STREAM
+
 # Релизный тег = APP_VER + git short SHA (иммутабельный) — см. решение §2 в карте
 # harbor-published-worker-images. Грязное рабочее дерево → release-guard стопит релиз
 # (SHA не отражал бы фактическое содержимое образа).
@@ -264,15 +268,26 @@ fluent-restart: ## Restart fluent-bit-сайдкара (подхватить и�
 fluent-logs: ## Tail логи fluent-bit-сайдкара
 	$(DC_FLUENT) logs -f fluent-bit
 
-# Очереди — это Streams `conv.*` (XLEN), а не списки: старый вариант искал `queue:*`
-# с LLEN и всегда возвращал пусто. `-a` подставляем только при непустом пароле —
-# keydb.conf идёт без requirepass, и `-a ""` роняет команду с AUTH failed.
+# Очереди — это Streams `conv.*`, а не списки. XLEN накопителен и не является
+# backlog; первичный сигнал для группы `convertor` — pending и idle самой старой
+# pending-записи. `-a` подставляем только при непустом пароле — keydb.conf идёт без
+# requirepass, и `-a ""` роняет команду с AUTH failed.
 .PHONY: queue-status
-queue-status: ## Показать длины стримов conv.* в KeyDB (индекс БД = REDIS_QUEUE_DB)
+queue-status: ## Кратко показать pending/idle очередей и накопительный XLEN (не backlog)
 	@docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) \
-	    eval "local ks=redis.call('keys','conv.*') local out={} for _,k in ipairs(ks) do out[#out+1]=k..': '..redis.call('xlen',k) end return out" 0
+	    eval "local ks=redis.call('keys','conv.*') local out={} table.sort(ks) for _,k in ipairs(ks) do if k ~= 'conv.dead' and redis.call('type',k).ok == 'stream' then local pending=0 local idle=0 local group_found=false local groups=redis.call('xinfo','groups',k) for _,g in ipairs(groups) do local name local group_pending=0 for i=1,#g,2 do if g[i]=='name' then name=g[i+1] elseif g[i]=='pending' then group_pending=tonumber(g[i+1]) or 0 end end if name == 'convertor' then group_found=true pending=group_pending if pending > 0 then local oldest=redis.call('xpending',k,name,'-','+',1) if oldest[1] then idle=tonumber(oldest[1][3]) or 0 end end break end end out[#out+1]=k..': pending[convertor]='..pending..(group_found and '' or ' (group absent)')..', oldest-pending-idle-ms='..idle..', cumulative-xlen-not-backlog='..redis.call('xlen',k) end end local dead_len=0 if redis.call('type','conv.dead').ok == 'stream' then dead_len=redis.call('xlen','conv.dead') end out[#out+1]='DLQ conv.dead: xlen='..dead_len return out" 0
 
 # RO-диагностика стрима: XINFO/XRANGE/XPENDING — никогда XDEL/XTRIM/XACK.
+.PHONY: queue-inspect
+queue-inspect: ## RO-диагностика очередей; опционально STREAM=conv.<тип>
+	@requested="$${STREAM:-}"; \
+	out="$$(docker exec $(KEYDB_CONT) keydb-cli $(if $(REDIS_PASSWORD),--no-auth-warning -a "$(REDIS_PASSWORD)") -n $(REDIS_QUEUE_DB) \
+	    eval "local requested=ARGV[1] or '' local keys=redis.call('keys','conv.*') local streams={} for _,k in ipairs(keys) do if k ~= 'conv.dead' and redis.call('type',k).ok == 'stream' then streams[#streams+1]=k end end table.sort(streams) if requested ~= '' then local allowed=false for _,k in ipairs(streams) do if k == requested then allowed=true break end end if not allowed then return {'__QUEUE_INSPECT_INVALID__: STREAM='..requested..' is not a discovered permitted conversion stream'} end streams={requested} end local out={} if #streams == 0 then out[#out+1]='No permitted conversion streams found.' end for _,k in ipairs(streams) do out[#out+1]='== XINFO GROUPS '..k..' ==' local groups=redis.call('xinfo','groups',k) if #groups == 0 then out[#out+1]='(no groups)' else for _,g in ipairs(groups) do local name='' local fields={} for i=1,#g,2 do fields[g[i]]=g[i+1] end name=fields['name'] out[#out+1]='group='..name..', consumers='..tostring(fields['consumers'] or 0)..', pending='..tostring(fields['pending'] or 0)..', last-delivered-id='..tostring(fields['last-delivered-id'] or '0-0') local start='-' local found=false while true do local entries=redis.call('xpending',k,name,start,'+',1000) if #entries == 0 then break end found=true for _,entry in ipairs(entries) do out[#out+1]='XPENDING RANGE '..name..': id='..entry[1]..', consumer='..entry[2]..', idle-ms='..tostring(entry[3])..', deliveries='..tostring(entry[4]) end if #entries < 1000 then break end start='('..entries[#entries][1] end if not found then out[#out+1]='XPENDING RANGE '..name..': empty PEL' end end end end out[#out+1]='== DLQ conv.dead (XRANGE) ==' local dead_type=redis.call('type','conv.dead').ok if dead_type == 'none' then out[#out+1]='DLQ conv.dead: absent (empty)' elseif dead_type ~= 'stream' then out[#out+1]='DLQ conv.dead: not a stream (type='..dead_type..')' else local dead=redis.call('xrange','conv.dead','-','+') if #dead == 0 then out[#out+1]='DLQ conv.dead: empty' else for _,entry in ipairs(dead) do local values={} for i=1,#entry[2],2 do values[#values+1]=entry[2][i]..'='..entry[2][i+1] end out[#out+1]='DLQ conv.dead: id='..entry[1]..', '..table.concat(values,', ') end end end return out" 0 "$$requested")"; \
+	status=$$?; \
+	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	printf '%s\n' "$$out"; \
+	case "$$out" in __QUEUE_INSPECT_INVALID__:*) exit 2;; esac
+
 .PHONY: dlq-inspect
 dlq-inspect: ## RO-инспекция DLQ-стрима STREAM=conv.dead (default): XINFO STREAM/GROUPS + XRANGE + XPENDING/группа
 	@S="$(if $(STREAM),$(STREAM),conv.dead)"; \

@@ -802,6 +802,192 @@ async def test_missing_output_path_permanent_fail(tmp_path):
 # Сбой скачивания входа (GET /jobs/{id}/input → 404) → retryable fail-фрейм
 # --------------------------------------------------------------------------
 
+
+class _DownloadClientFactory:
+    """Создаёт отдельный httpx-клиент на каждую попытку download и скриптует GET.
+
+    Нужен именно factory, а не один MockTransport-клиент: CNV-81-04 требует
+    нового TLS-соединения/`AsyncClient` на retry, иначе залипшая сессия остаётся
+    залипшей. Журнал `clients` доказывает это инвариантом теста.
+    """
+
+    def __init__(self, outcomes):
+        self._outcomes = iter(outcomes)
+        self.clients: list[httpx.AsyncClient] = []
+        self.requests: list[httpx.Request] = []
+        self.timeouts: list[httpx.Timeout] = []
+
+    def __call__(self, timeout: httpx.Timeout) -> httpx.AsyncClient:
+        self.timeouts.append(timeout)
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            self.requests.append(request)
+            outcome = next(self._outcomes)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        client = _REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handle), timeout=timeout)
+        self.clients.append(client)
+        return client
+
+
+_REAL_ASYNC_CLIENT = httpx.AsyncClient
+
+
+@pytest.mark.asyncio
+async def test_download_input_retries_5xx_with_new_client_then_succeeds(tmp_path, monkeypatch):
+    """Транзиентный 5xx повторяется локально: второй новый клиент скачивает вход."""
+    factory = _DownloadClientFactory([
+        httpx.Response(503, json={"error": "temporary"}),
+        httpx.Response(200, content=b"RETRIED-INPUT"),
+    ])
+    monkeypatch.setattr(ws_client_mod.httpx, "AsyncClient", factory)
+    monkeypatch.setattr(ws_client_mod, "_DOWNLOAD_BACKOFF_BASE_S", 0.0)
+    monkeypatch.setattr(ws_client_mod, "_DOWNLOAD_BACKOFF_JITTER_S", 0.0)
+    sleeps = []
+
+    async def sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(ws_client_mod.asyncio, "sleep", sleep)
+    client = WsClient(
+        _cfg(9999, tmp_path),
+        lambda job, progress: None,
+        download_client_factory=factory,
+    )
+    dest = tmp_path / "input.bin"
+
+    await client._download_input("retry-5xx", str(dest))
+
+    assert dest.read_bytes() == b"RETRIED-INPUT"
+    assert len(factory.requests) == 2
+    assert len(factory.clients) == 2
+    assert factory.clients[0] is not factory.clients[1]
+    assert sleeps == [0.0]
+    timeout = factory.timeouts[0]
+    assert timeout.connect == 10.0 and timeout.read == 60.0
+    assert timeout.write is None and timeout.pool is None
+
+
+@pytest.mark.asyncio
+async def test_download_input_exhausts_network_retries_and_reraises(tmp_path, monkeypatch):
+    """После трёх сетевых ошибок последнее исключение уходит в прежний fail-путь job."""
+    factory = _DownloadClientFactory([httpx.ConnectError("offline")] * 3)
+    monkeypatch.setattr(ws_client_mod.httpx, "AsyncClient", factory)
+    monkeypatch.setattr(ws_client_mod, "_DOWNLOAD_BACKOFF_BASE_S", 0.0)
+    monkeypatch.setattr(ws_client_mod, "_DOWNLOAD_BACKOFF_JITTER_S", 0.0)
+
+    async def sleep(delay):
+        pass
+
+    monkeypatch.setattr(ws_client_mod.asyncio, "sleep", sleep)
+    client = WsClient(
+        _cfg(9999, tmp_path),
+        lambda job, progress: None,
+        download_client_factory=factory,
+    )
+
+    with pytest.raises(httpx.ConnectError, match="offline"):
+        await client._download_input("retry-exhaust", str(tmp_path / "input.bin"))
+
+    assert len(factory.requests) == 3
+    assert len(factory.clients) == 3
+    assert len({id(http) for http in factory.clients}) == 3
+
+
+@pytest.mark.asyncio
+async def test_download_input_retries_timeout(tmp_path, monkeypatch):
+    """Таймаут относится к транзиентным ошибкам и повторяется новым клиентом."""
+    factory = _DownloadClientFactory([
+        httpx.ReadTimeout("slow upstream"),
+        httpx.Response(200, content=b"AFTER-TIMEOUT"),
+    ])
+    monkeypatch.setattr(ws_client_mod, "_DOWNLOAD_BACKOFF_BASE_S", 0.0)
+    monkeypatch.setattr(ws_client_mod, "_DOWNLOAD_BACKOFF_JITTER_S", 0.0)
+
+    async def sleep(delay):
+        pass
+
+    monkeypatch.setattr(ws_client_mod.asyncio, "sleep", sleep)
+    client = WsClient(
+        _cfg(9999, tmp_path),
+        lambda job, progress: None,
+        download_client_factory=factory,
+    )
+    dest = tmp_path / "input.bin"
+
+    await client._download_input("retry-timeout", str(dest))
+
+    assert dest.read_bytes() == b"AFTER-TIMEOUT"
+    assert len(factory.requests) == 2
+    assert len(factory.clients) == 2
+
+
+@pytest.mark.asyncio
+async def test_download_input_does_not_retry_non_network_request_error(tmp_path):
+    """Ошибка декодирования ответа не является сетевой и поднимается с первой попытки."""
+    factory = _DownloadClientFactory([httpx.DecodingError("invalid content encoding")])
+    client = WsClient(
+        _cfg(9999, tmp_path),
+        lambda job, progress: None,
+        download_client_factory=factory,
+    )
+
+    with pytest.raises(httpx.DecodingError, match="invalid content encoding"):
+        await client._download_input("no-retry-decode", str(tmp_path / "input.bin"))
+
+    assert len(factory.requests) == 1
+    assert len(factory.clients) == 1
+
+
+@pytest.mark.asyncio
+async def test_download_input_leaves_injected_http_client_usable(tmp_path):
+    """Download не закрывает инжектированный клиент, которым пользуется остальной HTTP-путь."""
+    regular_requests: list[httpx.Request] = []
+
+    def handle_regular(request: httpx.Request) -> httpx.Response:
+        regular_requests.append(request)
+        return httpx.Response(200, content=b"regular-client-ok")
+
+    regular_client = httpx.AsyncClient(transport=httpx.MockTransport(handle_regular))
+    factory = _DownloadClientFactory([httpx.Response(200, content=b"DOWNLOAD-OK")])
+    client = WsClient(
+        _cfg(9999, tmp_path),
+        lambda job, progress: None,
+        http_client=regular_client,
+        download_client_factory=factory,
+    )
+
+    try:
+        await client._download_input("regular-client", str(tmp_path / "input.bin"))
+        response = await regular_client.get("http://sym.local/later")
+    finally:
+        await regular_client.aclose()
+
+    assert response.content == b"regular-client-ok"
+    assert [request.url.path for request in regular_requests] == ["/later"]
+    assert len(factory.clients) == 1
+
+
+@pytest.mark.asyncio
+async def test_download_input_does_not_retry_4xx(tmp_path, monkeypatch):
+    """401 — постоянная ошибка авторизации, поэтому один запрос и немедленный подъём ошибки."""
+    factory = _DownloadClientFactory([httpx.Response(401, json={"error": "unauthorized"})])
+    client = WsClient(
+        _cfg(9999, tmp_path),
+        lambda job, progress: None,
+        download_client_factory=factory,
+    )
+
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        await client._download_input("no-retry-401", str(tmp_path / "input.bin"))
+
+    assert raised.value.response.status_code == 401
+    assert len(factory.requests) == 1
+    assert len(factory.clients) == 1
+
+
 @pytest.mark.asyncio
 async def test_input_download_404_sends_retryable_fail(tmp_path):
     """GET /jobs/{id}/input → 404 → fail-фрейм (retryable), handler не вызван, tmp подчищен."""
