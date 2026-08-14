@@ -42,18 +42,11 @@ URL/file resources должны оставаться запрещёнными.
   SVG-содержимое или traceback.
 - API валидирует утверждённый whitelist и его границы; UI показывает только
   реально поддержанные параметры и сохраняет их по target format.
+- Whitelist: width/height, profile-limited FPS select, output loop `once|infinite`
+  и background `transparent|white|#RRGGBB`; duration определяется SVG и ограничена
+  server maximum, palette/dither не публикуются.
 - Добавлены worker, API, catalog/capability drift и UI options tests; применимые
   pytest, `make test` и `make build` зелёные.
-
-**Open questions:** *(only for `grooming/` cards — fold each resolution into **Decisions:** below, then remove this section before moving to `todo/`)*
-- Какой renderer поддерживает нужный тип SVG-анимации в контейнере image-worker
-  и допускается по лицензии/размеру образа? До выбора нельзя обещать SMIL, CSS
-  или JS-анимации.
-- Какой минимальный whitelist подтверждён возможностями renderer'а: width/height,
-  FPS, максимальная длительность или число кадров, loop count, прозрачность/фон,
-  а также palette/dither при необходимости?
-- Какие безопасные лимиты duration, FPS, количества кадров и размера результата
-  нужны для free/paid пользователей?
 
 **Decisions:** *(resolved grooming questions — keep on the card after `todo/` so the rationale survives)*
 - Создана отдельная grooming-карточка, а не расширение CNV-75: CNV-75 фиксирует
@@ -63,3 +56,18 @@ URL/file resources должны оставаться запрещёнными.
   реализации или whitelist в репозитории.
 - Завершённая CNV-74-01 остаётся ориентиром безопасного SVG-input pipeline, но не
   предоставляет временной SVG-rendering.
+- 2026-08-14: SVG runtime с SMIL, CSS и JS-анимациями предоставляет отдельный
+  Chromium browser worker из EPIC-009/CNV-88, а не image-worker. Для SVG mode
+  browser запускается без внешней сети и file access, с изолированным container
+  и жёсткими ресурсными лимитами.
+- 2026-08-14: guest получает fixed default 640px/12 FPS/5 s; free — width/height
+  и 12/15 FPS, максимум 10 s/150 кадров; basic/pro — до 1280px, 24 FPS,
+  30 s/720 кадров. Значения проходят server-side profile validation.
+- 2026-08-14: whitelist — width/height, profile-limited FPS, output loop
+  `once|infinite` и background `transparent|white|#RRGGBB`. Duration — свойство
+  SVG с server maximum; palette/dither не входят в MVP.
+- CNV-85 — prerequisite для profile catalogue, персонализированного `/formats` и
+  общей UI/API validation grammar; CNV-82 реализует domain-specific Chromium/GIF
+  profile и worker application.
+- CNV-88 — prerequisite isolated browser runtime; CNV-82 использует его только
+  для локального SVG mode и не включает URL capture/recording scope.
