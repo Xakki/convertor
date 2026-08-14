@@ -35,6 +35,9 @@ JSON — pretty-print/indent, XML/YAML/TOML — правила сериализ�
 - Тесты/QA green: pytest; make test; make build.
 
 **Decisions:**
+- 2026-08-14: CNV-85 — обязательный prerequisite: общий каталог profiles,
+  персонализированный `/formats` и общая грамматика controls реализуются до
+  domain schema и data-worker application в этой карточке.
 - 2026-08-15: не передавать пользователю произвольные serializer options;
   допустимые поля должны быть whitelisted per target format.
 - 2026-08-14: MVP — CSV delimiter/quote/UTF-8, JSON pretty-print/indent;

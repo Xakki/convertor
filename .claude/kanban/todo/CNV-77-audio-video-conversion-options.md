@@ -24,19 +24,23 @@ FFmpeg допускает множество взаимоисключающих 
 **Recommendation:**
 Использовать whitelist: audio low/medium/high bitrate; video 480p/720p/1080p
 и 24/30 FPS. Codec выбирает worker. Free ограничить 720p/30 FPS, paid —
-1080p/30 FPS; входной размер и длительность ограничивать существующими
-тарифными лимитами.
+1080p/30 FPS; входной размер ограничивать существующими тарифными лимитами.
+Лимит длительности не заявлять, пока не появится отдельная server-side
+inspection/limit реализация.
 
 **Acceptance Criteria:**
 - API/UI/worker используют только audio low/medium/high bitrate и video
   480p/720p/1080p, 24/30 FPS; raw FFmpeg args и codec choice отсутствуют.
-- Валидация применяет лимиты: free до 720p/30 FPS, paid до 1080p/30 FPS,
-  а также существующие лимиты размера и длительности.
+- Валидация применяет лимиты: free до 720p/30 FPS, paid до 1080p/30 FPS и
+  существующие лимиты размера; длительность не ограничивается этой карточкой.
 - Audio-only target formats из video source показывают только audio presets.
 - Невалидные либо недоступные по плану варианты получают предсказуемую ошибку.
 - Тесты/QA green: pytest; make test; make build.
 
 **Decisions:**
+- 2026-08-14: CNV-85 — обязательный prerequisite: общий каталог profiles,
+  персонализированный `/formats` и общая грамматика controls реализуются до
+  domain schema и FFmpeg-worker application в этой карточке.
 - 2026-08-15: параметры audio/video не входят в CNV-74 и требуют отдельного
   whitelist вместо передачи произвольных FFmpeg-аргументов.
 - 2026-08-14: выбраны только presets; codec определяет worker. Free — до

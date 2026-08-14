@@ -36,6 +36,9 @@ dialect Markdown. Сохранять настройки в localStorage по tar
 - Тесты/QA green: pytest; make test; make build.
 
 **Decisions:**
+- 2026-08-14: CNV-85 — обязательный prerequisite: общий каталог profiles,
+  персонализированный `/formats` и общая грамматика controls реализуются до
+  domain schema и document-worker application в этой карточке.
 - 2026-08-15: до согласования не добавлять поля в существующую форму конвертера.
 - 2026-08-14: MVP — PDF page range + orientation, TXT/Markdown UTF-8 + dialect,
   localStorage по target format; DOCX/ODT без настроек.
