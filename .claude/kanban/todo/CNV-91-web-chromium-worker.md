@@ -1,37 +1,48 @@
-### Видео загрузки web страницы через Chromium worker
+### Runtime записи загрузки страницы в browser worker
 
 **Criticality:** High
 
 **TAGS:**
 - feature
 - browser
-- video
 - recording
+- video
+- worker
 
 **Description:**
-Записывать начальную загрузку authenticated URL в WebM через Chromium worker, включая
-server-defined slow-network presets.
+Browser-worker-специалист реализует запись начальной загрузки разрешённого URL в
+WebM без audio. Runtime применяет только серверные network presets, лимиты плана и
+существующий надёжный lifecycle результата.
 
 **Problem:**
-Пользователь не может увидеть пошаговую загрузку медленной страницы; текущий video
-worker не управляет browser timeline и не защищает URL runtime.
+Video worker не управляет browser timeline и не может безопасно записывать URL
+navigation. Неограниченная запись истощает CPU, память, диск, контейнерный slot и
+очередь.
 
 **Impact:**
-Нельзя воспроизводимо анализировать поведение страницы при медленном соединении;
-неограниченная recording способна истощить CPU, память, диск и очередь.
+Нельзя воспроизводимо получить видеозапись загрузки страницы, а ошибка или oversize
+могут оставить процессы, потерять результат либо создать повторные terminal effects.
 
 **Recommendation:**
-WebM без audio; recording начинает навигацию и длится до server cap. Presets network:
-`normal|fast_3g|slow_3g`; без raw latency/downlink. Progress: fetching, navigating,
-recording, encoding, uploading; large result — существующий multipart protocol.
+Записывать URL navigation в WebM без audio до server cap. Применять server-defined
+`normal|fast_3g|slow_3g`, этапы progress `fetching|navigating|recording|encoding|
+uploading`, multipart для большого результата и новый context на job. Не принимать
+raw latency/downlink, не поддерживать HTML recording, MP4, UI controls или consent
+экран.
 
 **Acceptance Criteria:**
-- URL→WebM доступен basic/pro; free/guest получают предсказуемый отказ.
-- Basic: 15 s/15 FPS/25 MB; Pro: 30 s/24 FPS/50 MB; один job/context/container slot.
-- Fixture создаёт playable non-empty WebM; timeout/oversize корректно проходит
-retry/DLQ, результат persisted до XACK, без duplicate terminal effects.
-- No audio, MP4 не входит в MVP; URL policy и consent notice из CNV-89 обязательны.
+- URL → playable non-empty WebM доступен basic/pro; guest/free получают отказ по
+  backend contract до запуска worker-а.
+- Basic ограничен 15 s/15 FPS/25 MB, Pro — 30 s/24 FPS/50 MB; на контейнер допустим
+  один job, context и recording slot.
+- Timeout и oversize проходят retry/DLQ; результат persisted до XACK, а cleanup не
+  оставляет дочерние процессы и не создаёт duplicate terminal effects.
+- Worker-тесты покрывают normal и slow_3g preset, лимиты обоих планов, cleanup и
+  жизненный цикл результата; целевые проверки проходят без новых предупреждений.
 
 **Decisions:** *(resolved grooming questions — keep on the card after `todo/` so the rationale survives)*
-- `slow_3g` — server preset, не пользовательские network numbers; HTML recording не
-  входит в MVP.
+- Владелец: browser-worker-специалист; граница работы — только recording runtime.
+- `slow_3g` является server preset, не пользовательскими network numbers; no audio и
+  WebM-only — границы MVP.
+- CNV-91 зависит от CNV-88, CNV-113, CNV-89, CNV-114 и готового screenshot runtime
+  CNV-90; CNV-116 зависит от CNV-91 и владеет UI и обязательным consent.

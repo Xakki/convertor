@@ -1,4 +1,4 @@
-### Публичный API доступ идентичность и аудит
+### Backend публичного API
 
 **Criticality:** High
 
@@ -44,8 +44,10 @@ runtime-contract. Не смешивать worker/internal/admin token boundaries
 **Subtasks:**
 - CNV-87 — anonymous public API identity по HMAC IP и 30-day retention
 - CNV-83 — до трёх именованных персональных API-токенов
-- CNV-84 — API request audit и вкладка в `/history`
-- CNV-86 — OpenAPI public/private-user/private-admin areas
+- CNV-84 — backend API audit contract
+- CNV-86 — OpenAPI runtime areas
+- CNV-109 — audit storage, endpoint и retention
+- CNV-112 — anonymous identity security regression
 
 **Integration checklist:**
 - Прогнать auth/access matrix для анонима, гостя, user, admin и personal token.

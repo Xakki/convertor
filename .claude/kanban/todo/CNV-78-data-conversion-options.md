@@ -1,44 +1,32 @@
-### Настройки конвертации данных
+### Применение CSV/JSON settings в data-worker
 
 **Criticality:** Medium
 
 **TAGS:**
 - feature
 - data
-- conversion-options
-- grooming
+- data-worker
 
 **Description:**
-Добавить безопасный MVP параметров data-конвертаций для CSV и JSON.
+Применить нормализованные CSV и JSON settings в data-worker. Карточка не изменяет profile schema, API validation или frontend controls.
 
 **Problem:**
-У data formats нет единого набора настроек: CSV требует delimiter/encoding/quote,
-JSON — pretty-print/indent, XML/YAML/TOML — правила сериализации. Неконсистентные
-дефолты могут менять данные или ломать повторную загрузку.
+Если worker не применяет whitelist delimiter/quote/UTF-8 и pretty-print/indent, экспорт меняет структуру или игнорирует выбор пользователя.
 
 **Impact:**
-Пользователь не может управлять совместимостью экспортируемых данных; неправильные
-опции способны незаметно изменить типы или структуру.
+Пользователь получает несовместимые файлы и не может надёжно повторить преобразование данных.
 
 **Recommendation:**
-Реализовать для CSV delimiter, quote и UTF-8; для JSON — pretty-print и indent.
-При невалидном UTF-8 возвращать строгую ошибку. YAML/TOML/XML отложить до
-подтверждённого спроса; все опции валидировать per target format.
+Для CSV применять разрешённые delimiter и quote, строго отклонять невалидный UTF-8 без replacement; для JSON применять pretty-print и ограниченный indent. Не добавлять options для YAML/TOML/XML и не принимать произвольные serializer options.
 
 **Acceptance Criteria:**
-- CSV принимает whitelisted delimiter/quote и только UTF-8; невалидный UTF-8
-  завершает конвертацию предсказуемой ошибкой без замены символов.
-- JSON поддерживает pretty-print и ограниченный indent; значения проходят
-  серверную валидацию.
-- Для CSV/JSON есть fixture и round-trip-тесты, фиксирующие риск изменения
-  структуры и типов; YAML/TOML/XML не получают UI/API options.
-- Тесты/QA green: pytest; make test; make build.
+- data-worker создаёт CSV только с разрешёнными delimiter/quote и UTF-8; невалидный UTF-8 завершается предсказуемой worker error без замены символов.
+- data-worker применяет JSON pretty-print и разрешённый indent.
+- Fixture и round-trip worker tests фиксируют сохранение структуры и типов для CSV/JSON.
+- YAML/TOML/XML не читают и не получают settings.
+- `pytest`, `make test` и `make build` зелёные для изменённого worker scope.
 
 **Decisions:**
-- 2026-08-14: CNV-85 — обязательный prerequisite: общий каталог profiles,
-  персонализированный `/formats` и общая грамматика controls реализуются до
-  domain schema и data-worker application в этой карточке.
-- 2026-08-15: не передавать пользователю произвольные serializer options;
-  допустимые поля должны быть whitelisted per target format.
-- 2026-08-14: MVP — CSV delimiter/quote/UTF-8, JSON pretty-print/indent;
-  невалидный UTF-8 отклоняется; YAML/TOML/XML отложены.
+- Profile и серверная validation реализует CNV-103; эта карточка зависит от CNV-103 и CNV-85.
+- UI реализует CNV-105 после profile; общая frontend grammar принадлежит CNV-92.
+- Data MVP ограничен CSV delimiter/quote/UTF-8 и JSON pretty-print/indent.

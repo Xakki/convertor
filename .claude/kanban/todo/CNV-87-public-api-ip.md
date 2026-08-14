@@ -1,73 +1,56 @@
-### Анонимная идентификация public API по хэшу IP
+### CNV-87 — Backend: анонимная IP-identity для public API
 
 **Criticality:** High
 
 **TAGS:**
-- tech-debt
+- backend
+- security
 - api
-- authentication
-- guest
 - privacy
 - rate-limit
 
 **Description:**
-Разрешить public API для анонимного клиента без обязательных cookie и персонального
-токена. Если клиент не предъявил cookie или токен, идентифицировать public flow по
-безопасному хэшированному представлению IP для quota/rate-limit и связанной истории.
+Backend-разработчик реализует серверный fallback identity для разрешённых public API
+операций без cookie и bearer-токена. Приоритет остаётся у JWT, персонального API-токена
+и валидного `guest_id`; IP-derived identity применяется только при их отсутствии.
 
 **Problem:**
-Текущий guest flow опирается на transient guest и materialized `guest_id` cookie.
-Публичный API-клиент без browser-cookie не имеет стабильного контрактного
-идентификатора, хотя продуктовая политика допускает anonymous public API.
+Public API без браузерной cookie не имеет контрактного владельца для quota, rate-limit
+и проверки владения текущей операцией. Доверие клиентскому forwarded header позволило бы
+подменить identity.
 
 **Impact:**
-Внешний клиент без cookie/token не сможет предсказуемо использовать public API или
-будет обходить guest/quota модель; документация CNV-86 не сможет честно описать
-анонимный доступ.
+Анонимные интеграции либо не работают предсказуемо, либо обходят действующую модель
+quota/owner checks; ошибочная обработка IP создаёт риск раскрытия данных за NAT/VPN.
 
 **Recommendation:**
-Сохранить приоритет существующего JWT/персонального API-токена и валидного
-`guest_id`; только при их отсутствии вычислять keyed one-way IP identifier на
-доверенном server-side boundary. Не хранить raw IP в user/history payload, не
-доверять непроверенным forwarded headers и не подменять существующие user/guest
-ownership checks.
+Ввести keyed HMAC-SHA-256 identifier от client IP на доверенной server-side границе.
+Принимать `X-Forwarded-For` и `X-Real-IP` только от единственного trusted proxy Nginx;
+не сохранять raw IP. Ограничить fallback quota, rate-limit и владением одной текущей
+операцией, без list-history и management-доступа.
 
 **Acceptance Criteria:**
-- Утверждённые public API endpoints работают без cookie и bearer token; AI/video
-  ограничения и существующие policy guest/public endpoints сохраняются.
-- При отсутствии JWT, personal token и валидного `guest_id` сервер создаёт/находит
-  anonymous identity по keyed необратимому IP identifier и применяет к ней quota,
-  rate-limit и owner checks.
-- Raw IP не сохраняется в User, Conversion, history/API responses или logs как
-  часть новой identity; секрет key не попадает в tracked env-файлы.
-- Доверенная цепочка proxy и источник client IP определены явно; spoofed
-  `X-Forwarded-For` не позволяет выбрать чужую identity.
-- Existing cookie guest flow, login merge и registered user/API-token flow не
-  регрессируют; нет пересечения данных между разными IP/owners.
-- IP-derived identity и связанные anonymous conversion records хранятся 30 дней;
-  lifecycle файлов и cleanup должны быть приведены в соответствие с этой policy.
-- Есть functional/security tests no-cookie access, stable same-IP identity,
-  distinct-IP isolation, quota/rate-limit, spoofed header protection и отсутствие
-  raw IP/secret leakage; применимые QA зелёные.
+- Разрешённые public endpoints без cookie/token получают identity только после проверки
+  отсутствия JWT, personal token и валидного `guest_id`.
+- IP identity применяет существующие quota, rate-limit и owner checks; AI/video и прочие
+  guest/public ограничения не обходятся.
+- Nginx определён единственным trusted proxy; spoofed client `X-Forwarded-For` не меняет
+  выбранную identity.
+- Новая identity не записывает raw IP или HMAC secret в БД, ответы, exception text и логи;
+  секрет доступен только через `.env.local`.
+- Existing guest-cookie flow, login merge и registered/API-token flow сохраняют поведение;
+  операции разных owners изолированы.
+- IP-derived identity и связанные anonymous conversion records получают срок хранения 30
+  дней и исполнимый backend cleanup-hook для этого срока.
+- Профильные backend functional/unit tests зелёные для precedence, same-IP stability,
+  distinct-owner isolation и trusted-proxy защиты.
 
-**Decisions:** *(resolved grooming questions — keep on the card after `todo/` so the rationale survives)*
+**Decisions:**
+- **Владелец:** backend/security-разработчик.
+- **Зависимости:** нет; это первый шаг цепочки `CNV-87 → CNV-83 → CNV-84 → CNV-86`.
 - JWT, personal API token и валидный `guest_id` имеют приоритет над IP fallback.
-- 2026-08-14: Nginx — единственный trusted proxy. Symfony принимает
-  `X-Forwarded-For`/`X-Real-IP` только от него; forwarded headers от клиента не
-  являются источником identity.
-- 2026-08-14: anonymous identity — стабильный HMAC-SHA-256 client IP без
-  ротации, с секретом только в `.env.local`. Это допускает долгую корреляцию
-  активности одного IP; retention записей и история требуют отдельного решения.
-- 2026-08-14: IP fallback применяется только к quota/rate-limit и ownership
-  текущей операции. Browser после успешной конвертации получает существующий
-  `guest_id`; общий anonymous history без cookie/token не выдаётся, чтобы не
-  раскрывать данные пользователей за общим NAT/VPN IP.
-- 2026-08-14: anonymous public API включает formats/examples, создание
-  конвертации, quota, status и download/source/preview только текущей собственной
-  операции. List history, retry/delete, payment, profile и management остаются
-  user/admin-only.
-- 2026-08-14: IP-derived identity и связанные anonymous conversion records
-  хранятся 30 дней; cleanup файлов и policy документов должны быть согласованы
-  с этим сроком.
-- Карточка является prerequisite для честной анонимной маркировки public operations
-  в CNV-86 и не меняет allowlist персональных токенов из CNV-83.
+- Анонимному API доступны formats/examples, создание, quota, status и ресурсы только
+  собственной текущей операции; history list, retry/delete, payment, profile и management
+  остаются user/admin-only.
+- Privacy regression, пользовательская документация и проверки отсутствия утечек вне
+  реализации identity принадлежат CNV-112.

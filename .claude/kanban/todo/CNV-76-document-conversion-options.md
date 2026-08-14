@@ -1,44 +1,32 @@
-### Настройки конвертации документов
+### Применение document-настроек в document-worker
 
 **Criticality:** Medium
 
 **TAGS:**
 - feature
 - documents
-- conversion-options
-- grooming
+- document-worker
 
 **Description:**
-Добавить согласованный MVP параметров document-конвертаций по образцу image
-options, не обещая настройки, которые document-worker не применяет.
+Применить нормализованные document options в document-worker для PDF, TXT и Markdown. Карточка не изменяет profile schema, API validation или frontend controls.
 
 **Problem:**
-Разные движки документов имеют несовместимые параметры: PDF quality/page range,
-DOCX/ODT layout, text encoding и markdown dialect. Универсальная форма без
-каталога возможностей будет обещать параметры, которые worker не применяет.
+Даже валидированные параметры бесполезны, если worker игнорирует page range, orientation и Markdown dialect либо передаёт их неподдерживаемым DOCX/ODT путям.
 
 **Impact:**
-Пользователь не может контролировать важные свойства документа; неограниченный
-набор полей увеличит риск несовместимых и невалидных комбинаций.
+Пользователь увидит настройки, но получит документ с дефолтным layout или несовместимой сериализацией.
 
 **Recommendation:**
-Реализовать PDF page range и orientation; для TXT/Markdown — UTF-8 и выбранный
-dialect Markdown. Сохранять настройки в localStorage по target format. DOCX/ODT
-в MVP остаются без пользовательских параметров.
+Применять `pageRange` и `orientation` только при поддерживаемом PDF output; для TXT/Markdown писать UTF-8 и выбранный разрешённый dialect. Для DOCX/ODT options не читать и не добавлять. Использовать только нормализованный job payload.
 
 **Acceptance Criteria:**
-- API и UI принимают и валидируют PDF page range и orientation; worker применяет
-  их для поддерживаемых PDF-результатов.
-- Для TXT/Markdown контракт допускает только UTF-8 и whitelisted Markdown dialect.
-- Настройки изолированы в localStorage по target format; DOCX/ODT не получают
-  новых полей.
-- Есть API, worker и UI-тесты для валидных/невалидных значений.
-- Тесты/QA green: pytest; make test; make build.
+- document-worker применяет page range и orientation к поддерживаемому PDF result.
+- TXT и Markdown result создаются в UTF-8; выбранный dialect влияет только на Markdown output.
+- DOCX/ODT conversion не получает новых options и сохраняет текущую семантику.
+- Worker-тесты покрывают каждую поддержанную настройку и отсутствие её эффекта на неподдерживаемых targets.
+- `pytest`, `make test` и `make build` зелёные для изменённого worker scope.
 
 **Decisions:**
-- 2026-08-14: CNV-85 — обязательный prerequisite: общий каталог profiles,
-  персонализированный `/formats` и общая грамматика controls реализуются до
-  domain schema и document-worker application в этой карточке.
-- 2026-08-15: до согласования не добавлять поля в существующую форму конвертера.
-- 2026-08-14: MVP — PDF page range + orientation, TXT/Markdown UTF-8 + dialect,
-  localStorage по target format; DOCX/ODT без настроек.
+- Profile и серверная validation сначала реализуются в CNV-97; worker зависит от CNV-97 и CNV-85.
+- UI реализуется отдельно в CNV-99 после profile; общая frontend grammar принадлежит CNV-92.
+- PDF page range + orientation и TXT/Markdown UTF-8 + dialect — единственный document MVP.

@@ -1,4 +1,4 @@
-### Настройки конвертации аудио и видео
+### Применение media preset в FFmpeg-worker
 
 **Criticality:** Medium
 
@@ -6,42 +6,28 @@
 - feature
 - audio
 - video
-- conversion-options
-- grooming
+- ffmpeg-worker
 
 **Description:**
-Добавить безопасные preset-параметры для FFmpeg-конвертаций без передачи raw
-аргументов или выбора codec пользователем.
+Применить нормализованные audio/video presets в FFmpeg-worker без передачи пользовательских codec или raw FFmpeg arguments.
 
 **Problem:**
-FFmpeg допускает множество взаимоисключающих комбинаций. Выставление raw-аргументов
-или неограниченных полей из UI небезопасно и приведёт к непереносимым результатам.
+Без отдельной worker-логики разрешённые presets не влияют на FFmpeg command, а произвольные args создают небезопасные и непереносимые задания.
 
 **Impact:**
-Пользователь не может выбрать качество/размер media-результата; поспешный UI может
-создавать неподдерживаемые задания и повышать потребление ресурсов.
+Пользователь не сможет получить выбранное качество/размер, а worker может выполнить неподдерживаемую комбинацию.
 
 **Recommendation:**
-Использовать whitelist: audio low/medium/high bitrate; video 480p/720p/1080p
-и 24/30 FPS. Codec выбирает worker. Free ограничить 720p/30 FPS, paid —
-1080p/30 FPS; входной размер ограничивать существующими тарифными лимитами.
-Лимит длительности не заявлять, пока не появится отдельная server-side
-inspection/limit реализация.
+Сопоставить audio `low|medium|high` с внутренним bitrate preset, video 480p/720p/1080p и 24/30 FPS — с командой, где codec выбирает worker. Принимать только нормализованные job options; не вводить duration limit.
 
 **Acceptance Criteria:**
-- API/UI/worker используют только audio low/medium/high bitrate и video
-  480p/720p/1080p, 24/30 FPS; raw FFmpeg args и codec choice отсутствуют.
-- Валидация применяет лимиты: free до 720p/30 FPS, paid до 1080p/30 FPS и
-  существующие лимиты размера; длительность не ограничивается этой карточкой.
-- Audio-only target formats из video source показывают только audio presets.
-- Невалидные либо недоступные по плану варианты получают предсказуемую ошибку.
-- Тесты/QA green: pytest; make test; make build.
+- FFmpeg-worker применяет только audio bitrate preset и video resolution/FPS из whitelist.
+- Codec и raw FFmpeg arguments не поступают из job options.
+- Для audio-only target из video source применяется только audio preset; video controls игнорируются как недопустимые уже на backend.
+- Worker-тесты проверяют построенную команду и фактические media properties для каждого preset класса.
+- `pytest`, `make test` и `make build` зелёные для изменённого worker scope.
 
 **Decisions:**
-- 2026-08-14: CNV-85 — обязательный prerequisite: общий каталог profiles,
-  персонализированный `/formats` и общая грамматика controls реализуются до
-  domain schema и FFmpeg-worker application в этой карточке.
-- 2026-08-15: параметры audio/video не входят в CNV-74 и требуют отдельного
-  whitelist вместо передачи произвольных FFmpeg-аргументов.
-- 2026-08-14: выбраны только presets; codec определяет worker. Free — до
-  720p/30 FPS, paid — до 1080p/30 FPS; audio использует low/medium/high bitrate.
+- Backend profile и plan validation реализует CNV-100; эта карточка зависит от CNV-100 и CNV-85.
+- UI реализует CNV-102 после profile; общая frontend grammar принадлежит CNV-92.
+- Free ограничен 720p/30 FPS, paid — 1080p/30 FPS; лимит длительности вне scope до отдельной server-side inspection реализации.

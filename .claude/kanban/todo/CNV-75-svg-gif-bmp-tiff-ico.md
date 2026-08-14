@@ -1,4 +1,4 @@
-### SVG → GIF, BMP, TIFF и ICO
+### Static SVG: image-worker legacy targets
 
 **Criticality:** Medium
 
@@ -6,36 +6,28 @@
 - feature
 - images
 - svg
-- grooming
+- image-worker
 
 **Description:**
-Добавить в image-worker и каталог форматов SVG → GIF, BMP, TIFF и ICO с
-согласованной статичной семантикой.
+Реализовать в image-worker статичную конвертацию SVG в GIF, BMP, TIFF и ICO. Карточка не меняет API-каталог и frontend.
 
 **Problem:**
-Эти target-форматы технически возможны в текущем image-worker, но имеют разные
-ограничения: палитра/анимация GIF, отсутствие прозрачности BMP, параметры TIFF и
-несколько размеров ICO. Включение их без продукта и тестовой политики даст
-непредсказуемый результат.
+Однокадровый SVG pipeline ещё не применяет зафиксированные правила palette/alpha, TIFF и ICO, поэтому результаты legacy-форматов непредсказуемы.
 
 **Impact:**
-Часть пользователей не получит нужный legacy- или иконный формат; преждевременная
-реализация способна создать некорректные или чрезмерно большие результаты.
+Без worker-реализации backend не сможет безопасно публиковать обещанные static SVG targets, а пользователи получат неверные кадры или свойства файлов.
 
 **Recommendation:**
-Использовать CairoSVG и Pillow: GIF — статичный рендер, BMP — без alpha,
-TIFF — single-page с LZW, ICO — PNG-кадры 16/32/48/256. Форматы доступны всем
-пользователям; добавить fixture SVG и проверки свойств каждого результата.
+Использовать существующий безопасный SVG raster pipeline с CairoSVG и Pillow: GIF — один статичный кадр, BMP — без alpha, TIFF — single-page LZW, ICO — PNG-кадры 16/32/48/256. Принимать только нормализованные options из job; не добавлять browser runtime или анимацию.
 
 **Acceptance Criteria:**
-- SVG → GIF создаёт статичный GIF без анимации.
-- SVG → BMP создаёт результат без alpha; SVG → TIFF — один LZW-сжатый кадр.
-- SVG → ICO содержит PNG-кадры 16×16, 32×32, 48×48 и 256×256.
-- Все четыре target format доступны в общем каталоге; тесты проверяют тип,
-  размеры/кадры ICO и свойства каждого результата.
-- Тесты/QA green: pytest; make test; make build.
+- image-worker создаёт статичный GIF из SVG без анимации.
+- BMP не содержит alpha; TIFF состоит из одного LZW-сжатого кадра.
+- ICO содержит PNG-кадры 16×16, 32×32, 48×48 и 256×256.
+- Worker-тесты с SVG fixture проверяют MIME/свойства результата, размеры и кадры ICO.
+- `pytest`, `make test` и `make build` зелёные для изменённого worker scope.
 
 **Decisions:**
-- 2026-08-15: PNG, JPEG/JPG и WebP реализуются отдельно в CNV-74-01.
-- 2026-08-14: выбран MVP: статичный GIF, BMP без alpha, single-page TIFF LZW,
-  multi-size ICO (16/32/48/256); форматы показываются всем пользователям.
+- Статичный SVG → GIF остаётся однокадровой image-worker конвертацией.
+- Анимированный SVG → GIF принадлежит CNV-82 и browser-worker; fallback анимации в один кадр запрещён.
+- Публикацию пар в catalog выполняет CNV-95, UI — CNV-96.
