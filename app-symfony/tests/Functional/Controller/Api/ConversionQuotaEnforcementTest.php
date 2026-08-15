@@ -6,9 +6,11 @@ namespace App\Tests\Functional\Controller\Api;
 
 use App\Entity\Conversion;
 use App\Entity\User;
+use App\Entity\WorkerCapability;
 use App\Enum\BillingMode;
 use App\Messenger\Transport\CleanRedisTransport;
 use App\Repository\ConversionRepository;
+use App\Repository\WorkerCapabilityRepository;
 use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
 use App\Service\Billing\BalanceService;
@@ -19,6 +21,7 @@ use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
+use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 use Symfony\Component\BrowserKit\Cookie;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
@@ -32,6 +35,8 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
 {
     /** @var list<array{class: class-string, id: int}> */
     private array $toRemove = [];
+
+    private ?WorkerCapability $aiAvailabilityFixture = null;
 
     protected function tearDown(): void
     {
@@ -51,6 +56,16 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
             }
             $em->flush();
             $this->toRemove = [];
+        }
+
+        if ($this->aiAvailabilityFixture !== null && static::$kernel !== null) {
+            $em      = static::getContainer()->get(EntityManagerInterface::class);
+            $fixture = $em->find(WorkerCapability::class, $this->aiAvailabilityFixture->getId());
+            if ($fixture !== null) {
+                $em->remove($fixture);
+                $em->flush();
+            }
+            $this->aiAvailabilityFixture = null;
         }
 
         parent::tearDown();
@@ -124,12 +139,17 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
 
     public function testFreeUserVideoConversionReturns429InsufficientBalance(): void
     {
-        $this->assertFreeUserInsufficientBalance('mp4', 'mkv', $this->mp4Bytes());
+        $client = static::createClient();
+
+        $this->assertFreeUserInsufficientBalance($client, 'mp4', 'mkv', $this->mp4Bytes());
     }
 
     public function testFreeUserAiConversionReturns429InsufficientBalance(): void
     {
-        $this->assertFreeUserInsufficientBalance('mp3', 'txt', $this->mp3Bytes());
+        $client = static::createClient();
+        $this->createAiAvailabilityFixture();
+
+        $this->assertFreeUserInsufficientBalance($client, 'mp3', 'txt', $this->mp3Bytes());
     }
 
     public function testGuestOverLightQuotaReturns429WithDailyMessage(): void
@@ -167,6 +187,7 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
     public function testGuestAiStillReturns403AuthRequiredNot429(): void
     {
         $client = static::createClient();
+        $this->createAiAvailabilityFixture();
 
         $client->request(
             'POST',
@@ -198,10 +219,9 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
         self::assertSame('auth_required', $data['error']);
     }
 
-    private function assertFreeUserInsufficientBalance(string $from, string $to, string $bytes): void
+    private function assertFreeUserInsufficientBalance(KernelBrowser $client, string $from, string $to, string $bytes): void
     {
-        $client = static::createClient();
-        $em     = static::getContainer()->get(EntityManagerInterface::class);
+        $em = static::getContainer()->get(EntityManagerInterface::class);
 
         $user = new User();
         $em->persist($user);
@@ -226,6 +246,23 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
 
         $em->remove($user);
         $em->flush();
+    }
+
+    private function createAiAvailabilityFixture(): void
+    {
+        $instanceId                  = 'quota-enforcement-ai-' . bin2hex(random_bytes(8));
+        $this->aiAvailabilityFixture = static::getContainer()->get(WorkerCapabilityRepository::class)->upsert(
+            'ai',
+            $instanceId,
+            [
+                'workerType'  => 'ai',
+                'instanceId'  => $instanceId,
+                'isAi'        => true,
+                'streams'     => ['ai'],
+                'routingKeys' => ['ai'],
+                'matrix'      => ['mp3' => ['txt']],
+            ],
+        );
     }
 
     private function assertFreeUserQuota429(string $from, string $to, string $bytes, string $messageNeedle): void

@@ -53,4 +53,27 @@ xakki-convertor-test-worker-ai`), а `make test-down` в конце верифи
   в `test-down`/`down-v`; отдельное удаление по имени/лейблу и точечный down
   из e2e/smoke не нужны.
 
-**Status:** grooming
+**Execution Log:**
+- До исправления RED: после `make test-down` оставались healthy `worker-ai` и сеть `xakki-convertor-test-network`.
+- Исправление очистки stale-state прошло; post-fix `test-up` прошёл.
+- `smoke-run` поднял healthy `worker-ai`, но завершился с exit 2 из-за несвязанного mismatch схемы seed `daily_conversions`; для CNV-72 это неблокирующее, отложено на review пользователя.
+- Post-fix `test-down` прошёл и удалил все тестовые контейнеры, сети и volumes; финальные проверки контейнеров и сети прошли: пусто/not-found.
+- Независимый свежий Terra review: PASS, замечаний нет; CNV-72 готова.
+- 2026-08-15: Финальный comprehensive Terra review — HIGH: рекурсивный вызов
+  `test-down` передавал `COMPOSE_PROFILES=server,test,ai` как shell environment
+  prefix, поэтому `.env.test` мог переопределить его. Исправлено на make
+  command-line variable с приоритетом выше makefile: `$(MAKE_TEST)
+  COMPOSE_PROFILES=server,test,ai down-v`.
+- 2026-08-15: Post-correction Luna evidence: smoke — PASS, 6/6 сценариев;
+  `worker-ai` healthy. `make test-down` — exit 0, удалены `worker-ai` и все
+  тестовые ресурсы; проверка остаточных контейнеров — пусто,
+  `xakki-convertor-test-network` — not-found. `make docker-check` — PASS.
+  Static Makefile implementation review — PASS; единственный FAIL был по
+  устаревшим логам, исправлено этой записью. Focused documentation re-review
+  Terra остаётся pending.
+- 2026-08-15: Focused documentation re-review Terra — PASS; после исправления
+  приоритета command-line переменной CNV-72 снова ready.
+- 2026-08-15: Пользователь одобрил финализацию CNV-72 и перенос в `done` в
+  составе локального squash merge EPIC-002 без push.
+
+**Status:** done

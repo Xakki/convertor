@@ -21,7 +21,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  * dev-стенда), НЕ трогая тестовые БД `convertor-test`/`convertor_test`
  * (у них своя изоляция — см. skill `e2e-ws-transport-stack`).
  *
- * WIPE (полностью): `conversions`, `payments`, `social_identities`, `file_storage`
+ * WIPE (полностью): `conversions`, `payments`, `balance_transactions`, `social_identities`, `file_storage`
  * + связанные S3-объекты (по `file_storage.storage_path`) + `users` с
  * `is_admin=0` (гости и обычные юзеры).
  * PRESERVE: `users` с `is_admin=1` (админ), `plans`, `conversion_toggles`,
@@ -35,10 +35,11 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  * FK-граф (все RESTRICT, кроме social_identities→users CASCADE):
  *   conversions → users, file_storage(input_file_id/output_file_id)
  *   payments    → users
+ *   balance_transactions → users
  *   social_identities → users (ON DELETE CASCADE)
  * MariaDB не разрешает TRUNCATE таблицы, на которую ссылается FK, даже если
  * ссылающихся строк уже нет — поэтому удаляем DELETE child-first в строгом
- * порядке: conversions → payments → social_identities → file_storage →
+ * порядке: conversions → payments → balance_transactions → social_identities → file_storage →
  * users(is_admin=0). Админ переживает даже собственные conversions/payments —
  * они тоже входят в общий вайп (согласованная семантика: остаётся только
  * сама users-строка админа).
@@ -49,7 +50,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  */
 #[AsCommand(
     name: 'app:clean-test-data',
-    description: 'Очистить накопленные dev-данные (conversions/payments/social_identities/file_storage + не-админ users) в основной БД convertor',
+    description: 'Очистить накопленные dev-данные (conversions/payments/balance_transactions/social_identities/file_storage + не-админ users) в основной БД convertor',
 )]
 final class CleanTestDataCommand extends Command
 {
@@ -93,6 +94,7 @@ final class CleanTestDataCommand extends Command
         $io->table(['Таблица', 'Строк к удалению'], [
             ['conversions', (string) $counts['conversions']],
             ['payments', (string) $counts['payments']],
+            ['balance_transactions', (string) $counts['balance_transactions']],
             ['social_identities', (string) $counts['social_identities']],
             ['file_storage (+ S3-объекты)', (string) $counts['file_storage'] . ($keepS3 ? ' (S3 пропускается: --keep-s3)' : '')],
             ['users (is_admin=0)', (string) $counts['users_non_admin']],
@@ -126,14 +128,15 @@ final class CleanTestDataCommand extends Command
         }
 
         // (c) DB-вайп child-first одной транзакцией (см. FK-граф в докблоке класса).
-        /** @var array{conversions: int, payments: int, social_identities: int, file_storage: int, users_non_admin: int} $deleted */
+        /** @var array{conversions: int, payments: int, balance_transactions: int, social_identities: int, file_storage: int, users_non_admin: int} $deleted */
         $deleted = $this->em->wrapInTransaction(function () use ($connection): array {
             return [
-                'conversions'       => $connection->executeStatement('DELETE FROM conversions'),
-                'payments'          => $connection->executeStatement('DELETE FROM payments'),
-                'social_identities' => $connection->executeStatement('DELETE FROM social_identities'),
-                'file_storage'      => $connection->executeStatement('DELETE FROM file_storage'),
-                'users_non_admin'   => $connection->executeStatement('DELETE FROM users WHERE is_admin = 0'),
+                'conversions'          => $connection->executeStatement('DELETE FROM conversions'),
+                'payments'             => $connection->executeStatement('DELETE FROM payments'),
+                'balance_transactions' => $connection->executeStatement('DELETE FROM balance_transactions'),
+                'social_identities'    => $connection->executeStatement('DELETE FROM social_identities'),
+                'file_storage'         => $connection->executeStatement('DELETE FROM file_storage'),
+                'users_non_admin'      => $connection->executeStatement('DELETE FROM users WHERE is_admin = 0'),
             ];
         });
 
@@ -141,6 +144,7 @@ final class CleanTestDataCommand extends Command
         $io->table(['Таблица', 'Удалено строк'], [
             ['conversions', (string) $deleted['conversions']],
             ['payments', (string) $deleted['payments']],
+            ['balance_transactions', (string) $deleted['balance_transactions']],
             ['social_identities', (string) $deleted['social_identities']],
             ['file_storage', (string) $deleted['file_storage']],
             ['users (non-admin)', (string) $deleted['users_non_admin']],
@@ -157,17 +161,18 @@ final class CleanTestDataCommand extends Command
     }
 
     /**
-     * @return array{conversions: int, payments: int, social_identities: int, file_storage: int, users_admin: int, users_non_admin: int}
+     * @return array{conversions: int, payments: int, balance_transactions: int, social_identities: int, file_storage: int, users_admin: int, users_non_admin: int}
      */
     private function collectCounts(Connection $connection): array
     {
         return [
-            'conversions'       => (int) $connection->fetchOne('SELECT COUNT(*) FROM conversions'),
-            'payments'          => (int) $connection->fetchOne('SELECT COUNT(*) FROM payments'),
-            'social_identities' => (int) $connection->fetchOne('SELECT COUNT(*) FROM social_identities'),
-            'file_storage'      => (int) $connection->fetchOne('SELECT COUNT(*) FROM file_storage'),
-            'users_admin'       => (int) $connection->fetchOne('SELECT COUNT(*) FROM users WHERE is_admin = 1'),
-            'users_non_admin'   => (int) $connection->fetchOne('SELECT COUNT(*) FROM users WHERE is_admin = 0'),
+            'conversions'          => (int) $connection->fetchOne('SELECT COUNT(*) FROM conversions'),
+            'payments'             => (int) $connection->fetchOne('SELECT COUNT(*) FROM payments'),
+            'balance_transactions' => (int) $connection->fetchOne('SELECT COUNT(*) FROM balance_transactions'),
+            'social_identities'    => (int) $connection->fetchOne('SELECT COUNT(*) FROM social_identities'),
+            'file_storage'         => (int) $connection->fetchOne('SELECT COUNT(*) FROM file_storage'),
+            'users_admin'          => (int) $connection->fetchOne('SELECT COUNT(*) FROM users WHERE is_admin = 1'),
+            'users_non_admin'      => (int) $connection->fetchOne('SELECT COUNT(*) FROM users WHERE is_admin = 0'),
         ];
     }
 
@@ -189,7 +194,7 @@ final class CleanTestDataCommand extends Command
         }
 
         return $io->confirm(
-            'Удалить ВСЕ conversions/payments/social_identities/file_storage и всех non-admin users из БД convertor?',
+            'Удалить ВСЕ conversions/payments/balance_transactions/social_identities/file_storage и всех non-admin users из БД convertor?',
             false,
         );
     }

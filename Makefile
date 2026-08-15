@@ -75,7 +75,7 @@ down: ## Stop & remove containers — ГЛАВНЫЙ СЕРВЕР (remote-хос
 .PHONY: down-v
 down-v: ## Stop & remove containers ВМЕСТЕ С ТОМАМИ (стирает БД/KeyDB стенда)
 	$(CONFIRM_PROD)
-	$(DC) down -v
+	COMPOSE_PROFILES=server,test,ai $(DC) down -v
 
 .PHONY: restart
 restart: down up ## Restart all services
@@ -176,7 +176,7 @@ test-up: ## Поднять тест-стенд (свой compose-проект/п
 
 .PHONY: test-down
 test-down: ## Снести тест-стенд вместе с томами (тест-БД и KeyDB стираются)
-	$(MAKE_TEST) down-v
+	$(MAKE_TEST) COMPOSE_PROFILES=server,test,ai down-v
 
 # ---------------------------------------------------------------------------
 # Per-component fragments (переменные выше должны быть определены до include —

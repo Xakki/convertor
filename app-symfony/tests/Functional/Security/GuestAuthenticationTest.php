@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Security;
 
 use App\Entity\User;
+use App\Entity\WorkerCapability;
 use App\Repository\UserRepository;
+use App\Repository\WorkerCapabilityRepository;
 use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
 use Doctrine\ORM\EntityManagerInterface;
@@ -26,6 +28,23 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  */
 final class GuestAuthenticationTest extends WebTestCase
 {
+    private ?WorkerCapability $aiAvailabilityFixture = null;
+
+    protected function tearDown(): void
+    {
+        if ($this->aiAvailabilityFixture !== null && static::$kernel !== null) {
+            $em      = static::getContainer()->get(EntityManagerInterface::class);
+            $fixture = $em->find(WorkerCapability::class, $this->aiAvailabilityFixture->getId());
+            if ($fixture !== null) {
+                $em->remove($fixture);
+                $em->flush();
+            }
+            $this->aiAvailabilityFixture = null;
+        }
+
+        parent::tearDown();
+    }
+
     public function testGuestQuotaIsLazyNoCookieNoRow(): void
     {
         $client    = static::createClient();
@@ -133,19 +152,22 @@ final class GuestAuthenticationTest extends WebTestCase
 
     public function testGuestAiConversionReturns403AuthRequired(): void
     {
+        $client = static::createClient();
         // mp3→txt = ai. Гость получает 403 auth_required (гейт в контроллере).
-        $this->assertGuestGate403('mp3', 'txt', $this->mp3Bytes());
+        $this->createAiAvailabilityFixture();
+
+        $this->assertGuestGate403($client, 'mp3', 'txt', $this->mp3Bytes());
     }
 
     public function testGuestVideoConversionReturns403AuthRequired(): void
     {
+        $client = static::createClient();
         // mp4→mkv = video. Гость получает 403 auth_required.
-        $this->assertGuestGate403('mp4', 'mkv', $this->mp4Bytes());
+        $this->assertGuestGate403($client, 'mp4', 'mkv', $this->mp4Bytes());
     }
 
-    private function assertGuestGate403(string $from, string $to, string $bytes): void
+    private function assertGuestGate403(KernelBrowser $client, string $from, string $to, string $bytes): void
     {
-        $client    = static::createClient();
         $container = static::getContainer();
         /** @var EntityManagerInterface $em */
         $em     = $container->get(EntityManagerInterface::class);
@@ -180,6 +202,23 @@ final class GuestAuthenticationTest extends WebTestCase
             $before,
             $this->userCount($em),
             'gated (403) convert must NOT create a users row',
+        );
+    }
+
+    private function createAiAvailabilityFixture(): void
+    {
+        $instanceId                  = 'guest-authentication-ai-' . bin2hex(random_bytes(8));
+        $this->aiAvailabilityFixture = static::getContainer()->get(WorkerCapabilityRepository::class)->upsert(
+            'ai',
+            $instanceId,
+            [
+                'workerType'  => 'ai',
+                'instanceId'  => $instanceId,
+                'isAi'        => true,
+                'streams'     => ['ai'],
+                'routingKeys' => ['ai'],
+                'matrix'      => ['mp3' => ['txt']],
+            ],
         );
     }
 

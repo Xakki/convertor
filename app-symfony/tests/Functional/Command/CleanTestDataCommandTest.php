@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Command;
 
 use App\Command\CleanTestDataCommand;
+use App\Entity\BalanceTransaction;
 use App\Entity\Conversion;
 use App\Entity\FileStorage;
 use App\Entity\Payment;
 use App\Entity\SocialIdentity;
 use App\Entity\User;
+use App\Enum\BalanceTransactionSource;
+use App\Enum\BalanceTransactionType;
 use App\Enum\FileCategory;
 use App\Enum\PaymentGateway;
 use App\Service\Storage\S3Storage;
@@ -75,6 +78,7 @@ final class CleanTestDataCommandTest extends KernelTestCase
         self::assertNotNull($this->em->find(FileStorage::class, $fixture['inputFileId']));
         self::assertNotNull($this->em->find(FileStorage::class, $fixture['outputFileId']));
         self::assertNotNull($this->em->find(Payment::class, $fixture['paymentId']));
+        self::assertNotNull($this->em->find(BalanceTransaction::class, $fixture['balanceTransactionId']));
         self::assertNotNull($this->em->find(SocialIdentity::class, $fixture['socialIdentityId']));
         self::assertNotNull($this->em->find(User::class, $fixture['userId']));
         self::assertNotNull($this->em->find(User::class, $fixture['adminId']));
@@ -110,6 +114,7 @@ final class CleanTestDataCommandTest extends KernelTestCase
         $connection = $this->em->getConnection();
         self::assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM conversions'), 'conversions вайпается целиком');
         self::assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM payments'), 'payments вайпается целиком');
+        self::assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM balance_transactions'), 'ledger вайпается до users');
         self::assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM social_identities'), 'social_identities вайпается целиком');
         self::assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM file_storage'), 'file_storage вайпается целиком');
         self::assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM users WHERE is_admin = 0'), 'non-admin users вайпаются');
@@ -137,7 +142,7 @@ final class CleanTestDataCommandTest extends KernelTestCase
     /**
      * @return array{adminId: int, userId: int, conversionId: int, inputFileId: int,
      *     outputFileId: int, inputKey: string, outputKey: string, paymentId: int,
-     *     socialIdentityId: int}
+     *     balanceTransactionId: int, socialIdentityId: int}
      */
     private function seedFixture(string $label): array
     {
@@ -183,6 +188,13 @@ final class CleanTestDataCommandTest extends KernelTestCase
             ->setGateway(PaymentGateway::TelegramStars);
         $this->em->persist($payment);
 
+        $balanceTransaction = (new BalanceTransaction())
+            ->setUser($user)
+            ->setAmountCents(50)
+            ->setType(BalanceTransactionType::Credit)
+            ->setSource(BalanceTransactionSource::Other);
+        $this->em->persist($balanceTransaction);
+
         $social = (new SocialIdentity())
             ->setUser($user)
             ->setProvider('google')
@@ -193,26 +205,28 @@ final class CleanTestDataCommandTest extends KernelTestCase
         $this->em->flush();
 
         return [
-            'adminId'          => (int) $admin->getId(),
-            'userId'           => (int) $user->getId(),
-            'conversionId'     => $conversion->getId(),
-            'inputFileId'      => $input->getId(),
-            'outputFileId'     => $output->getId(),
-            'inputKey'         => $inputKey,
-            'outputKey'        => $outKey,
-            'paymentId'        => $payment->getId(),
-            'socialIdentityId' => (int) $social->getId(),
+            'adminId'              => (int) $admin->getId(),
+            'userId'               => (int) $user->getId(),
+            'conversionId'         => $conversion->getId(),
+            'inputFileId'          => $input->getId(),
+            'outputFileId'         => $output->getId(),
+            'inputKey'             => $inputKey,
+            'outputKey'            => $outKey,
+            'paymentId'            => $payment->getId(),
+            'balanceTransactionId' => $balanceTransaction->getId(),
+            'socialIdentityId'     => (int) $social->getId(),
         ];
     }
 
     /**
      * @param array{adminId: int, userId: int, conversionId: int, inputFileId: int,
      *     outputFileId: int, inputKey: string, outputKey: string, paymentId: int,
-     *     socialIdentityId: int} $fixture
+     *     balanceTransactionId: int, socialIdentityId: int} $fixture
      */
     private function cleanupFixture(array $fixture): void
     {
         foreach ([
+            [BalanceTransaction::class, $fixture['balanceTransactionId']],
             [Conversion::class, $fixture['conversionId']],
             [Payment::class, $fixture['paymentId']],
             [SocialIdentity::class, $fixture['socialIdentityId']],

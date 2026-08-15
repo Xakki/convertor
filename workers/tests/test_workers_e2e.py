@@ -214,10 +214,17 @@ def _seed_db(case: SmokeCase, input_key: str, fixture_size: int) -> tuple[int, i
 
         cur.execute(
             """INSERT IGNORE INTO users
-               (telegram_id, plan, daily_conversions, daily_ai_conversions,
-                quota_reset_at, created_at, is_active)
-               VALUES (99999999, 'free', 0, 0, %s, %s, 1)""",
-            (quota_reset, now),
+               (telegram_id, plan,
+                light_daily_conversions, light_monthly_conversions,
+                medium_daily_conversions, medium_monthly_conversions,
+                heavy_daily_conversions, heavy_monthly_conversions,
+                ai_daily_conversions, ai_monthly_conversions,
+                quota_reset_at, monthly_reset_at, created_at,
+                is_active, is_guest, is_admin)
+               VALUES (99999999, 'free',
+                       0, 0, 0, 0, 0, 0, 0, 0,
+                       %s, %s, %s, 1, 0, 0)""",
+            (quota_reset, quota_reset, now),
         )
         cur.execute("SELECT id FROM users WHERE telegram_id = 99999999")
         row = cur.fetchone()
