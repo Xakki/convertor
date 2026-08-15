@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import suppress
 
 from workers.common.logging_config import configure_logging
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     configure_logging()
     cfg = load_config()
+    gateway_git_sha = os.environ.get("GATEWAY_GIT_SHA") or "unknown"
 
     client = build_client(cfg)
     keydb = KeyDbGateway(client)
@@ -78,6 +80,7 @@ async def main() -> None:
         logger.info(
             "ws-gateway starting",
             extra={
+                "gatewayGitSha": gateway_git_sha,
                 "redisHost": cfg.redis_host,
                 "redisDb": cfg.redis_db,
                 "wsHost": cfg.ws_host,

@@ -18,6 +18,8 @@ x-app-env: &_app_env
     # never drifts from workers/gateway again (incident "#6 stuck").
     WORKER_API_TOKEN: ${WORKER_API_TOKEN}
     GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN}
+    # Таймаут claim одинаков для gateway и пользовательского сообщения Symfony.
+    WORKER_CLAIM_TIMEOUT_MINUTES: ${WORKER_CLAIM_TIMEOUT_MINUTES:-60}
     STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
     STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
     CRYPTOMUS_MERCHANT_ID: ${CRYPTOMUS_MERCHANT_ID}
@@ -584,6 +586,9 @@ services:
         build:
             context: .
             dockerfile: docker/workers/gateway.Dockerfile
+            args:
+                GATEWAY_GIT_SHA: ${GATEWAY_GIT_SHA}
+                GATEWAY_SOURCE_STATE: ${GATEWAY_SOURCE_STATE}
         image: ${IMAGE_NS}/ws-gateway:${IMAGE_TAG:-latest}
         pull_policy: ${WORKER_PULL_POLICY:-missing}
         profiles: ["server"]

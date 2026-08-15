@@ -33,3 +33,6 @@
 **Decisions:**
 - 2026-08-14: выбран startup-лог SHA вместе с `make gateway-verify-sha`;
   решение выделено из п.2 CNV-73.
+
+**Execution Log:**
+- 2026-08-15 — Status: done. Пользователь одобрил commit, перевод карточки в `done` и локальную runtime-проверку без push. Изолированный SHA-тест, общий контейнерный `make test` и `make build` зелёные; повторное независимое Terra-ревью после исправления dirty-source-state — APPROVED/PASS без замечаний. Неблокирующее примечание: clean runtime SHA подтверждается после squash-коммита через `make gateway-recreate` и отдельный `utility-luna`.

@@ -32,3 +32,13 @@
 **Integration checklist:**
 - Перезапустить затронутый gateway после сборки и сверить `gateway-verify-sha` с текущим HEAD.
 - Выполнить полный quality gate проекта.
+
+**Execution Log:**
+- 2026-08-15 — Вывод: выполнить только EPIC-001 двумя последовательными атомарными задачами без изменения внешних контрактов.
+  Порядок и зависимости: CNV-79 не имеет блокеров; CNV-80 начинается только после её профильных проверок.
+  Зоны владения: CNV-79 — Symfony/i18n; CNV-80 — ws-gateway/infra, поэтому используются два свежих Terra-исполнителя.
+  Проверка: профильные тесты после каждой карточки, независимое Terra-ревью gateway/межслойного контракта, затем `pytest`, `make test`, `make build` и безопасная read-only сверка SHA.
+  Отложено: перезапуск runtime и любые production-действия — только если окружение явно безопасно; недоступные runtime-gates фиксируются без разрушительной очистки.
+- 2026-08-15 — Teamlead-handoff проверен: профильные тесты CNV-79/CNV-80, PHPStan, CS и `git diff --check` зелёные; epic-lead также подтвердил зелёные `make test` и `make build`.
+  Независимое Terra-ревью после исправления dirty-артефакта — PASS без замечаний. EPIC остаётся на пользовательском review: запущен legacy gateway без OCI revision label, поэтому read-only `make gateway-verify-sha` ожидаемо завершился кодом 2. Recreate, commit, push и переходы карточек в `done` не выполнялись.
+- 2026-08-15 — Status: done. Пользователь явно одобрил commit всех текущих изменений EPIC-001, перевод EPIC/CNV-79/CNV-80 в `done`, локальный squash merge и runtime-проверку без push. Отдельный `utility-luna` подтвердил `make test` (exit 0: 727 PHPUnit; 111 Python/2 skipped; 223 gateway/1 skipped; 28 drift); ранее также прошли `make build` и профильные проверки. Итоговое независимое Terra-ревью — APPROVED/PASS без замечаний. Неблокирующая runtime-сверка SHA выполняется после чистого squash-коммита.

@@ -46,7 +46,7 @@
            и постоянная ссылка формы (home.history_link / app_history). #}
         <template x-if="job.status === 'poll_gave_up'">
             <div class="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                <p>{{ 'home.poll_gave_up_message'|trans }}</p>
+                <p>{{ 'home.poll_gave_up_message'|trans({'%timeout_minutes%': worker_claim_timeout_minutes}) }}</p>
                 <a
                     href="{{ path('app_history') }}"
                     class="mt-2 inline-block font-medium text-indigo-600 hover:text-indigo-700 hover:underline"

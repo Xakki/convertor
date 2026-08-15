@@ -36,7 +36,13 @@ ENV GATEWAY_MODULE=workers.gateway
 # APP_VER → ENV (ws_client читает os.getenv); WORKER_BUILD → /app/.i (ws_client читает файл).
 ARG APP_VER=0
 ARG WORKER_BUILD=0
+ARG GATEWAY_GIT_SHA=unknown
+ARG GATEWAY_SOURCE_STATE=unknown
 ENV APP_VER=${APP_VER}
+ENV GATEWAY_GIT_SHA=${GATEWAY_GIT_SHA}
+ENV GATEWAY_SOURCE_STATE=${GATEWAY_SOURCE_STATE}
+LABEL org.opencontainers.image.revision=${GATEWAY_GIT_SHA} \
+      org.opencontainers.image.source-state=${GATEWAY_SOURCE_STATE}
 RUN printf '%s' "${WORKER_BUILD}" > /app/.i
 
 USER app

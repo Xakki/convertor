@@ -4,6 +4,7 @@ twig:
         # Deep-link `t.me/<username>` в шапке (home-01-header-nav); значение —
         # env TELEGRAM_BOT_USERNAME через parameters: в services.yaml.
         telegram_bot_username: '%app.telegram_bot_username%'
+        worker_claim_timeout_minutes: '%app.worker_claim_timeout_minutes%'
 
 when@test:
     twig:

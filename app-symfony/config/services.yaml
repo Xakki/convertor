@@ -1,4 +1,8 @@
 parameters:
+    # Единый таймаут ожидания claim для gateway и пользовательского сообщения.
+    env(WORKER_CLAIM_TIMEOUT_MINUTES): '60'
+    app.worker_claim_timeout_minutes: '%env(int:WORKER_CLAIM_TIMEOUT_MINUTES)%'
+
     # Worker pull-API static bearer token (must be set in .env.local for prod)
     env(WORKER_API_TOKEN): ''
 

@@ -104,10 +104,10 @@ home:
     error_failed: 'Conversion failed'
     # CNV-71-03: client-side polling gave up after ~5 minutes (not to be
     # confused with error_expired above — that's the real server-side
-    # WORKER_CLAIM_TIMEOUT_MINUTES timeout, 60 min). The job has NOT failed —
+    # WORKER_CLAIM_TIMEOUT_MINUTES timeout). The job has NOT failed —
     # it is still queued; say so honestly and do NOT show an error status/color
     # (see FAILED_STATUSES in the JS).
-    poll_gave_up_message: 'The job is still queued — the server may take up to an hour to process it. The result will appear in your conversion history once it is ready; no need to refresh this page.'
+    poll_gave_up_message: 'The job is still queued — the server may take up to %timeout_minutes% minutes to process it. The result will appear in your conversion history once it is ready; no need to refresh this page.'
     history_heading: 'My conversions'
     # CNV-61: button/link next to Convert → /history.
     history_link: 'My conversions'

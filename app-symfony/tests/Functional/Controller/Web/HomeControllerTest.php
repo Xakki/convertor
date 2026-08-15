@@ -53,6 +53,30 @@ final class HomeControllerTest extends WebTestCase
         self::assertStringNotContainsString('startLogin(', $html);
     }
 
+    public function testHomePageRendersPollMessageWithConfiguredClaimTimeoutInEnglish(): void
+    {
+        $client = static::createClient();
+        $client->request('GET', '/');
+
+        self::assertResponseIsSuccessful();
+
+        $timeoutMinutes = self::getContainer()->getParameter('app.worker_claim_timeout_minutes');
+        self::assertSame(60, $timeoutMinutes);
+        self::assertStringContainsString("server may take up to {$timeoutMinutes} minutes", (string) $client->getResponse()->getContent());
+    }
+
+    public function testHomePageRendersPollMessageWithConfiguredClaimTimeoutInRussian(): void
+    {
+        $client = static::createClient();
+        $client->request('GET', '/', server: ['HTTP_ACCEPT_LANGUAGE' => 'ru']);
+
+        self::assertResponseIsSuccessful();
+
+        $timeoutMinutes = self::getContainer()->getParameter('app.worker_claim_timeout_minutes');
+        self::assertSame(60, $timeoutMinutes);
+        self::assertStringContainsString("сервер может обрабатывать её ещё до {$timeoutMinutes} мин.", (string) $client->getResponse()->getContent());
+    }
+
     /**
      * home-09-seo-conversion-pages: дропдаун «Conversions» в общем хедере —
      * курируемый подсписок пар (App\Service\Conversion\CuratedConversionPairs),

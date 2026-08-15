@@ -13,6 +13,13 @@ export STREAM
 # (SHA не отражал бы фактическое содержимое образа).
 RELEASE_SHA := $(shell git rev-parse --short HEAD)
 RELEASE_TAG := $(APP_VER)-$(RELEASE_SHA)
+# SHA передаётся в gateway отдельно от release-тега: запущенный gateway можно
+# сравнить с checkout репозитория даже после локальной нерелизной сборки.
+GATEWAY_GIT_SHA := $(shell git rev-parse --short HEAD)
+# SHA не описывает незакоммиченные изменения, поэтому образ несёт отдельную
+# метку состояния исходников. Локальная сборка намеренно остаётся доступной:
+# gateway-verify-sha лишь откажется сертифицировать такой образ.
+GATEWAY_SOURCE_STATE := $(shell if [ -z "$$(git status --porcelain)" ]; then printf clean; else printf dirty; fi)
 
 .PHONY: release-guard
 release-guard:  # служебный prereq release-workers, не пользовательская команда
@@ -40,6 +47,15 @@ docker build $(DOCKER_BUILD_FLAGS) -t $(IMG)/$(1):latest \
     --build-arg APP_VER=$(APP_VER) \
     --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
     -f docker/workers/$(2).Dockerfile .
+endef
+
+define build_gateway_img
+docker build $(DOCKER_BUILD_FLAGS) -t $(IMG)/ws-gateway:latest \
+    --build-arg APP_VER=$(APP_VER) \
+    --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
+    --build-arg GATEWAY_GIT_SHA=$(GATEWAY_GIT_SHA) \
+    --build-arg GATEWAY_SOURCE_STATE=$(GATEWAY_SOURCE_STATE) \
+    -f docker/workers/gateway.Dockerfile .
 endef
 
 # Build a pre-baked :test image ON TOP of an existing :latest worker image.
@@ -73,7 +89,7 @@ build-metrics-exporter: bump-i ## Build metrics-exporter image
 
 .PHONY: build-gateway
 build-gateway: bump-i ## Build ws-gateway image (Harbor-suitable)
-	$(call build_img,ws-gateway,gateway)
+	$(call build_gateway_img)
 
 .PHONY: gateway-up
 gateway-up: ## Start только ws-gateway (глобальный `make up` тоже его поднимает)
@@ -98,6 +114,41 @@ gateway-logs: ## Tail логи ws-gateway
 .PHONY: gateway-image-info
 gateway-image-info: ## RO: image id + build time образа ws-gateway (свежесть перед/после recreate)
 	docker inspect $(IMG)/ws-gateway:$(IMAGE_TAG) --format 'ImageID: {{.Id}} | Created: {{.Created}}'
+
+.PHONY: gateway-verify-sha
+gateway-verify-sha: ## RO: сравнить чистый SHA запущенного ws-gateway с локальным HEAD
+	@set -eu; \
+	local_sha="$$(git rev-parse --short HEAD)"; \
+	container_id="$$($(DC) ps -q ws-gateway)"; \
+	if [ -z "$$container_id" ]; then \
+	    echo "Local HEAD SHA: $$local_sha"; \
+	    echo "Container SHA: unavailable (ws-gateway is not running)"; \
+	    exit 2; \
+	fi; \
+	container_sha="$$(docker inspect "$$container_id" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"; \
+	if [ -z "$$container_sha" ] || [ "$$container_sha" = "<no value>" ]; then \
+	    echo "Local HEAD SHA: $$local_sha"; \
+	    echo "Container SHA: unavailable (image has no org.opencontainers.image.revision label)"; \
+	    exit 2; \
+	fi; \
+	container_source_state="$$(docker inspect "$$container_id" --format '{{ index .Config.Labels "org.opencontainers.image.source-state" }}')"; \
+	echo "Local HEAD SHA: $$local_sha"; \
+	echo "Container SHA: $$container_sha"; \
+	if [ -z "$$container_source_state" ] || [ "$$container_source_state" = "<no value>" ]; then \
+	    echo "Container source state: unavailable (image has no org.opencontainers.image.source-state label)"; \
+	    exit 2; \
+	fi; \
+	echo "Container source state: $$container_source_state"; \
+	if [ "$$container_source_state" != "clean" ]; then \
+	    echo "SHA match: no (container source state is $$container_source_state)"; \
+	    exit 1; \
+	fi; \
+	if [ "$$local_sha" = "$$container_sha" ]; then \
+	    echo "SHA match: yes"; \
+	else \
+	    echo "SHA match: no"; \
+	    exit 1; \
+	fi
 
 .PHONY: gateway-verify-code
 gateway-verify-code: ## RO: скопировать dlq_consumer.py ИЗ контейнера ws-gateway (только OUT, никогда cp внутрь bind-mount) и найти DLQ_AUDIT_LOG_MARKER
@@ -362,7 +413,7 @@ test-python-ai: build-ffmpeg-test ## Unit тесты AI-воркера + dev-ser
 .PHONY: test-drift
 test-drift: ## Drift guards: routing (dump-matrix.php vs CAPABILITIES) + worker-type (enum vs 3 зеркала) + каталог форматов + mutation-guard
 	$(REQUIRE_TEST)
-	PYTHONPATH=. pytest workers/tests/test_routing_drift.py workers/tests/test_worker_type_drift.py workers/tests/test_catalog_drift.py workers/tests/test_capabilities_mutation_guard.py -v
+	PYTHONPATH=. pytest workers/tests/test_routing_drift.py workers/tests/test_worker_type_drift.py workers/tests/test_catalog_drift.py workers/tests/test_capabilities_mutation_guard.py workers/tests/test_makefile_gateway_sha.py -v
 
 # Регенерация каталога — 2 стадии. Stage 1: bare host, stdlib only (тот же
 # принцип, что и test-drift Python-сторона) — gen_worker_capabilities.py не
