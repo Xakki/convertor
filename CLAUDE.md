@@ -47,9 +47,10 @@ MVP = оплата **только через Telegram** (Bot API: invoice → `s
 - Max size: 50MB free, 500MB paid (Nginx limit_req + PHP проверка)
 
 ## Docker
-- **Все `docker compose` команды — ТОЛЬКО через Makefile-таргеты** (`make docker-check`, `make up`,
-  `make down`, `make build`, `make logs`…). Не дёргать `docker compose ...` напрямую. Нет нужного
-  таргета — добавить в Makefile, не запускать руками. `make docker-check` = `docker compose config -q`.
+- **ЛЮБЫЕ docker-команды — ТОЛЬКО через Makefile-таргеты**, не только `docker compose`: `make ps`
+  (не `docker ps`), `make logs` (не `docker logs`), `make console CMD="..."` / `make shell-php`
+  (не `docker exec`), `make up`/`make down`/`make build`/`make docker-check`. Нет нужного таргета —
+  добавить в Makefile, не запускать руками. `make docker-check` = `docker compose config -q`.
 - docker-compose.yml — основной, docker/limits.yml — лимиты для прода
 - **Образы публикуем в наш Harbor-registry** (авторизация в консоли уже настроена). Сборка/пуш —
   через `make release-workers`. Remote-хосты пуллят готовые runnable-образы (5 воркеров +
