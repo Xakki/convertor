@@ -49,16 +49,18 @@ final class WorkerCapabilityGcService
      *
      * @return array{deleted: int}
      */
-    public function run(): array
+    public function run(?int $ttlHours = null): array
     {
         $em = $this->registry->getManager();
         assert($em instanceof EntityManagerInterface);
         $conn = $em->getConnection();
 
+        $ttlHours ??= $this->ttlHours;
+
         // registry-07 review: threshold-формула вынесена в WorkerLivenessTtl —
         // тот же callable использует WorkerStatsProvider (admin-страница), чтобы
         // предсказание "устарел" никогда не разошлось с моментом реального удаления.
-        $threshold = WorkerLivenessTtl::staleThreshold($this->ttlHours);
+        $threshold = WorkerLivenessTtl::staleThreshold($ttlHours);
 
         $deleted = (int) $conn->executeStatement(
             'DELETE FROM worker_capabilities WHERE last_seen < :threshold',
@@ -74,7 +76,7 @@ final class WorkerCapabilityGcService
 
         $this->logger->info('worker_capabilities GC: проход завершён', [
             'deleted'  => $deleted,
-            'ttlHours' => $this->ttlHours,
+            'ttlHours' => $ttlHours,
         ]);
 
         return ['deleted' => $deleted];

@@ -48,6 +48,13 @@ else
 	$(CONSOLE) app:clean-test-data --dry-run
 endif
 
+TTL_HOURS ?= $(WORKER_CAPABILITY_GC_TTL_HOURS)
+
+.PHONY: worker-capability-gc
+worker-capability-gc: ## Синхронно удалить устаревшие worker_capabilities (TTL_HOURS=)
+	$(CONFIRM_PROD)
+	$(CONSOLE) app:worker-capability:gc --ttl-hours=$(TTL_HOURS)
+
 .PHONY: composer
 composer: ## Run composer command (make composer CMD="require vendor/package")
 	$(PHP_EXEC) composer $(CMD)

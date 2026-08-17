@@ -74,6 +74,29 @@ final class WorkerCapabilityGcServiceTest extends KernelTestCase
         );
     }
 
+    public function testManualTtlDeletesOnlyRowsOlderThanItsThreshold(): void
+    {
+        $this->insertRow(self::TEST_WORKER_TYPE, 'manual-stale', (new \DateTimeImmutable())->modify('-2 hours'));
+        $this->insertRow(self::TEST_WORKER_TYPE, 'manual-fresh', (new \DateTimeImmutable())->modify('-30 minutes'));
+
+        $this->gc()->run(1);
+
+        self::assertFalse($this->rowExists(self::TEST_WORKER_TYPE, 'manual-stale'));
+        self::assertTrue($this->rowExists(self::TEST_WORKER_TYPE, 'manual-fresh'));
+    }
+
+    public function testDefaultTtlRemainsIndependentFromManualOverride(): void
+    {
+        $this->insertRow(self::TEST_WORKER_TYPE, 'scheduled-survivor', (new \DateTimeImmutable())->modify('-2 hours'));
+
+        $this->gc()->run();
+
+        self::assertTrue(
+            $this->rowExists(self::TEST_WORKER_TYPE, 'scheduled-survivor'),
+            'запланированный проход использует настроенный long TTL, а не ручное переопределение',
+        );
+    }
+
     /**
      * `status` never influences the GC decision — only `last_seen` age does
      * (routing itself no longer reads `worker_capabilities` at all since
