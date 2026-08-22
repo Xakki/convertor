@@ -12,6 +12,13 @@ location /sq_nginx_status {
     access_log off;
 }
 
+# Канонический skill хранится в одноимённом каталоге по Agent Skills spec,
+# а агентам публикуется по короткому стабильному URL.
+location = /SKILL.md {
+    default_type "text/markdown; charset=utf-8";
+    alias /app-symfony/public/convertor-api/SKILL.md;
+}
+
 # Static files location
 location ~*^.+\.(svg|jpg|jpeg|gif|png|ico|css|zip|tgz|gz|rar|bz2|doc|xls|exe|pdf|ppt|tar|mid|midi|wav|bmp|rtf|js|swf|woff|woff2|ttf|map|json|webm)$ {
     include params/static_params;

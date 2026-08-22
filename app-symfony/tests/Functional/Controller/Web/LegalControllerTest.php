@@ -53,7 +53,7 @@ final class LegalControllerTest extends WebTestCase
         self::assertSelectorTextContains('h1', 'Условия использования');
     }
 
-    public function testHomePageFooterLinksToLegalPages(): void
+    public function testHomePageFooterLinksToPublicResources(): void
     {
         $client = static::createClient();
         $client->request('GET', '/');
@@ -62,6 +62,8 @@ final class LegalControllerTest extends WebTestCase
         $html = (string) $client->getResponse()->getContent();
         self::assertStringContainsString('href="/privacy"', $html);
         self::assertStringContainsString('href="/terms"', $html);
+        self::assertSelectorTextContains('[data-testid="footer-api-skill-link"]', 'API Skill for AI Agents');
+        self::assertSelectorExists('[data-testid="footer-api-skill-link"][href="/SKILL.md"]');
     }
 
     public function testCookieConsentBannerRendersOnHomePage(): void

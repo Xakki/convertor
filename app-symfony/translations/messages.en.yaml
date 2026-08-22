@@ -248,6 +248,7 @@ footer:
     tagline: 'Fast, reliable file conversion for any format.'
     product_heading: 'Product'
     conversion_link: 'Conversion'
+    api_skill_link: 'API Skill for AI Agents'
     formats_heading: 'Formats'
     formats_documents: 'Documents (PDF, DOCX)'
     formats_media: 'Media (MP4, MP3)'

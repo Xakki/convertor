@@ -244,6 +244,7 @@ footer:
     tagline: 'Быстрая и надёжная конвертация файлов любых форматов.'
     product_heading: 'Сервис'
     conversion_link: 'Конвертация'
+    api_skill_link: 'API-навык для ИИ-агентов'
     formats_heading: 'Форматы'
     formats_documents: 'Документы (PDF, DOCX)'
     formats_media: 'Медиа (MP4, MP3)'

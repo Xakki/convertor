@@ -160,6 +160,25 @@ db-dump-pull: ## Скачать дамп из S3 в ./backup/dump.sql.gz (DUMP_K
 	    -e S3_DUMP_BUCKET -e DUMP_PREFIX -e DUMP_KEY \
 	    --entrypoint sh $(MC_IMAGE) /scripts/pull_dump.sh
 
+##@ Agent skills
+
+AGENT_SKILL_SYNC_ARGS ?= --source-repo $(CURDIR)/app-symfony/public/convertor-api
+AGENT_SKILLS_REF_IMAGE ?= ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+
+.PHONY: agent-skill-sync-convertor-api
+agent-skill-sync-convertor-api: ## Install/update canonical convertor-api skill (override AGENT_SKILL_SYNC_ARGS)
+	@tools/agent-skills/sync-convertor-api.sh $(AGENT_SKILL_SYNC_ARGS)
+
+.PHONY: agent-skill-validate-convertor-api
+agent-skill-validate-convertor-api: ## Validate canonical skill with official skills-ref
+	docker run --rm -v "$(CURDIR)/app-symfony/public/convertor-api:/skills/convertor-api:ro" $(AGENT_SKILLS_REF_IMAGE) \
+		uvx --from 'https://github.com/agentskills/agentskills/archive/refs/heads/main.tar.gz#subdirectory=skills-ref' \
+		skills-ref validate /skills/convertor-api
+
+.PHONY: agent-skill-test-convertor-api
+agent-skill-test-convertor-api: ## Test convertor-api skill synchronization
+	@tools/agent-skills/tests/sync-convertor-api.sh
+
 ##@ Testing (всё гоняется на ИЗОЛИРОВАННОМ тест-стенде из .env.test)
 
 .PHONY: test
