@@ -1,4 +1,4 @@
-### Ручной make-таргет для GC worker_capabilities + разово почистить 6 строк xbook
+### Ручной make-таргет для GC worker_capabilities + разово почистить 6 строк uBook
 
 **Criticality:** Low
 
@@ -9,7 +9,7 @@
 - cleanup
 
 **Description:**
-В `worker_capabilities` 6 строк хоста `xbook` находятся в статусе
+В `worker_capabilities` 6 строк хоста `uBook` находятся в статусе
 `disconnected` с 2026-07-30 и не убираются. Автоочистка на самом деле УЖЕ
 существует: `WorkerCapabilityGcService::run()`
 (`app-symfony/src/Service/Worker/WorkerCapabilityGcService.php:88-94`)
@@ -20,7 +20,7 @@
 `RecurringMessage::every('1 hour', WorkerCapabilityGcMessage)`).
 `WorkerLivenessReconciler` (`:76-89`) помечает молчащие инстансы
 `disconnected`, но сознательно не трогает `lastSeen` — поэтому 6 строк
-`xbook`, «замолчавших» 2026-07-30, просто ещё не пересекли 7-дневный TTL, а
+`uBook`, «замолчавших» 2026-07-30, просто ещё не пересекли 7-дневный TTL, а
 не «чистка не реализована».
 
 **Problem:**
@@ -38,7 +38,7 @@
 запускающий `WorkerCapabilityGcService` синхронно с переопределяемым TTL
 (например, `TTL_HOURS=`, по умолчанию — текущее значение
 `WORKER_CAPABILITY_GC_TTL_HOURS`), и разово прогнать его с TTL=3 суток
-(`TTL_HOURS=72`), чтобы удалить 6 строк `xbook` (молчат с 2026-07-30, к
+(`TTL_HOURS=72`), чтобы удалить 6 строк `uBook` (молчат с 2026-07-30, к
 моменту запуска — больше 3 суток).
 
 **Acceptance Criteria:**
@@ -47,11 +47,11 @@
   ожидание часового тика планировщика), с переопределяемым `TTL_HOURS=`
   (по умолчанию — значение env `WORKER_CAPABILITY_GC_TTL_HOURS`).
 - `##`-описание таргета в Makefile — терсе, по правилу проекта.
-- После `make worker-capability-gc TTL_HOURS=72` все 6 строк `xbook`
+- После `make worker-capability-gc TTL_HOURS=72` все 6 строк `uBook`
   (`disconnected` с 2026-07-30) удалены из `worker_capabilities`.
 - Живые/прочие воркеры в `worker_capabilities` не затронуты (count и
   статусы совпадают с состоянием до запуска, за вычетом удалённых строк
-  `xbook`).
+  `uBook`).
 - Часовой автоматический GC (TTL=168ч, `WorkerCapabilityGcMessage`) не
   изменён.
 
@@ -59,7 +59,7 @@
 - 2026-08-04: автоочистка уже существует и остаётся как есть (168ч,
   ежечасно) — менять её не требуется. Добавляем только ручной таргет для
   разового/точечного запуска с явным TTL и используем его для чистки 6
-  строк `xbook`. Прежняя формулировка карты («чистки не существует, нужно
+  строк `uBook`. Прежняя формулировка карты («чистки не существует, нужно
   продумать TTL») была основана на неверной предпосылке — исправлено.
 
 **Контекст:** найдено в ходе диагностического прогона 2026-08-04.
