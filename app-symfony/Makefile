@@ -53,7 +53,11 @@ TTL_HOURS ?= $(WORKER_CAPABILITY_GC_TTL_HOURS)
 .PHONY: worker-capability-gc
 worker-capability-gc: ## Синхронно удалить устаревшие worker_capabilities (TTL_HOURS=)
 	$(CONFIRM_PROD)
-	$(CONSOLE) app:worker-capability:gc --ttl-hours=$(TTL_HOURS)
+	$(CONSOLE) app:worker-capability:gc $(if $(TTL_HOURS),--ttl-hours=$(TTL_HOURS))
+
+.PHONY: test-worker-capability-gc-make
+test-worker-capability-gc-make: ## Проверить Make-контракт ручного GC
+	@tools/tests/worker-capability-gc-make.sh
 
 .PHONY: composer
 composer: ## Run composer command (make composer CMD="require vendor/package")

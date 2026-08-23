@@ -61,6 +61,18 @@ final class WorkerCapabilityGcCommandTest extends KernelTestCase
         self::assertStringContainsString('положительным целым числом', $tester->getDisplay());
     }
 
+    public function testUsesConfiguredTtlWhenOptionIsOmitted(): void
+    {
+        $this->insertRow('command-default-survivor', (new \DateTimeImmutable())->modify('-2 hours'));
+
+        $tester = new CommandTester($this->command());
+        $status = $tester->execute([]);
+
+        self::assertSame(Command::SUCCESS, $status);
+        self::assertTrue($this->rowExists('command-default-survivor'));
+        self::assertStringContainsString('TTL из окружения', $tester->getDisplay());
+    }
+
     public function testForwardsTtlToGc(): void
     {
         $this->insertRow('command-stale', (new \DateTimeImmutable())->modify('-2 hours'));

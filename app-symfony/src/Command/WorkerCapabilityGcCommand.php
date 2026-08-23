@@ -15,8 +15,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 /**
  * Ручной синхронный проход long-TTL GC worker_capabilities.
  *
- * Планировщик продолжает вызывать сервис без аргумента и поэтому использует
- * обычный env TTL; этот путь принимает только явное положительное значение.
+ * Если option опущена, команда использует env TTL сервиса; явное положительное
+ * значение переопределяет TTL только для этого запуска.
  */
 #[AsCommand(
     name: 'app:worker-capability:gc',
@@ -42,8 +42,16 @@ final class WorkerCapabilityGcCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $io       = new SymfonyStyle($input, $output);
-        $ttlHours = filter_var($input->getOption('ttl-hours'), FILTER_VALIDATE_INT, [
+        $io          = new SymfonyStyle($input, $output);
+        $ttlOverride = $input->getOption('ttl-hours');
+        if ($ttlOverride === null) {
+            $result = $this->gc->run();
+            $io->success(sprintf('Удалено строк: %d (TTL из окружения).', $result['deleted']));
+
+            return Command::SUCCESS;
+        }
+
+        $ttlHours = filter_var($ttlOverride, FILTER_VALIDATE_INT, [
             'options' => ['min_range' => 1],
         ]);
         if ($ttlHours === false) {
