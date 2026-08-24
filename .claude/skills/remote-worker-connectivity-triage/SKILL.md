@@ -126,9 +126,10 @@ here, verify it against the cited source; if it has drifted, fix this skill in
 the same change and report the drift to the team-lead.**
 
 ## See also
-- `ubook-remote-workers` — uBook-specific host facts (ssh, compose project,
-  containers); this skill only adds the saNl hop and the fault-diagnosis
-  method, it doesn't duplicate uBook's inventory.
+- `remote-workers` — generic remote-host procedures (update/onboard/status)
+  + the uBook host registry (ssh, compose project, containers) in its
+  `hosts.md`; this skill only adds the saNl hop and the fault-diagnosis
+  method, it doesn't duplicate host inventory.
 - `image-build-deploy` — image topology, unrelated to network triage.
 - Cards `.claude/kanban/todo/CNV-63-queue-status-misleading-xlen.md`,
   `.claude/kanban/todo/CNV-65-worker-download-input-no-fast-retry.md`.

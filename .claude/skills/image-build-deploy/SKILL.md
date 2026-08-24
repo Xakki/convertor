@@ -2,14 +2,14 @@
 name: image-build-deploy
 description: >-
   Use when asked to build/push convertor Docker images to Harbor, deploy new
-  worker/gateway code to the main server or a remote worker host, or verify a
+  worker/gateway code to the main server, or verify a
   deploy actually took effect. Covers image topology (what's built locally vs
   pulled vs pushed), the main-server build→recreate→verify sequence, and why
   pushing to Harbor does NOT update a remote host. Триггеры RU: «собери и
-  запушь образ», «обнови воркеры на удалённом хосте», «задеплой gateway»,
+  запушь образ», «задеплой gateway»,
   «проверить что деплой применился», «Harbor push», «пересобрать образы»,
-  «make harbor-login не работает»; EN: build and push image, update workers
-  on remote host, deploy gateway, verify deploy took effect, Harbor push,
+  «make harbor-login не работает»; EN: build and push image, deploy gateway,
+  verify deploy took effect, Harbor push,
   rebuild images, make harbor-login broken.
 ---
 
