@@ -63,7 +63,7 @@ class Conversion
     #[ORM\Column(type: 'boolean')]
     private bool $isOcr = false;
 
-    /** @var array<string, int|string> Параметры результата, применяемые воркером. */
+    /** @var array<string, bool|int|string> Параметры результата, применяемые воркером. */
     #[ORM\Column(type: 'json')]
     private array $options = [];
 
@@ -260,13 +260,13 @@ class Conversion
         return $this;
     }
 
-    /** @return array<string, int|string> */
+    /** @return array<string, bool|int|string> */
     public function getOptions(): array
     {
         return $this->options;
     }
 
-    /** @param array<string, int|string> $options */
+    /** @param array<string, bool|int|string> $options */
     public function setOptions(array $options): self
     {
         $this->options = $options;

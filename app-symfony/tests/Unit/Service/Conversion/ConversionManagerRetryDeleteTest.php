@@ -11,15 +11,19 @@ use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Exception\ConversionDisabledException;
+use App\Exception\InvalidConversionOptionException;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionChainFailPropagator;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionToggleService;
+use App\Service\Conversion\Settings\ConversionOptionsValidator;
+use App\Service\Conversion\Settings\ConversionSettingsCatalog;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
 use App\Tests\Support\SeedsConversionRegistry;
+use App\Tests\Unit\Service\Conversion\Settings\ConversionSettingsCatalogTest;
 use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\S3\Input\CopyObjectRequest;
 use AsyncAws\S3\Input\DeleteObjectRequest;
@@ -223,6 +227,226 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         $manager->retryConversion(42, $owner);
     }
 
+    /**
+     * CNV-85 repair round (the important fix): retry re-validates the STORED
+     * options through the same validator POST /convert uses, against the
+     * retrying user's CURRENT plan — a downgrade replays a value the user can
+     * no longer set, so it must be rejected explicitly (422 via
+     * InvalidConversionOptionException), never silently dropped to a default.
+     * Uses the synthetic `test.grammar` profile (real pair csv→json, category
+     * `data`) — no live field is plan-gated above guest yet (CNV-85 hard
+     * constraint), so this is the same fixture approach the validator's own
+     * tests use to exercise the grammar independently of today's live fields.
+     */
+    public function testRetryRejectsStoredOptionNoLongerAccessibleOnCurrentPlan(): void
+    {
+        $owner  = $this->userWithId(10)->setPlan('free'); // downgraded SINCE the original conversion
+        $source = $this->seedSource(
+            $owner,
+            'inputs/2026/08/01/aabbccddeeff0011.csv',
+            from: 'csv',
+            to: 'json',
+            category: FileCategory::Data,
+            // `scale` (default: 20) — what creation-time validation would have
+            // materialized regardless of client input; `tint` is minPlan:pro.
+            options: ['scale' => 20, 'tint' => '#010203'],
+        );
+
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->never())->method('check');
+
+        $s3Client = $this->createMock(S3Client::class);
+        $s3Client->expects($this->once())->method('headObject')->willReturn(
+            ResultMockFactory::create(HeadObjectOutput::class),
+        );
+        $s3Client->expects($this->never())->method('copyObject');
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->expects($this->never())->method('persist');
+
+        $repo = $this->createStub(ConversionRepository::class);
+        $repo->method('find')->willReturn($source);
+
+        // $bus нарочно НЕ передаём (никакой кастомной проверки dispatch): его
+        // не позовут физически, т.к. исключение бросается ДО dispatch() —
+        // buildManager() сам подключает default-стаб к переданному/дефолтному
+        // $bus через безусловный ->method('dispatch'), поэтому свой mock с
+        // expects(never()) сюда подмешивать не нужно и небезопасно (двойная
+        // конфигурация одного и того же матчера).
+        $manager = $this->buildManager(
+            $quota,
+            $s3Client,
+            $em,
+            $repo,
+            optionsValidator: $this->grammarOptionsValidator(),
+        );
+
+        try {
+            $manager->retryConversion(42, $owner);
+            self::fail('Expected InvalidConversionOptionException');
+        } catch (InvalidConversionOptionException $e) {
+            self::assertSame(InvalidConversionOptionException::CODE_PLAN_REQUIRED, $e->getErrorCode());
+            self::assertStringContainsString('tint', $e->getMessage(), 'Ошибка обязана называть поле, которое её вызвало');
+        }
+    }
+
+    /**
+     * Симметричный случай: план НЕ понизился (или значение и так на любом
+     * плане доступно) — ретрай ведёт себя ровно как раньше, без изменения
+     * payload'а (no extra normalization drift).
+     */
+    public function testRetryKeepsStillAccessibleOptionsUnchanged(): void
+    {
+        $owner  = $this->userWithId(10)->setPlan('pro');
+        $source = $this->seedSource(
+            $owner,
+            'inputs/2026/08/01/aabbccddeeff0011.csv',
+            from: 'csv',
+            to: 'json',
+            category: FileCategory::Data,
+            // `scale` (default: 20) is what the ORIGINAL creation would have
+            // materialized too (defaults always materialize — see
+            // ConversionOptionsValidator's normalization rule), so a
+            // realistically-seeded stored payload already carries it. Seeding
+            // only `tint` here would make re-validation "add" scale and look
+            // like drift, when it is really the fixture omitting what
+            // creation-time validation would have written in the first place.
+            options: ['scale' => 20, 'tint' => '#010203'],
+        );
+
+        $quota = $this->createStub(QuotaService::class);
+        $quota->method('check')->willReturn(BillingMode::PlanQuota);
+
+        $s3Client = $this->createStub(S3Client::class);
+        $s3Client->method('headObject')->willReturn(ResultMockFactory::create(HeadObjectOutput::class));
+        $s3Client->method('copyObject')->willReturn(ResultMockFactory::create(CopyObjectOutput::class));
+
+        $em = $this->createStub(EntityManagerInterface::class);
+        $em->method('persist')->willReturnCallback(static function (object $entity): void {
+            if ($entity instanceof Conversion) {
+                (new \ReflectionProperty(Conversion::class, 'id'))->setValue($entity, 100);
+            }
+        });
+
+        $repo = $this->createStub(ConversionRepository::class);
+        $repo->method('find')->willReturn($source);
+
+        // $bus нарочно НЕ передаём — buildManager() сам подключает default-стаб
+        // (см. комментарий в тесте выше), сообщение здесь не инспектируется.
+        $manager = $this->buildManager(
+            $quota,
+            $s3Client,
+            $em,
+            $repo,
+            optionsValidator: $this->grammarOptionsValidator(),
+        );
+
+        $retry = $manager->retryConversion(42, $owner);
+
+        self::assertSame(ConversionStatus::Pending, $retry->getStatus());
+        self::assertSame(['scale' => 20, 'tint' => '#010203'], $retry->getOptions(), 'Доступная на текущем плане опция не должна меняться');
+    }
+
+    /**
+     * CNV-100 — то же самое, что `testRetryRejectsStoredOptionNoLongerAccessibleOnCurrentPlan`
+     * выше, но против БОЕВОГО каталога (`media.video`, поле `resolution`), а не
+     * синтетического `test.grammar`: первый ЖИВОЙ plan-гейтнутый field на этом
+     * пути (1080p, `minPlan: basic`).
+     */
+    public function testRetryRejectsMediaVideoOptionAfterDowngrade(): void
+    {
+        $owner  = $this->userWithId(10)->setPlan('free'); // downgraded SINCE the original conversion (was basic/pro)
+        $source = $this->seedSource(
+            $owner,
+            'inputs/2026/08/01/aabbccddeeff0011.mp4',
+            from: 'mp4',
+            to: 'mkv',
+            category: FileCategory::Video,
+            options: ['resolution' => '1080p', 'fps' => '30'],
+        );
+
+        $quota = $this->createMock(QuotaService::class);
+        $quota->expects($this->never())->method('check');
+
+        $s3Client = $this->createMock(S3Client::class);
+        $s3Client->expects($this->once())->method('headObject')->willReturn(
+            ResultMockFactory::create(HeadObjectOutput::class),
+        );
+        $s3Client->expects($this->never())->method('copyObject');
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->expects($this->never())->method('persist');
+
+        $repo = $this->createStub(ConversionRepository::class);
+        $repo->method('find')->willReturn($source);
+
+        // Тот же паттерн, что и у грамматического теста выше: $bus нарочно не
+        // передаём — исключение бросается ДО dispatch().
+        $manager = $this->buildManager(
+            $quota,
+            $s3Client,
+            $em,
+            $repo,
+            optionsValidator: $this->productionOptionsValidator(),
+        );
+
+        try {
+            $manager->retryConversion(42, $owner);
+            self::fail('Expected InvalidConversionOptionException');
+        } catch (InvalidConversionOptionException $e) {
+            self::assertSame(InvalidConversionOptionException::CODE_PLAN_REQUIRED, $e->getErrorCode());
+            self::assertStringContainsString('resolution', $e->getMessage(), 'Ошибка обязана называть поле, которое её вызвало');
+        }
+    }
+
+    /**
+     * Симметрично `testRetryKeepsStillAccessibleOptionsUnchanged` — план НЕ
+     * понизился (остался basic), боевой `media.video`-payload ретраится
+     * побайтово неизменным.
+     */
+    public function testRetryKeepsMediaVideoOptionsUnchangedWithoutDowngrade(): void
+    {
+        $owner  = $this->userWithId(10)->setPlan('basic');
+        $source = $this->seedSource(
+            $owner,
+            'inputs/2026/08/01/aabbccddeeff0011.mp4',
+            from: 'mp4',
+            to: 'mkv',
+            category: FileCategory::Video,
+            options: ['resolution' => '1080p', 'fps' => '30'],
+        );
+
+        $quota = $this->createStub(QuotaService::class);
+        $quota->method('check')->willReturn(BillingMode::PlanQuota);
+
+        $s3Client = $this->createStub(S3Client::class);
+        $s3Client->method('headObject')->willReturn(ResultMockFactory::create(HeadObjectOutput::class));
+        $s3Client->method('copyObject')->willReturn(ResultMockFactory::create(CopyObjectOutput::class));
+
+        $em = $this->createStub(EntityManagerInterface::class);
+        $em->method('persist')->willReturnCallback(static function (object $entity): void {
+            if ($entity instanceof Conversion) {
+                (new \ReflectionProperty(Conversion::class, 'id'))->setValue($entity, 101);
+            }
+        });
+
+        $repo = $this->createStub(ConversionRepository::class);
+        $repo->method('find')->willReturn($source);
+
+        $manager = $this->buildManager(
+            $quota,
+            $s3Client,
+            $em,
+            $repo,
+            optionsValidator: $this->productionOptionsValidator(),
+        );
+
+        $retry = $manager->retryConversion(42, $owner);
+
+        self::assertSame(ConversionStatus::Pending, $retry->getStatus());
+        self::assertSame(['resolution' => '1080p', 'fps' => '30'], $retry->getOptions());
+    }
+
     public function testDeleteRemovesDbRowsAndS3Objects(): void
     {
         $owner = $this->userWithId(10);
@@ -394,10 +618,17 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         return $user;
     }
 
-    private function seedSource(User $owner, string $inputKey): Conversion
-    {
+    /** @param array<string, bool|int|string> $options */
+    private function seedSource(
+        User $owner,
+        string $inputKey,
+        string $from = 'jpg',
+        string $to = 'png',
+        FileCategory $category = FileCategory::Image,
+        array $options = [],
+    ): Conversion {
         $input = (new FileStorage())
-            ->setOriginalName('photo.jpg')
+            ->setOriginalName("photo.{$from}")
             ->setStoragePath($inputKey)
             ->setMimeType('image/jpeg')
             ->setSizeBytes(1234);
@@ -405,15 +636,38 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         $conv = (new Conversion())
             ->setUser($owner)
             ->setInputFile($input)
-            ->setFromFormat('jpg')
-            ->setToFormat('png')
-            ->setCategory(FileCategory::Image)
+            ->setFromFormat($from)
+            ->setToFormat($to)
+            ->setCategory($category)
             ->setStatus(ConversionStatus::Completed)
             ->setIsAi(false)
-            ->setIsOcr(false);
+            ->setIsOcr(false)
+            ->setOptions($options);
         (new \ReflectionProperty(Conversion::class, 'id'))->setValue($conv, 42);
 
         return $conv;
+    }
+
+    /**
+     * Валидатор на синтетическом профиле `test.grammar` (реальная пара
+     * csv→json, категория `data`) — тот же фикстурный подход, что и у
+     * `ConversionOptionsValidatorTest`, см. `tests/Fixtures/settings_catalog_grammar.json`.
+     */
+    private function grammarOptionsValidator(): ConversionOptionsValidator
+    {
+        return new ConversionOptionsValidator(
+            new ConversionSettingsCatalog(ConversionSettingsCatalogTest::grammarFixturePath()),
+            $this->newSeedRegistry(),
+        );
+    }
+
+    /**
+     * CNV-100 — валидатор на БОЕВОМ каталоге (production `conversion_settings.json`),
+     * а не синтетическом `test.grammar` — упражняет реальный `media.video`.
+     */
+    private function productionOptionsValidator(): ConversionOptionsValidator
+    {
+        return new ConversionOptionsValidator(new ConversionSettingsCatalog(), $this->newSeedRegistry());
     }
 
     private function buildManager(
@@ -424,6 +678,7 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         ?MessageBusInterface $bus = null,
         ?ConversionToggleService $toggle = null,
         ?LoggerInterface $logger = null,
+        ?ConversionOptionsValidator $optionsValidator = null,
     ): ConversionManager {
         $bus ??= $this->createStub(MessageBusInterface::class);
         $bus->method('dispatch')->willReturnCallback(
@@ -445,6 +700,7 @@ final class ConversionManagerRetryDeleteTest extends TestCase
             ),
             $toggle,
             $logger,
+            optionsValidator: $optionsValidator,
         );
     }
 }

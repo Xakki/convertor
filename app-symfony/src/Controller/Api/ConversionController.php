@@ -12,10 +12,14 @@ use App\Enum\ConversionStatus;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
 use App\Exception\InsufficientBalanceException;
+use App\Exception\InvalidConversionOptionException;
 use App\Exception\WorkerUnavailableException;
 use App\Repository\ConversionRepository;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionRegistry;
+use App\Service\Conversion\Settings\ConversionCatalogPresenter;
+use App\Service\Conversion\Settings\ConversionOptionsValidator;
+use App\Service\Conversion\Settings\SettingsAccessLevel;
 use App\Service\Quota\QuotaService;
 use App\Service\RateLimit\ApiRateLimiter;
 use App\Service\Storage\S3Storage;
@@ -54,6 +58,11 @@ class ConversionController extends AbstractController
         private readonly QuotaService $quotaService,
         private readonly S3Storage $s3,
         private readonly ApiRateLimiter $apiRateLimiter,
+        // CNV-85: каталог профилей настроек (сериализация в /formats) и его же
+        // валидатор (повторная server-side проверка в /convert). Один и тот же
+        // предикат доступа по обе стороны — «показали, но не приняли» невозможно.
+        private readonly ConversionCatalogPresenter $catalogPresenter,
+        private readonly ConversionOptionsValidator $optionsValidator,
     ) {
     }
 
@@ -124,21 +133,11 @@ class ConversionController extends AbstractController
         if (! $hasFile && ! $hasText) {
             return $this->json(['error' => 'Either file or text is required'], Response::HTTP_BAD_REQUEST);
         }
-        if ($hasText && $options !== []) {
-            return $this->json(['error' => 'Image options are only supported for file conversions'], Response::HTTP_UNPROCESSABLE_ENTITY);
-        }
-
         if (! $toFormat) {
             return $this->json(['error' => 'to_format required'], Response::HTTP_BAD_REQUEST);
         }
 
         $toFormatLower = strtolower((string) $toFormat);
-
-        try {
-            $options = $this->validateImageOptions($options, $toFormatLower);
-        } catch (\InvalidArgumentException $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_UNPROCESSABLE_ENTITY);
-        }
 
         // Text-вход: source_format обязателен и валидируется КАК ТЕКСТОВЫЙ
         // источник реестра — ДО createConversion(), т.к. у пасченого текста
@@ -164,6 +163,33 @@ class ConversionController extends AbstractController
         // ROLE_USER = полный логин; гость его не имеет (role_hierarchy даёт
         // залогиненному пройти guest-роуты, но НЕ наоборот).
         $privileged = $this->isGranted('ROLE_USER');
+
+        // CNV-85: ПОВТОРНАЯ server-side проверка опций — каталог, показанный
+        // клиенту, ничего не гарантирует. Профиль резолвится заново по ТОЧНОЙ
+        // паре from→to (для файла from = расширение загруженного файла, ровно
+        // как его выводит ConversionManager; для текста — уже провалидированный
+        // source_format), доступ — по актуальному плану, значения — по границам
+        // профиля. Наружу уходят ТОЛЬКО нормализованные whitelisted-опции.
+        // Идёт ДО rate-limit — как и прежняя validateImageOptions(), чтобы
+        // отказ по опциям не списывал лимит.
+        $fromFormat = $hasText
+            ? (string) $sourceFormatLower
+            : strtolower($file?->getClientOriginalExtension() ?? '');
+
+        try {
+            $options = $this->optionsValidator->validate(
+                $fromFormat,
+                $toFormatLower,
+                $options,
+                $this->accessLevelFor($user, $privileged),
+                $ocr && $hasFile,
+            );
+        } catch (InvalidConversionOptionException $e) {
+            return $this->json(
+                ['error' => $e->getErrorCode(), 'message' => $e->getMessage()],
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+            );
+        }
 
         // Per-IP + per-user/guest rate limit (CNV-34). Гость: anon_*; ROLE_USER: user_*.
         $rateLimited = $this->apiRateLimiter->enforceConvert($request, $user, $privileged);
@@ -233,56 +259,17 @@ class ConversionController extends AbstractController
     }
 
     /**
-     * @param mixed $options
-     * @return array<string, int|string>
+     * Уровень доступа к настройкам (CNV-85). Не залогинен (нет ROLE_USER) —
+     * всегда `guest`, независимо от того, что лежит в `users.plan` у гостевой
+     * строки; залогинен — его план.
      */
-    private function validateImageOptions(mixed $options, string $toFormat): array
+    private function accessLevelFor(?User $user, bool $privileged): SettingsAccessLevel
     {
-        if ($options === [] || $options === null) {
-            return [];
-        }
-        if (! is_array($options)) {
-            throw new \InvalidArgumentException('options must be an object');
+        if (! $privileged || $user === null) {
+            return SettingsAccessLevel::Guest;
         }
 
-        $allowed = ['width', 'height'];
-        if (in_array($toFormat, ['jpg', 'jpeg', 'webp'], true)) {
-            $allowed[] = 'quality';
-        }
-        if (in_array($toFormat, ['jpg', 'jpeg'], true)) {
-            $allowed[] = 'background';
-        }
-        foreach ($options as $key => $_) {
-            if (! is_string($key) || ! in_array($key, $allowed, true)) {
-                throw new \InvalidArgumentException('Unsupported image option');
-            }
-        }
-
-        $normalized = [];
-        foreach (['width', 'height', 'quality'] as $key) {
-            if (! array_key_exists($key, $options)) {
-                continue;
-            }
-            $value = $options[$key];
-            if (! is_int($value) && (! is_string($value) || preg_match('/^[1-9][0-9]*$/', $value) !== 1)) {
-                throw new \InvalidArgumentException("{$key} must be an integer");
-            }
-            $int     = (int) $value;
-            $maximum = $key === 'quality' ? 100 : 10000;
-            if ($int < 1 || $int > $maximum) {
-                throw new \InvalidArgumentException("{$key} must be between 1 and {$maximum}");
-            }
-            $normalized[$key] = $int;
-        }
-        if (array_key_exists('background', $options)) {
-            $background = $options['background'];
-            if (! is_string($background) || preg_match('/^#[0-9a-fA-F]{6}$/', $background) !== 1) {
-                throw new \InvalidArgumentException('background must be a #RRGGBB colour');
-            }
-            $normalized['background'] = strtoupper($background);
-        }
-
-        return $normalized;
+        return SettingsAccessLevel::fromPlanName($user->getPlan());
     }
 
     #[Route('/convert/{id}/status', methods: ['GET'])]
@@ -606,6 +593,7 @@ class ConversionController extends AbstractController
     #[OA\Response(response: 404, description: 'Задача не найдена / чужая')]
     #[OA\Response(response: 409, description: 'Конвертация отключена админом')]
     #[OA\Response(response: 410, description: 'Исходник истёк в S3')]
+    #[OA\Response(response: 422, description: 'Сохранённая опция недоступна на текущем плане (CNV-85 repair)')]
     #[OA\Response(response: 429, description: 'Превышена квота')]
     #[OA\Response(response: 503, description: 'Воркер такого типа никогда не регистрировался')]
     public function retry(int $id, #[CurrentUser] ?User $user): JsonResponse
@@ -621,6 +609,15 @@ class ConversionController extends AbstractController
                 'conversion_id' => $conversion->getId(),
                 'status'        => $conversion->getStatus()->value,
             ], Response::HTTP_ACCEPTED);
+        } catch (InvalidConversionOptionException $e) {
+            // CNV-85 repair: план понизился (или профиль пары изменился) с
+            // момента исходной конвертации — сохранённая опция больше не
+            // проходит валидацию на ТЕКУЩЕМ плане. Тот же код+форма ответа,
+            // что и у POST /convert (см. catch выше в convert()).
+            return $this->json(
+                ['error' => $e->getErrorCode(), 'message' => $e->getMessage()],
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+            );
         } catch (ConversionDisabledException $e) {
             return $this->json(
                 ['error' => 'conversion_disabled', 'message' => $e->getMessage()],
@@ -752,7 +749,7 @@ class ConversionController extends AbstractController
     #[OA\Get(summary: 'Список поддерживаемых конвертаций', security: [])]
     #[OA\Response(
         response: 200,
-        description: 'Матрица поддерживаемых пар форматов',
+        description: 'Матрица поддерживаемых пар форматов + версионированные дедуплицированные профили настроек',
         content: new OA\JsonContent(properties: [
             new OA\Property(property: 'formats', type: 'array', items: new OA\Items(properties: [
                 new OA\Property(property: 'from', type: 'string', example: 'docx'),
@@ -760,14 +757,40 @@ class ConversionController extends AbstractController
                 new OA\Property(property: 'category', type: 'string', example: 'document'),
                 new OA\Property(property: 'isAi', type: 'boolean'),
                 new OA\Property(property: 'ocrCapable', type: 'boolean'),
+                new OA\Property(
+                    property: 'settingsProfile',
+                    type: 'string',
+                    description: 'id профиля настроек из `settings.profiles`; `null` = у пары настроек нет',
+                    example: 'image.jpeg',
+                    nullable: true,
+                ),
             ])),
+            new OA\Property(property: 'settings', type: 'object', properties: [
+                new OA\Property(property: 'version', type: 'string', example: '2026-08-24.1'),
+                new OA\Property(
+                    property: 'profiles',
+                    type: 'object',
+                    description: 'id профиля → описание; поля персонализированы флагом `editable` под план вызывающего',
+                ),
+            ]),
         ]),
     )]
-    public function formats(): JsonResponse
+    public function formats(#[CurrentUser] ?User $user): JsonResponse
     {
-        return $this->json([
-            'formats' => $this->registry->getSupportedFormats(),
-        ]);
+        // CNV-85: тело зависит от плана вызывающего, поэтому НИКАКОГО общего
+        // кеша. `Vary: Authorization` — потому что персонализация приходит
+        // ровно из Bearer-токена (guest-cookie на этот роут не действует:
+        // GuestAuthenticator::supports() ограничен convert/quota), а
+        // `private, no-store` для авторизованного запрещает и приватный кеш.
+        $privileged = $this->isGranted('ROLE_USER');
+        $response   = $this->json($this->catalogPresenter->present($this->accessLevelFor($user, $privileged)));
+
+        $response->setVary(['Authorization'], false);
+        if ($privileged) {
+            $response->headers->set('Cache-Control', 'private, no-store');
+        }
+
+        return $response;
     }
 
     #[Route('/quota', methods: ['GET'])]

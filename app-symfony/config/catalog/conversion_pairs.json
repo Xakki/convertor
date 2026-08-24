@@ -1912,6 +1912,27 @@
   },
   {
     "from": "svg",
+    "to": "bmp",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "svg",
+    "to": "gif",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "svg",
+    "to": "ico",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "svg",
     "to": "jpeg",
     "category": "image",
     "isAi": false,
@@ -1927,6 +1948,13 @@
   {
     "from": "svg",
     "to": "png",
+    "category": "image",
+    "isAi": false,
+    "ocrCapable": false
+  },
+  {
+    "from": "svg",
+    "to": "tiff",
     "category": "image",
     "isAi": false,
     "ocrCapable": false

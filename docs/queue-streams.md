@@ -24,8 +24,10 @@
 | `conv.video`     | `video`     | video/ffmpeg |
 | `conv.data`      | `data`      | structured-data |
 | `conv.ai`        | `ai`        | AI (STT / TTS / GPT-OCR) |
+| `conv.browser`   | `browser`   | CNV-88: browser execution kind (screenshot/recording, изолированный Chromium runtime). Transport/stream существуют, но **пока БЕЗ консьюмера** — ни один worker не зарегистрирован (CNV-82/90/91/113, отдельные карточки), и ни одна реальная пара `conversion_pairs.json` в него не маршрутизируется сегодня (генератор каталога не эмитит `executionKind`, см. ниже) |
 
-**Routing key formula (PHP):** `key = isAi ? 'ai' : category`.
+**Routing key formula (PHP):** `key = isAi ? 'ai' : (executionKind ?? category)`.
+CNV-88: ряд каталога может нести необязательное поле `executionKind` (валидное значение `WorkerType`, напр. `browser`) — единственный override category-based роутинга в `ConversionRegistry::streamFor()`; `category` при этом остаётся источником quota/retention (screenshot/recording хранят `image`/`video`). Ни один worker-blob сегодня это поле не объявляет, поэтому `getSupportedFormatsFromBlobs()`/генератор `conversion_pairs.json` его не эмитит — механизм существует только на уровне схемы каталога, не данных.
 В статическом каталоге `config/catalog/conversion_pairs.json` нет пар с `category=markup` (0 строк); live md/html/htm хранятся как `document`.
 Если пара когда-либо получит `markup`, `ConversionRegistry::streamFor()` сворачивает её в `'document'`.
 OCR override: when `$ocr=true`, `streamFor()` always returns `'image'`, regardless of category.

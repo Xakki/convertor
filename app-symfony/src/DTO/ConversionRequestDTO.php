@@ -33,7 +33,7 @@ class ConversionRequestDTO
         public readonly string $toFormat,
         public readonly bool $ocr = false,
         public readonly bool $privileged = true,
-        /** @var array<string, int|string> Разрешённые параметры результата изображения. */
+        /** @var array<string, bool|int|string> Разрешённые параметры результата изображения. */
         public readonly array $options = [],
         /** Путь temp-файла для удаления после обработки (только text-вход, см. {@see fromText()}). */
         private readonly ?string $tempFilePath = null,

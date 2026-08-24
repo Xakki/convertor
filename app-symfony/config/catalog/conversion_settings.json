@@ -1,0 +1,527 @@
+{
+    "$comment": [
+        "Каталог настроек конвертации (CNV-85). Загрузчик — App\\Service\\Conversion\\Settings\\ConversionSettingsCatalog.",
+        "ЭТОТ ФАЙЛ НЕ ГЕНЕРИРУЕТСЯ (в отличие от conversion_pairs.json) — правится руками.",
+        "",
+        "Как доменной карточке (CNV-95/97/100/103/106) добавить свой профиль:",
+        "  1) добавить объект в `profiles` под своим id (document.pdf, media.audio, data.csv ...);",
+        "  2) добавить в конец `assignments` блок правил своей категории;",
+        "  3) поднять `version` (её видит клиент и по ней инвалидирует свой кеш).",
+        "Ни один PHP-класс при этом менять не нужно.",
+        "",
+        "Правила `assignments` проверяются СВЕРХУ ВНИЗ, первое совпадение выигрывает.",
+        "Матчер: `category` (значение FileCategory), `from`/`to` (списки форматов), `ocr` (bool),",
+        "`animated` (bool, CNV-106). Опущенный ключ = «любое значение» — НО конвенция файла (с",
+        "CNV-106) в том, что КАЖДОЕ правило указывает `ocr` и `animated` ЯВНО, даже когда это",
+        "`false` — иначе новая ось-матчер молча «впитывает» в старое правило значения, для",
+        "которых оно не задумывалось (напр. animated=true случайно попал бы под общий",
+        "image.raster, если бы тот не объявлял `animated: false` явно). Блоки разных категорий",
+        "не пересекаются, поэтому порядок между блоками значения не имеет — важен порядок ВНУТРИ блока.",
+        "",
+        "CNV-95: у профиля `image.raster` (общий catch-all category=image, ocr=false)",
+        "`from` теперь ЯВНЫЙ список НЕ-svg источников (matcher — inclusion-only, «любой",
+        "from кроме svg» выразить нельзя иначе). Причина — у svg-источника два target'а",
+        "(bmp/ico) честно отличаются по набору применяемых worker'ом опций, а профиль",
+        "не может иметь пустой `fields`, поэтому «нет применимых опций» выражается ТОЛЬКО",
+        "отсутствием совпавшего правила (см. svg→ico ниже). Следствие для будущих карточек:",
+        "новый НЕ-svg image-ИСТОЧНИК нужно дописать в этот `from`-список, иначе он молча",
+        "останется без width/height. Новый ЦЕЛЕВОЙ формат (to) добавлять никуда не нужно —",
+        "`to` у catch-all по-прежнему не ограничен.",
+        "",
+        "CNV-106: animated SVG → GIF — ТА ЖЕ from/to пара, что и статичный svg→gif",
+        "(image.raster). Каталог пар (conversion_pairs.json) хранит РОВНО ОДИН маршрут на",
+        "пару, поэтому «анимировано или нет» физически не может быть выражено ни отдельной",
+        "строкой каталога, ни `executionKind` (тот per-ПАРЕ и безусловен — если бы svg→gif",
+        "нёс `executionKind: browser`, ВЕСЬ трафик статичного svg→gif тоже уехал бы в browser,",
+        "сломав уже опубликованную CNV-95 пару). Дискриминатор — request-scoped флаг `animated`,",
+        "по образцу `ocr` (CLAUDE.md: «флаги ocr, subType и пр. выбирает БЭК при постановке",
+        "задачи»): свой matcher здесь + свой параметр ConversionRegistry::streamFor()/",
+        "ConversionOptionsValidator::validate() (хардкод-allowlist, НЕ через executionKind —",
+        "см. докблок ConversionRegistry). НЕ published сегодня: presenter (`GET /formats`) и",
+        "контроллер (`POST /convert`) резолвят профиль/маршрут ТОЛЬКО с animated=false (дефолт",
+        "параметра — они не читают такое поле запроса вовсе), поэтому svg→gif остаётся на",
+        "image.raster для любого живого запроса. Публикация — отдельный, документированный шаг",
+        "(см. Execution Log карточки CNV-106): завести request-поле `animated` в",
+        "ConversionRequestDTO/ConversionController/ConversionManager, ровно как уже заведено `ocr` —",
+        "делает владелец browser-воркера (CNV-82/CNV-107/CNV-113), когда воркер существует.",
+        "",
+        "Грамматика поля ЗАКРЫТА: range, select, number, text, boolean, color (SettingsFieldType).",
+        "Сырые аргументы движка (FFmpeg/LibreOffice/renderer) не выражаются в ней принципиально.",
+        "Guest-политика (см. CLAUDE.md): гостю даём полные возможности, ограничиваем не функциями,",
+        "а лимитом/квотой. `minPlan` (guest|free|basic|pro) ОБЯЗАТЕЛЕН у каждого поля и у каждого",
+        "select-варианта (загрузчик падает громко, если ключ пропущен) и выбирается ПО СТОИМОСТИ:",
+        "`guest` — норма для дешёвых полей (CSV-разделитель, кавычка, pretty-print, диапазон",
+        "страниц, ориентация, кодировка, геометрия картинки); уровень выше нужно уметь обосновать",
+        "расходом CPU/памяти (разрешение и fps видео, длительность, browser-рендеринг, AI-конвертации).",
+        "`default` (если не null) материализуется в опции задачи даже когда клиент поле не прислал."
+    ],
+    "version": "2026-08-24.7",
+    "profiles": {
+        "image.raster": {
+            "label": "Изображение",
+            "fields": [
+                {
+                    "key": "width",
+                    "type": "number",
+                    "label": "Ширина",
+                    "min": 1,
+                    "max": 10000,
+                    "unit": "px",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "height",
+                    "type": "number",
+                    "label": "Высота",
+                    "min": 1,
+                    "max": 10000,
+                    "unit": "px",
+                    "minPlan": "guest"
+                }
+            ]
+        },
+        "image.lossy": {
+            "label": "Изображение (с потерями)",
+            "fields": [
+                {
+                    "key": "width",
+                    "type": "number",
+                    "label": "Ширина",
+                    "min": 1,
+                    "max": 10000,
+                    "unit": "px",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "height",
+                    "type": "number",
+                    "label": "Высота",
+                    "min": 1,
+                    "max": 10000,
+                    "unit": "px",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "quality",
+                    "type": "range",
+                    "label": "Качество",
+                    "min": 1,
+                    "max": 100,
+                    "unit": "%",
+                    "minPlan": "guest"
+                }
+            ]
+        },
+        "image.jpeg": {
+            "label": "JPEG",
+            "fields": [
+                {
+                    "key": "width",
+                    "type": "number",
+                    "label": "Ширина",
+                    "min": 1,
+                    "max": 10000,
+                    "unit": "px",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "height",
+                    "type": "number",
+                    "label": "Высота",
+                    "min": 1,
+                    "max": 10000,
+                    "unit": "px",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "quality",
+                    "type": "range",
+                    "label": "Качество",
+                    "min": 1,
+                    "max": 100,
+                    "unit": "%",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "background",
+                    "type": "color",
+                    "label": "Фон прозрачных областей",
+                    "minPlan": "guest"
+                }
+            ]
+        },
+        "image.bmp": {
+            "label": "BMP",
+            "fields": [
+                {
+                    "key": "width",
+                    "type": "number",
+                    "label": "Ширина",
+                    "min": 1,
+                    "max": 10000,
+                    "unit": "px",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "height",
+                    "type": "number",
+                    "label": "Высота",
+                    "min": 1,
+                    "max": 10000,
+                    "unit": "px",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "background",
+                    "type": "color",
+                    "label": "Фон прозрачных областей",
+                    "minPlan": "guest"
+                }
+            ]
+        },
+        "image.svg.animated": {
+            "label": "Анимированный SVG → GIF",
+            "fields": [
+                {
+                    "key": "width",
+                    "type": "number",
+                    "label": "Ширина",
+                    "min": 1,
+                    "max": 1280,
+                    "unit": "px",
+                    "minPlan": "basic",
+                    "default": 640
+                },
+                {
+                    "key": "height",
+                    "type": "number",
+                    "label": "Высота",
+                    "min": 1,
+                    "max": 1280,
+                    "unit": "px",
+                    "minPlan": "basic",
+                    "default": 640
+                },
+                {
+                    "key": "fps",
+                    "type": "select",
+                    "label": "Частота кадров",
+                    "minPlan": "guest",
+                    "default": "12",
+                    "options": [
+                        { "value": "12", "label": "12 fps", "minPlan": "guest" },
+                        { "value": "15", "label": "15 fps", "minPlan": "free" },
+                        { "value": "24", "label": "24 fps", "minPlan": "basic" }
+                    ]
+                },
+                {
+                    "key": "loop",
+                    "type": "select",
+                    "label": "Зацикливание",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "once", "label": "Один раз", "minPlan": "guest" },
+                        { "value": "infinite", "label": "Бесконечно", "minPlan": "guest" }
+                    ]
+                },
+                {
+                    "key": "background",
+                    "type": "text",
+                    "label": "Фон",
+                    "minPlan": "guest",
+                    "maxLength": 11,
+                    "pattern": "transparent|white|#[0-9A-Fa-f]{6}"
+                }
+            ]
+        },
+        "document.pdf": {
+            "label": "PDF",
+            "fields": [
+                {
+                    "key": "pageRange",
+                    "type": "text",
+                    "label": "Диапазон страниц",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "[1-9][0-9]*(-[1-9][0-9]*)?(,[1-9][0-9]*(-[1-9][0-9]*)?)*",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "orientation",
+                    "type": "select",
+                    "label": "Ориентация",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "portrait", "label": "Книжная", "minPlan": "guest" },
+                        { "value": "landscape", "label": "Альбомная", "minPlan": "guest" }
+                    ]
+                }
+            ]
+        },
+        "document.txt": {
+            "label": "Текст (TXT)",
+            "fields": [
+                {
+                    "key": "encoding",
+                    "type": "select",
+                    "label": "Кодировка",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "utf-8", "label": "UTF-8", "minPlan": "guest" }
+                    ]
+                }
+            ]
+        },
+        "document.markdown": {
+            "label": "Markdown",
+            "fields": [
+                {
+                    "key": "encoding",
+                    "type": "select",
+                    "label": "Кодировка",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "utf-8", "label": "UTF-8", "minPlan": "guest" }
+                    ]
+                },
+                {
+                    "key": "markdownDialect",
+                    "type": "select",
+                    "label": "Markdown-диалект",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "gfm", "label": "GitHub Flavored Markdown", "minPlan": "guest" },
+                        { "value": "commonmark", "label": "CommonMark", "minPlan": "guest" },
+                        { "value": "markdown", "label": "Pandoc Markdown", "minPlan": "guest" },
+                        { "value": "markdown_strict", "label": "Markdown (strict)", "minPlan": "guest" }
+                    ]
+                }
+            ]
+        },
+        "document.markdown.verbatim": {
+            "label": "Markdown (из PDF)",
+            "fields": [
+                {
+                    "key": "encoding",
+                    "type": "select",
+                    "label": "Кодировка",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "utf-8", "label": "UTF-8", "minPlan": "guest" }
+                    ]
+                }
+            ]
+        },
+        "media.audio": {
+            "label": "Аудио",
+            "fields": [
+                {
+                    "key": "quality",
+                    "type": "select",
+                    "label": "Качество",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "low", "label": "Низкое", "minPlan": "guest" },
+                        { "value": "medium", "label": "Среднее", "minPlan": "guest" },
+                        { "value": "high", "label": "Высокое", "minPlan": "guest" }
+                    ]
+                }
+            ]
+        },
+        "data.csv": {
+            "label": "CSV",
+            "fields": [
+                {
+                    "key": "delimiter",
+                    "type": "select",
+                    "label": "Разделитель",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": ",", "label": "Запятая ( , )", "minPlan": "guest" },
+                        { "value": ";", "label": "Точка с запятой ( ; )", "minPlan": "guest" },
+                        { "value": "\t", "label": "Табуляция", "minPlan": "guest" },
+                        { "value": "|", "label": "Вертикальная черта ( | )", "minPlan": "guest" }
+                    ]
+                },
+                {
+                    "key": "quote",
+                    "type": "select",
+                    "label": "Кавычка",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "\"", "label": "Двойная кавычка ( \" )", "minPlan": "guest" },
+                        { "value": "'", "label": "Одинарная кавычка ( ' )", "minPlan": "guest" }
+                    ]
+                },
+                {
+                    "key": "encoding",
+                    "type": "select",
+                    "label": "Кодировка",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "utf-8", "label": "UTF-8", "minPlan": "guest" }
+                    ]
+                }
+            ]
+        },
+        "data.json": {
+            "label": "JSON",
+            "fields": [
+                {
+                    "key": "pretty",
+                    "type": "boolean",
+                    "label": "Форматированный вывод",
+                    "minPlan": "guest"
+                },
+                {
+                    "key": "indent",
+                    "type": "number",
+                    "label": "Отступ",
+                    "min": 1,
+                    "max": 8,
+                    "minPlan": "guest"
+                }
+            ]
+        },
+        "media.video": {
+            "label": "Видео",
+            "fields": [
+                {
+                    "key": "resolution",
+                    "type": "select",
+                    "label": "Разрешение",
+                    "minPlan": "free",
+                    "options": [
+                        { "value": "480p", "label": "480p", "minPlan": "free" },
+                        { "value": "720p", "label": "720p", "minPlan": "free" },
+                        { "value": "1080p", "label": "1080p", "minPlan": "basic" }
+                    ]
+                },
+                {
+                    "key": "fps",
+                    "type": "select",
+                    "label": "Частота кадров",
+                    "minPlan": "free",
+                    "options": [
+                        { "value": "24", "label": "24 fps", "minPlan": "free" },
+                        { "value": "30", "label": "30 fps", "minPlan": "free" }
+                    ]
+                }
+            ]
+        }
+    },
+    "assignments": [
+        {
+            "profile": "image.svg.animated",
+            "category": "image",
+            "ocr": false,
+            "animated": true,
+            "from": ["svg"],
+            "to": ["gif"]
+        },
+        {
+            "profile": "image.jpeg",
+            "category": "image",
+            "ocr": false,
+            "animated": false,
+            "to": ["jpg", "jpeg"]
+        },
+        {
+            "profile": "image.lossy",
+            "category": "image",
+            "ocr": false,
+            "animated": false,
+            "to": ["webp"]
+        },
+        {
+            "profile": "image.bmp",
+            "category": "image",
+            "ocr": false,
+            "animated": false,
+            "from": ["svg"],
+            "to": ["bmp"]
+        },
+        {
+            "profile": "image.raster",
+            "category": "image",
+            "ocr": false,
+            "animated": false,
+            "from": ["svg"],
+            "to": ["gif", "png", "tiff"]
+        },
+        {
+            "profile": "image.raster",
+            "category": "image",
+            "ocr": false,
+            "animated": false,
+            "from": ["bmp", "gif", "ico", "jpeg", "jpg", "png", "tif", "tiff", "webp"]
+        },
+        {
+            "profile": "document.pdf",
+            "category": "document",
+            "ocr": false,
+            "animated": false,
+            "from": ["txt", "md"],
+            "to": ["pdf"]
+        },
+        {
+            "profile": "document.txt",
+            "category": "document",
+            "ocr": false,
+            "animated": false,
+            "from": ["pdf", "md"],
+            "to": ["txt"]
+        },
+        {
+            "profile": "document.markdown.verbatim",
+            "category": "document",
+            "ocr": false,
+            "animated": false,
+            "from": ["pdf"],
+            "to": ["md"]
+        },
+        {
+            "profile": "document.markdown",
+            "category": "document",
+            "ocr": false,
+            "animated": false,
+            "from": ["txt"],
+            "to": ["md"]
+        },
+        {
+            "profile": "media.video",
+            "category": "video",
+            "ocr": false,
+            "animated": false,
+            "to": ["avi", "mkv", "mov", "mp4", "webm"]
+        },
+        {
+            "profile": "media.audio",
+            "category": "video",
+            "ocr": false,
+            "animated": false,
+            "to": ["flac", "mp3", "ogg", "wav"]
+        },
+        {
+            "profile": "media.audio",
+            "category": "audio",
+            "ocr": false,
+            "animated": false,
+            "to": ["aac", "flac", "m4a", "mp3", "ogg", "opus", "wav"]
+        },
+        {
+            "profile": "data.csv",
+            "category": "data",
+            "ocr": false,
+            "animated": false,
+            "to": ["csv"]
+        },
+        {
+            "profile": "data.json",
+            "category": "data",
+            "ocr": false,
+            "animated": false,
+            "to": ["json"]
+        }
+    ]
+}

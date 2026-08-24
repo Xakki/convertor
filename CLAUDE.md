@@ -37,6 +37,20 @@ REST под префиксом `/api/v1/` (версионирование), JSON
 - Telegram-логин через бота: magic-link на своём устройстве (same-device, nonce-bound), не Login Widget. Анонимная конвертация guest-User по httpOnly-cookie `guest_id` (`ROLE_GUEST`), кроме `isAi`/`category=Video` (→ 403 `auth_required`). SMS OTP — заглушка (501). JWT 1h (LexikJWT) + refresh 30 дней. Полный контракт флоу (webhook, secrets, merge guest-истории) — skill `redesign-auth-access-contract`.
 - Регистрация webhook: `make tg-set-webhook` из корня (нужны `TELEGRAM_WEBHOOK_SECRET` в `app-symfony/.env.local` + публичный `API_URL` в `.env`).
 
+## Guest-политика (доступ vs лимиты)
+
+**Гостю даём полные возможности; ограничиваем не функциями, а лимитом.** Настройка
+прячется за план ТОЛЬКО если она реально дорога нам по CPU/памяти (разрешение и fps
+видео, длительность, AI-конвертации). Дешёвые параметры — разделитель CSV, кавычка,
+pretty-print, диапазон страниц, ориентация, кодировка, геометрия картинки — доступны
+гостю. Платный рычаг — квоты/лимиты (`CNV-30`, тиры T1–T4) и pay-per-use, а не
+урезание набора опций.
+
+Следствие для каталога настроек (`config/catalog/conversion_settings.json`):
+`minPlan` у каждого поля обязателен и проставляется **по стоимости**, а не «на всякий
+случай». `minPlan: guest` — норма; уровень выше нужно уметь обосновать расходом
+ресурсов.
+
 ## Payments
 MVP = оплата **только через Telegram** (Bot API: invoice → `successful_payment` webhook): **Telegram Stars + ЮMoney + прочие провайдеры, доступные через BotFather/Telegram Payments**. Отдельные Stripe/Cryptomus — вне MVP. Pay-per-use сверх лимита плана — **prepaid-баланс** (атомарное списание $0.05 обычная / $0.15 AI за конвертацию), пополнение тем же Telegram-флоу → карточка `.claude/kanban/todo/CNV-28-pay-per-use-credits.md`. DB-скелет `Payment`/`Plan` уже есть; интеграция платежей ещё не реализована → детали: `.claude/kanban/freeze/CNV-12-docs-payments-integration.md`.
 

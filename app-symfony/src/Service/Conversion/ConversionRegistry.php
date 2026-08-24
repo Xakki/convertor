@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Conversion;
 
 use App\Enum\FileCategory;
+use App\Enum\WorkerType;
 use App\Repository\WorkerCapabilityRepository;
 use Psr\Log\LoggerInterface;
 
@@ -48,6 +49,43 @@ use Psr\Log\LoggerInterface;
  * время чтения уже резолвленного `conversion_pairs.json`.
  *
  * Сигнатуры {@see getSupportedFormats()}, {@see isSupported()}, {@see streamFor()} не меняются.
+ *
+ * CNV-88: каждый ряд каталога МОЖЕТ нести необязательное поле `executionKind`
+ * (строка — валидное значение {@see \App\Enum\WorkerType}, напр. `browser`) —
+ * ЕДИНСТВЕННЫЙ признак маршрутизации, которым {@see streamFor()} переопределяет
+ * category-based роутинг для пары (после OCR- и AI-веток, до category-
+ * фолбэка). `category` при этом остаётся как есть — источник quota/retention,
+ * НЕ роутинга. Отсутствующий/`null`
+ * `executionKind` — 100% сегодняшних рядов коммиченного
+ * `conversion_pairs.json` — не меняет поведение ни на бит (генератор
+ * {@see getSupportedFormatsFromBlobs()}/{@see reduceCapabilities()} НИКОГДА
+ * не эмитит это поле — ни один worker-blob его сегодня не объявляет, так что
+ * маршрут `browser` недостижим ни для одного реального запроса, пока
+ * CNV-82/90/91/113 не заведут capability-блоб с этим полем). Невалидное
+ * значение (не входящее в {@see \App\Enum\WorkerType}) — громкая
+ * `\RuntimeException` при загрузке каталога, той же политикой, что и
+ * невалидная `category`.
+ *
+ * CNV-106 Task A: `isAi=true` вместе с ненулевым `executionKind` на одном
+ * ряду — тоже громкая `\RuntimeException` при загрузке (см.
+ * {@see loadCatalogMatrix()}). Причина: {@see streamFor()} проверяет
+ * `isAi()` СТРОГО РАНЬШЕ `executionKind`, так что при обоих флагах
+ * одновременно override маршрутизации был бы резолвлен, загружен без единой
+ * ошибки — и молча отброшен `streamFor()`, пара всегда уезжала бы в `'ai'`.
+ * До этой карточки недостижимо (ни один ряд не нёс `executionKind`); строгая
+ * проверка стоит здесь, чтобы CNV-106 (первая карточка с реальным
+ * `executionKind`-профилем) и любая последующая не могли тихо воспроизвести
+ * этот пробел.
+ *
+ * CNV-106: скорректирована находка CNV-88 «animated SVG→GIF может нести
+ * `executionKind: browser`» — НЕВЕРНО как факт: `conversion_pairs.json`
+ * хранит ОДИН маршрут на from→to пару (ассоциативный `$matrix[$from][$to]`),
+ * а статичный svg→gif УЖЕ опубликован (CNV-95, `image.raster`) на той же
+ * паре — `executionKind: browser` на этом ряду увёл бы В БРАУЗЕР и статичный
+ * трафик тоже, сломав CNV-95. Реальный механизм — {@see isAnimatedConversionSupported()}
+ * / `$animated`-параметр {@see streamFor()}, request-scoped флаг той же
+ * формы, что и `$ocr` (см. {@see ANIMATED_SOURCES} докблок и class docblock
+ * `App\Service\Conversion\Settings\ConversionSettingsCatalog`).
  */
 class ConversionRegistry
 {
@@ -67,6 +105,31 @@ class ConversionRegistry
      */
     private const OCR_SOURCES = ['jpg', 'png', 'tiff', 'pdf'];
     private const OCR_TARGETS = ['txt', 'md', 'docx'];
+
+    /**
+     * CNV-106: explicit animated-conversion capability set — mirrors
+     * {@see OCR_SOURCES}/{@see OCR_TARGETS} EXACTLY in shape: a flat
+     * hardcoded allowlist, checked ONLY when the caller explicitly requests
+     * `$animated` in {@see streamFor()}. Deliberately independent of the
+     * catalog's per-row `executionKind` (CNV-88) — that field is per-PAIR and
+     * unconditional, so putting `executionKind: browser` on the svg→gif row
+     * would reroute the ALREADY-PUBLISHED static svg→gif pair (CNV-95,
+     * `image.raster`) too, since `conversion_pairs.json` can only carry ONE
+     * route per from→to pair (see {@see resolveAiCategory()}-style single-
+     * winner reduction). A request-scoped flag is the only mechanism that can
+     * express "same pair, two different behaviours" — exactly the `ocr` flag
+     * already does for the OCR-vs-plain-extraction split on pdf→txt/md/docx.
+     *
+     * NOT wired to any live HTTP request today: `ConversionController` never
+     * reads an `animated` request field, so no real caller ever passes
+     * `$animated = true` to {@see streamFor()} — the branch below is fully
+     * implemented and unit-tested, but structurally unreachable in
+     * production until a future card wires the request field (mirroring how
+     * `ocr` is wired) AND a browser worker actually exists to consume
+     * `conv.browser` (see `App\Enum\WorkerType::Browser`, CNV-88).
+     */
+    private const ANIMATED_SOURCES = ['svg'];
+    private const ANIMATED_TARGETS = ['gif'];
 
     /**
      * INTERIM (Phase 2) tie-break for a from→to pair legitimately declared by
@@ -119,7 +182,7 @@ class ConversionRegistry
     /**
      * Lazy per-request cache (строится однократно за запрос).
      *
-     * @var array<string, array<string, array{category: FileCategory, isAi: bool}>>|null
+     * @var array<string, array<string, array{category: FileCategory, isAi: bool, executionKind: ?string}>>|null
      */
     private ?array $matrix = null;
 
@@ -334,6 +397,18 @@ class ConversionRegistry
     }
 
     /**
+     * Is the pair part of the explicit animated-conversion capability set
+     * (CNV-106)? Used by the `$animated` flag path in {@see streamFor()} —
+     * see {@see ANIMATED_SOURCES}/{@see ANIMATED_TARGETS} docblock for why
+     * this is a hardcoded allowlist rather than a catalog lookup.
+     */
+    public function isAnimatedConversionSupported(string $from, string $to): bool
+    {
+        return in_array($from, self::ANIMATED_SOURCES, true)
+            && in_array($to, self::ANIMATED_TARGETS, true);
+    }
+
+    /**
      * Text-mode source gate (home-02-text-input): is `$from` BOTH a genuinely
      * textual format ({@see TEXTUAL_SOURCE_FORMATS}) AND a valid `isSupported()`
      * pair with `$to`? Pasted text has no MIME-sniff safety net (unlike an
@@ -353,10 +428,21 @@ class ConversionRegistry
      * for a conversion pair.
      *
      * - OCR ($ocr=true): validated image-worker job → 'image', never AI.
-     * - otherwise: AI pairs → 'ai'; `markup` folds into 'document' (no dedicated
-     *   markup worker); everything else routes to its stored category.
+     * - animated ($animated=true, CNV-106): validated browser-worker job →
+     *   'browser' ({@see WorkerType::Browser}), via the hardcoded allowlist
+     *   {@see isAnimatedConversionSupported()} — NOT via the catalog's
+     *   per-pair `executionKind` (see {@see ANIMATED_SOURCES} docblock for
+     *   why). Checked before the `isAi()`/`executionKind` branches below,
+     *   same precedence position as `$ocr` — both are explicit
+     *   execution-mode overrides requested by the caller. NOT reachable from
+     *   any live request today (see {@see ANIMATED_SOURCES} docblock).
+     * - otherwise: AI pairs → 'ai'; a pair carrying an explicit `executionKind`
+     *   (CNV-88, e.g. `browser`) routes there REGARDLESS of its stored
+     *   category — see class docblock; `markup` folds into 'document' (no
+     *   dedicated markup worker); everything else routes to its stored
+     *   category.
      */
-    public function streamFor(string $from, string $to, bool $ocr = false): string
+    public function streamFor(string $from, string $to, bool $ocr = false, bool $animated = false): string
     {
         if ($ocr) {
             if (! $this->isOcrSupported($from, $to)) {
@@ -366,8 +452,24 @@ class ConversionRegistry
             return FileCategory::Image->value;
         }
 
+        if ($animated) {
+            if (! $this->isAnimatedConversionSupported($from, $to)) {
+                throw new \InvalidArgumentException("Unsupported animated conversion: {$from} → {$to}");
+            }
+
+            return WorkerType::Browser->value;
+        }
+
         if ($this->isAi($from, $to)) {
             return 'ai';
+        }
+
+        // CNV-88: at this point isAi($from, $to) above already proved the pair
+        // is supported (it would have thrown otherwise) — safe to read the
+        // matrix entry directly without a second isSupported() round-trip.
+        $executionKind = $this->getMatrix()[$from][$to]['executionKind'] ?? null;
+        if ($executionKind !== null) {
+            return $executionKind;
         }
 
         $category = $this->getCategory($from, $to)->value;
@@ -438,7 +540,7 @@ class ConversionRegistry
     // -------------------------------------------------------------------------
 
     /**
-     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool, executionKind: ?string}>>
      */
     private function getMatrix(): array
     {
@@ -451,7 +553,7 @@ class ConversionRegistry
      * (см. {@see loadCatalogMatrix()}) и перевыбрасывает с контекстом пути файла,
      * не глотает молча.
      *
-     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool, executionKind: ?string}>>
      */
     private function buildMatrix(): array
     {
@@ -479,9 +581,12 @@ class ConversionRegistry
      * невалидный JSON, JSON-корень не массив, ряд без обязательных ключей, а
      * также на синтаксически валидный, но ПУСТОЙ массив `[]` (см. класс-докблок:
      * пустая матрица означала бы полную потерю форматов сайтом — легитимного
-     * случая коммиченного пустого каталога не существует).
+     * случая коммиченного пустого каталога не существует). Опциональное поле
+     * ряда `executionKind` (CNV-88, см. класс-докблок) — если присутствует и не
+     * `null`, ДОЛЖНО быть непустой строкой и валидным значением
+     * {@see WorkerType}, иначе тоже громкая `\RuntimeException`.
      *
-     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool, executionKind: ?string}>>
      */
     private function loadCatalogMatrix(string $path): array
     {
@@ -537,7 +642,46 @@ class ConversionRegistry
                 );
             }
 
-            $matrix[$row['from']][$row['to']] = ['category' => $category, 'isAi' => (bool) $row['isAi']];
+            // CNV-88: необязательное поле-override маршрутизации — см. class docblock.
+            $executionKindRaw = $row['executionKind'] ?? null;
+            $executionKind    = null;
+            if ($executionKindRaw !== null) {
+                if (! is_string($executionKindRaw) || $executionKindRaw === '') {
+                    throw new \RuntimeException(
+                        "ConversionRegistry: файл каталога {$path}, ряд #{$i} — executionKind должен быть "
+                        . 'непустой строкой или отсутствовать',
+                    );
+                }
+                if (WorkerType::tryFrom($executionKindRaw) === null) {
+                    $allowed = implode(', ', array_map(static fn (WorkerType $t): string => $t->value, WorkerType::cases()));
+
+                    throw new \RuntimeException(
+                        "ConversionRegistry: файл каталога {$path}, ряд #{$i} — неизвестный executionKind "
+                        . "\"{$executionKindRaw}\" (допустимые значения: {$allowed})",
+                    );
+                }
+                $executionKind = $executionKindRaw;
+            }
+
+            // CNV-106 Task A: streamFor() checks isAi() BEFORE executionKind (class
+            // docblock/`streamFor()`), so a row with BOTH `isAi: true` AND a
+            // non-null `executionKind` would load silently and always route to
+            // 'ai' — the executionKind override is unreachable, discarded with no
+            // signal. Reject the combination LOUDLY at load time, same policy as
+            // the other malformed-catalog checks above.
+            if (((bool) $row['isAi']) && $executionKind !== null) {
+                throw new \RuntimeException(
+                    "ConversionRegistry: файл каталога {$path}, ряд #{$i} — isAi=true и executionKind "
+                    . "=\"{$executionKind}\" одновременно недопустимы: streamFor() проверяет isAi() ДО "
+                    . 'executionKind, поэтому override маршрутизации был бы молча отброшен',
+                );
+            }
+
+            $matrix[$row['from']][$row['to']] = [
+                'category'      => $category,
+                'isAi'          => (bool) $row['isAi'],
+                'executionKind' => $executionKind,
+            ];
         }
 
         if ($matrix === []) {

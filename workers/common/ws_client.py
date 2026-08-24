@@ -276,7 +276,7 @@ def _safe_dir_name(job_id: str) -> str:
 # PHP/БД недоступны, поэтому вывести список из enum'а в рантайме нельзя.
 # Синхронизацию с `WorkerType.php` держит drift-guard
 # `workers/tests/test_worker_type_drift.py` (`make test-drift` из корня репо).
-ALLOWED_WORKER_TYPES = ("ai", "document", "image", "audio", "video", "data")
+ALLOWED_WORKER_TYPES = ("ai", "document", "image", "audio", "video", "data", "browser")
 
 # Контракт `instanceId` (registry-02): непустая строка, ≤128 символов, только
 # `[A-Za-z0-9._:-]`. Сервер (PHP) 400-ит при нарушении формы — клиент обязан

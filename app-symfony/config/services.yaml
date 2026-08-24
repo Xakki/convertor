@@ -276,6 +276,15 @@ services:
         arguments:
             $catalogPath: '%kernel.project_dir%/config/catalog/conversion_pairs.json'
 
+    # CNV-85: каталог ПРОФИЛЕЙ настроек — отдельный артефакт, накладываемый на
+    # пары правилами `assignments` (сам conversion_pairs.json не трогает). Тот же
+    # стиль явного биндинга, что у ConversionRegistry выше; unit-тесты передают
+    # путь к своей фикстуре, иначе сервис читает этот же коммиченный файл.
+    App\Service\Conversion\Settings\ConversionSettingsCatalog:
+        public: true
+        arguments:
+            $catalogPath: '%kernel.project_dir%/config/catalog/conversion_settings.json'
+
     # `public: true` — устаревшая причина (registry-04, standalone `bin/dump-matrix.php`)
     # больше не актуальна для ConversionRegistry (dump-matrix.php больше не грузит
     # Kernel/DI, см. его докблок), но остаётся полезной для консистентности CLI-тулинга.

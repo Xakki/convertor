@@ -139,6 +139,112 @@ final class ConversionRegistryCatalogLoadingTest extends TestCase
      * удаляем файл ПОСЛЕ первого успешного построения матрицы и убеждаемся, что
      * повторные вызовы всё ещё работают (не падают на "файл не найден").
      */
+    /**
+     * CNV-88: a catalog row carrying `executionKind` routes there REGARDLESS
+     * of its stored category — the can-fail proof (a) for the card ("browser
+     * job routes to conv.browser") and the regression guard for animated
+     * SVG→GIF (CNV-106, out of scope here): `category` stays `image` (quota/
+     * retention unaffected), only `streamFor()`'s output changes.
+     */
+    public function testExecutionKindOverridesCategoryBasedRouting(): void
+    {
+        $path = $this->writeCatalog(json_encode([
+            ['from' => 'svg', 'to' => 'gif', 'category' => 'image', 'isAi' => false, 'ocrCapable' => false, 'executionKind' => 'browser'],
+        ], JSON_THROW_ON_ERROR));
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        self::assertTrue($registry->isSupported('svg', 'gif'));
+        self::assertSame('browser', $registry->streamFor('svg', 'gif'), 'executionKind must win over category-based routing');
+        self::assertSame(FileCategory::Image, $registry->getCategory('svg', 'gif'), 'category stays the quota/retention source, unaffected by executionKind');
+        self::assertFalse($registry->isAi('svg', 'gif'));
+    }
+
+    /**
+     * CNV-88: a row with NO `executionKind` key (100% of today's committed
+     * `conversion_pairs.json`) must keep routing purely by category — the
+     * can-fail proof (c) for the card ("existing image job still routes to
+     * conv.image and NOT to conv.browser").
+     */
+    public function testAbsentExecutionKindKeepsCategoryBasedRoutingUnchanged(): void
+    {
+        $path = $this->writeCatalog(json_encode([
+            ['from' => 'jpg', 'to' => 'png', 'category' => 'image', 'isAi' => false, 'ocrCapable' => false],
+        ], JSON_THROW_ON_ERROR));
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        self::assertSame('image', $registry->streamFor('jpg', 'png'));
+        self::assertNotSame('browser', $registry->streamFor('jpg', 'png'));
+    }
+
+    /**
+     * CNV-88: an explicit `executionKind: null` is equivalent to the key being
+     * absent (defensive — a generator could emit `null` explicitly).
+     */
+    public function testExplicitNullExecutionKindKeepsCategoryBasedRouting(): void
+    {
+        $path = $this->writeCatalog(json_encode([
+            ['from' => 'jpg', 'to' => 'png', 'category' => 'image', 'isAi' => false, 'ocrCapable' => false, 'executionKind' => null],
+        ], JSON_THROW_ON_ERROR));
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        self::assertSame('image', $registry->streamFor('jpg', 'png'));
+    }
+
+    /**
+     * CNV-88 can-fail proof (b): an unknown `executionKind` value (not a valid
+     * `WorkerType` case) is rejected LOUDLY at catalog-load time, same policy
+     * as an unknown `category`.
+     */
+    public function testUnknownExecutionKindValueThrows(): void
+    {
+        $path = $this->writeCatalog(json_encode([
+            ['from' => 'svg', 'to' => 'gif', 'category' => 'image', 'isAi' => false, 'ocrCapable' => false, 'executionKind' => 'bogus'],
+        ], JSON_THROW_ON_ERROR));
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/неизвестный executionKind/u');
+
+        $registry->getSupportedFormats();
+    }
+
+    /**
+     * CNV-88: `executionKind` must be a non-empty string when present — an
+     * empty string is rejected the same way as an unknown value, not silently
+     * treated as "absent".
+     */
+    public function testEmptyStringExecutionKindThrows(): void
+    {
+        $path = $this->writeCatalog(json_encode([
+            ['from' => 'svg', 'to' => 'gif', 'category' => 'image', 'isAi' => false, 'ocrCapable' => false, 'executionKind' => ''],
+        ], JSON_THROW_ON_ERROR));
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        $this->expectException(\RuntimeException::class);
+
+        $registry->getSupportedFormats();
+    }
+
+    /**
+     * CNV-106 Task A: `streamFor()` checks `isAi()` BEFORE `executionKind`
+     * (class docblock), so a row carrying BOTH `isAi: true` AND a non-null
+     * `executionKind` would load with no exception and silently route to
+     * 'ai', discarding the executionKind override. Rejected loudly at
+     * catalog-load time — the can-fail proof for this card's Task A.
+     */
+    public function testAiRowWithExecutionKindThrows(): void
+    {
+        $path = $this->writeCatalog(json_encode([
+            ['from' => 'mp3', 'to' => 'txt', 'category' => 'audio', 'isAi' => true, 'ocrCapable' => false, 'executionKind' => 'browser'],
+        ], JSON_THROW_ON_ERROR));
+        $registry = new ConversionRegistry(catalogPath: $path);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/isAi=true и executionKind/u');
+
+        $registry->getSupportedFormats();
+    }
+
     public function testMatrixIsMemoizedPerInstanceNotReReadFromDisk(): void
     {
         $path = $this->writeCatalog(json_encode([

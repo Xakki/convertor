@@ -16,10 +16,13 @@ use App\EventListener\ConversionChainListener;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
 use App\Exception\InsufficientBalanceException;
+use App\Exception\InvalidConversionOptionException;
 use App\Exception\WorkerUnavailableException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Repository\WorkerCapabilityRepository;
+use App\Service\Conversion\Settings\ConversionOptionsValidator;
+use App\Service\Conversion\Settings\SettingsAccessLevel;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
@@ -60,6 +63,13 @@ class ConversionManager
         // репозиторий; unit-тесты без БД получают null → гейт пропускается
         // (поведение по умолчанию = воркер доступен).
         private readonly ?WorkerCapabilityRepository $workerCapabilities = null,
+        // CNV-85 repair round: re-validates STORED options on retry against the
+        // retrying user's CURRENT plan (see retryConversion()). Опционален, как
+        // toggleService/workerCapabilities выше — в проде autowiring инжектит
+        // реальный сервис; unit-тесты без него получают null → re-validation
+        // пропускается (поведение по умолчанию до этой карточки = опции retry
+        // не проверялись вовсе).
+        private readonly ?ConversionOptionsValidator $optionsValidator = null,
     ) {
     }
 
@@ -83,8 +93,13 @@ class ConversionManager
 
         // Explicit OCR intent: single-hop only (OCR never via chain BFS).
         if ($ocr) {
+            // CNV-85: у OCR-маршрута профиля настроек нет — все правила
+            // `assignments` в config/catalog/conversion_settings.json объявлены
+            // с `"ocr": false`, поэтому контроллер отвергает опции ещё до
+            // Manager'а (422). Этот guard остаётся вторым рубежом; карточка,
+            // которая заведёт OCR-профиль, снимает ИМЕННО его.
             if ($options !== []) {
-                throw new \InvalidArgumentException('Image options are only supported for image conversions');
+                throw new \InvalidArgumentException('Conversion options are not supported for OCR conversions');
             }
             if (! $this->registry->isOcrSupported($fromFormat, $toFormat)) {
                 throw new \InvalidArgumentException("Unsupported OCR conversion: {$fromFormat} → {$toFormat}");
@@ -105,10 +120,12 @@ class ConversionManager
 
         // Direct single-worker pair ALWAYS preferred over chaining.
         if ($this->registry->isSupported($fromFormat, $toFormat)) {
+            // CNV-85: какие пары вообще имеют настраиваемые опции, решает
+            // каталог профилей (config/catalog/conversion_settings.json), а не
+            // хардкод «только image» — иначе доменные профили CNV-97/100/103
+            // отвергались бы здесь. Значения уже нормализованы и whitelisted
+            // валидатором на HTTP-границе.
             $category = $this->registry->getCategory($fromFormat, $toFormat);
-            if ($options !== [] && $category !== FileCategory::Image) {
-                throw new \InvalidArgumentException('Image options are only supported for image conversions');
-            }
 
             return $this->createSingleHop(
                 $user,
@@ -123,8 +140,11 @@ class ConversionManager
             );
         }
 
+        // Цепочка (multi-hop): профиль настроек назначается ТОЧНОЙ паре
+        // from→to одного воркера, у составного маршрута такой пары нет —
+        // опции здесь не поддерживаются (CNV-85 не меняет это правило).
         if ($options !== []) {
-            throw new \InvalidArgumentException('Image options are only supported for direct conversions');
+            throw new \InvalidArgumentException('Conversion options are only supported for direct conversions');
         }
 
         $path = $this->registry->findPath($fromFormat, $toFormat);
@@ -145,7 +165,7 @@ class ConversionManager
     /**
      * Обычная одношаговая конверсия (OCR / прямая isSupported-пара).
      *
-     * @param array<string, int|string> $options
+     * @param array<string, bool|int|string> $options
      */
     private function createSingleHop(
         User $user,
@@ -388,6 +408,8 @@ class ConversionManager
      * @throws GoneHttpException     исходник истёк / вычищен (→ 410)
      * @throws ConversionDisabledException пара отключена админом (→ 409)
      * @throws WorkerUnavailableException  ни одной строки в worker_capabilities (→ 503)
+     * @throws InvalidConversionOptionException сохранённая опция недоступна на ТЕКУЩЕМ
+     *                                          плане пользователя (→ 422, см. re-validation ниже)
      */
     public function retryConversion(int $id, User $user): Conversion
     {
@@ -406,7 +428,28 @@ class ConversionManager
         $isAi       = $source->isAi();
         $ocr        = $source->isOcr();
         $category   = $source->getCategory();
-        $options    = $source->getOptions();
+
+        // CNV-85 repair round: re-validate the STORED options through the same
+        // validator/path POST /convert uses, against the retrying user's
+        // CURRENT plan — not the plan at original creation time. A plan-gated
+        // value from a higher plan the user no longer has (downgrade, or the
+        // pair's profile changed/disappeared since) is rejected explicitly
+        // (422 via InvalidConversionOptionException, e.g. `option_plan_required`)
+        // — NEVER silently dropped to a default, which would replay a
+        // different result with no signal to the user. $optionsValidator is
+        // only null in unit tests that don't exercise options (same optional-
+        // dependency convention as $toggleService/$workerCapabilities above);
+        // the real service is always autowired in prod.
+        $options = $source->getOptions();
+        if ($this->optionsValidator !== null) {
+            $options = $this->optionsValidator->validate(
+                $fromFormat,
+                $toFormat,
+                $options,
+                SettingsAccessLevel::fromPlanName($user->getPlan()),
+                $ocr,
+            );
+        }
 
         if ($this->toggleService !== null && ! $this->toggleService->isEnabled($fromFormat, $toFormat)) {
             throw new ConversionDisabledException('Конвертация временно отключена');

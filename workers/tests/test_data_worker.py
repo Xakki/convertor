@@ -24,9 +24,19 @@ SAMPLE_RECORDS = [
 ]
 
 
-def _make_job(conv_id: int, input_path: Path, src_fmt: str, tgt_fmt: str) -> dict:
+def _make_job(
+    conv_id: int,
+    input_path: Path,
+    src_fmt: str,
+    tgt_fmt: str,
+    options: dict | list | None = None,
+) -> dict:
     """Build a job dict. input_path is the local file convert() reads
-    (base class injects it as _localInput after the S3 download)."""
+    (base class injects it as _localInput after the S3 download).
+
+    options defaults to [] — same on-wire shape as an empty PHP array
+    (docs/queue-contract.md: "Empty = []", not {}), matching real jobs.
+    """
     return {
         "conversionId": conv_id,
         "inputBucket": "convertor-inputs",
@@ -37,7 +47,7 @@ def _make_job(conv_id: int, input_path: Path, src_fmt: str, tgt_fmt: str) -> dic
         "targetFormat": tgt_fmt,
         "category": "data",
         "isAi": False,
-        "options": [],
+        "options": [] if options is None else options,
     }
 
 
@@ -583,6 +593,234 @@ class TestMalformedInputs:
         with patch("workers.data.worker.WORK_DIR", tmp_path):
             with pytest.raises(json.JSONDecodeError):
                 worker.convert(_make_job(30, src, "json", "csv"))
+
+
+# ---------------------------------------------------------------------------
+# CNV-104 — CSV settings: delimiter / quote applied to CSV OUTPUT.
+# ---------------------------------------------------------------------------
+
+class TestCsvSettings:
+    def _json_src(self, tmp_path: Path, payload) -> Path:
+        src = tmp_path / "data.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        return src
+
+    def test_delimiter_semicolon_changes_output_bytes(self, tmp_path: Path) -> None:
+        src = self._json_src(tmp_path, SAMPLE_RECORDS)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(
+                _make_job(50, src, "json", "csv", options={"delimiter": ";"})
+            )
+
+        header = Path(out_path).read_text(encoding="utf-8").splitlines()[0]
+        assert header == "name;age;city"
+        assert "," not in header
+
+    def test_delimiter_literal_tab_survives_into_output(self, tmp_path: Path) -> None:
+        # Literal TAB character (not an escaped name like "tab") — the real
+        # catalog `value` for this select option, per CNV-103.
+        src = self._json_src(tmp_path, SAMPLE_RECORDS)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(
+                _make_job(51, src, "json", "csv", options={"delimiter": "\t"})
+            )
+
+        header = Path(out_path).read_text(encoding="utf-8").splitlines()[0]
+        assert header == "name\tage\tcity"
+        assert "\t" in Path(out_path).read_bytes().decode("utf-8")
+
+    def test_delimiter_literal_pipe_survives_into_output(self, tmp_path: Path) -> None:
+        src = self._json_src(tmp_path, SAMPLE_RECORDS)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(
+                _make_job(52, src, "json", "csv", options={"delimiter": "|"})
+            )
+
+        header = Path(out_path).read_text(encoding="utf-8").splitlines()[0]
+        assert header == "name|age|city"
+
+    def test_quote_single_applied_to_field_needing_quoting(self, tmp_path: Path) -> None:
+        # note contains the (default) delimiter "," -> pandas QUOTE_MINIMAL
+        # quotes this field; the quote CHARACTER used must be the option.
+        payload = [{"name": "Alice", "note": "Hello, World"}]
+        src = self._json_src(tmp_path, payload)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(
+                _make_job(53, src, "json", "csv", options={"quote": "'"})
+            )
+
+        text = Path(out_path).read_text(encoding="utf-8")
+        assert "'Hello, World'" in text
+        assert '"Hello, World"' not in text
+
+    def test_quote_default_stays_double_quote(self, tmp_path: Path) -> None:
+        payload = [{"name": "Alice", "note": "Hello, World"}]
+        src = self._json_src(tmp_path, payload)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(_make_job(54, src, "json", "csv"))
+
+        text = Path(out_path).read_text(encoding="utf-8")
+        assert '"Hello, World"' in text
+
+    def test_no_options_csv_output_byte_identical_to_pre_cnv104(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        src = self._json_src(tmp_path, SAMPLE_RECORDS)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(_make_job(55, src, "json", "csv"))
+
+        expected_buf = tmp_path / "expected.csv"
+        pd.DataFrame(SAMPLE_RECORDS).to_csv(expected_buf, index=False, encoding="utf-8")
+        assert Path(out_path).read_bytes() == expected_buf.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# CNV-104 — JSON settings: pretty / indent applied to JSON output.
+# ---------------------------------------------------------------------------
+
+class TestJsonSettings:
+    def _csv_src(self, tmp_path: Path) -> Path:
+        import pandas as pd
+
+        src = tmp_path / "data.csv"
+        pd.DataFrame(SAMPLE_RECORDS).to_csv(src, index=False)
+        return src
+
+    def test_pretty_true_indent_4_reindents_output(self, tmp_path: Path) -> None:
+        src = self._csv_src(tmp_path)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(
+                _make_job(60, src, "csv", "json", options={"pretty": True, "indent": 4})
+            )
+
+        text = Path(out_path).read_text(encoding="utf-8")
+        lines = text.splitlines()
+        assert lines[0] == "["
+        assert lines[1] == "    {"  # 4-space indent, not the default 2
+        assert json.loads(text)[0]["name"] == "Alice"
+
+    def test_pretty_false_is_single_line_compact(self, tmp_path: Path) -> None:
+        src = self._csv_src(tmp_path)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(
+                _make_job(61, src, "csv", "json", options={"pretty": False})
+            )
+
+        text = Path(out_path).read_text(encoding="utf-8")
+        assert "\n" not in text
+        assert ", " not in text  # separators=(",", ":") — no padding spaces
+        assert json.loads(text)[0]["name"] == "Alice"
+
+    def test_indent_ignored_when_pretty_false(self, tmp_path: Path) -> None:
+        src = self._csv_src(tmp_path)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(
+                _make_job(62, src, "csv", "json", options={"pretty": False, "indent": 6})
+            )
+
+        text = Path(out_path).read_text(encoding="utf-8")
+        assert "\n" not in text  # indent=6 had no effect
+
+    def test_indent_alone_without_pretty_key_still_applies(self, tmp_path: Path) -> None:
+        # pretty absent (None) defaults to the pre-CNV-104 "already pretty"
+        # behaviour, so a bare indent still takes effect.
+        src = self._csv_src(tmp_path)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(
+                _make_job(63, src, "csv", "json", options={"indent": 6})
+            )
+
+        lines = Path(out_path).read_text(encoding="utf-8").splitlines()
+        assert lines[1] == "      {"  # 6-space indent
+
+    def test_no_options_json_output_byte_identical_to_pre_cnv104(self, tmp_path: Path) -> None:
+        src = self._csv_src(tmp_path)
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_path, _, _ = worker.convert(_make_job(64, src, "csv", "json"))
+
+        text = Path(out_path).read_text(encoding="utf-8")
+        data = json.loads(text)
+        expected = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+        assert text == expected
+
+
+# ---------------------------------------------------------------------------
+# CNV-104 — YAML/TOML/XML never read/receive settings; output stays
+# byte-identical regardless of what junk options a synthetic job carries.
+# ---------------------------------------------------------------------------
+
+class TestNonProfiledFormatsIgnoreOptions:
+    JUNK_OPTIONS = {"delimiter": ";", "quote": "'", "pretty": True, "indent": 8}
+
+    @pytest.mark.parametrize("tgt_fmt", ["yaml", "yml", "toml", "xml"])
+    def test_target_output_ignores_options(self, tmp_path: Path, tgt_fmt: str) -> None:
+        src = tmp_path / "data.json"
+        src.write_text(json.dumps(SAMPLE_RECORDS), encoding="utf-8")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            out_with, _, _ = worker.convert(
+                _make_job(70, src, "json", tgt_fmt, options=self.JUNK_OPTIONS)
+            )
+            out_without, _, _ = worker.convert(_make_job(71, src, "json", tgt_fmt))
+
+        assert Path(out_with).read_bytes() == Path(out_without).read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# CNV-104 — invalid UTF-8 input: predictable worker error, NO character
+# replacement (no U+FFFD fallback). Python/pandas strict decoding already
+# gives this for free; these tests pin it as a permanent regression guard.
+# ---------------------------------------------------------------------------
+
+class TestInvalidUtf8NoReplacement:
+    def test_invalid_utf8_csv_source_raises_unicode_decode_error(self, tmp_path: Path) -> None:
+        bad = tmp_path / "bad.csv"
+        bad.write_bytes(b"name,city\nAlice,\xffMoscow\n")
+        with pytest.raises(UnicodeDecodeError):
+            _read_data(bad)
+
+    def test_invalid_utf8_json_source_raises_unicode_decode_error(self, tmp_path: Path) -> None:
+        bad = tmp_path / "bad.json"
+        bad.write_bytes(b'{"name": "Alice", "note": "\xff"}')
+        with pytest.raises(UnicodeDecodeError):
+            _read_data(bad)
+
+    def test_invalid_utf8_via_convert_is_a_permanent_worker_error(self, tmp_path: Path) -> None:
+        # UnicodeDecodeError IS a ValueError subclass -> StreamConsumerBase.
+        # process_job() routes it through the `except ValueError` branch
+        # (permanent=True, no infinite retry) with no special-case code needed.
+        assert issubclass(UnicodeDecodeError, ValueError)
+
+        bad = tmp_path / "bad.csv"
+        bad.write_bytes(b"name,city\nAlice,\xffMoscow\n")
+        worker = _worker(tmp_path)
+
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError):
+                worker.convert(_make_job(80, bad, "csv", "json"))
 
 
 # ---------------------------------------------------------------------------

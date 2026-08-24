@@ -68,6 +68,19 @@ framework:
                     stream: conv.ai
                     group: convertor
 
+            # CNV-88: browser execution kind (screenshot/recording через
+            # изолированный Chromium runtime) — отдельный стрим, независимый от
+            # FileCategory (screenshot/recording хранят category image/video
+            # только для quota/retention). Ни один воркер ещё не потребляет
+            # conv.browser (CNV-82/90/91/113, вне этой карточки) — см. класс-
+            # докблок ConversionRegistry.
+            conv_browser:
+                dsn: 'conv+%env(REDIS_DSN)%'
+                serializer: messenger.transport.symfony_serializer
+                options:
+                    stream: conv.browser
+                    group: convertor
+
             failed:
                 dsn: '%env(REDIS_DSN)%'
                 serializer: messenger.transport.symfony_serializer

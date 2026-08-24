@@ -36,7 +36,7 @@ Backend построен по образцу **https://github.com/Xakki/ExRate**
 | Request-DTO (вход Controller → Manager) | `app-symfony/src/DTO/ConversionRequestDTO.php` |
 | Entity (персистентное состояние) | `app-symfony/src/Entity/Conversion.php`, `WorkerCapability.php`, `FileStorage.php` |
 | Custom Messenger-transport (XADD в KeyDB Streams) | `app-symfony/src/Messenger/Transport/CleanRedisTransport.php`, `CleanRedisTransportFactory.php` |
-| Messenger routing config (6 транспортов `conv_<key>` → stream `conv.<key>`) | `app-symfony/config/packages/messenger.yaml` |
+| Messenger routing config (7 транспортов `conv_<key>` → stream `conv.<key>`, включая `conv_browser` с CNV-88 — пока без консьюмера) | `app-symfony/config/packages/messenger.yaml` |
 | HTTP-вход (Controller) | `app-symfony/src/Controller/Api/ConversionController.php` |
 | Live-статус из Redis-хэша | `app-symfony/src/Service/Queue/ConversionStatusReader.php` |
 | Персист результата от воркера (relay) | `app-symfony/src/Service/Queue/ConversionResultPersister.php`, `Controller/Api/InternalWorkerController.php` |
@@ -78,7 +78,18 @@ Backend построен по образцу **https://github.com/Xakki/ExRate**
    `$this->bus->dispatch($message, [new TransportNamesStamp(['conv_' . $key])])`,
    где `$key = ConversionRegistry::streamFor($from, $to, $ocr)` — чистая
    routing-функция (`ai` для AI-пар, иначе категория, `markup` схлопывается в
-   `document`).
+   `document`; CNV-88: ряд каталога может нести необязательное поле
+   `executionKind` — override этой логики ПО ПАРЕ (независимый от category),
+   напр. `browser` — сегодня ни один ряд его не несёт, механизм существует
+   только на уровне схемы. CNV-106: `streamFor()` несёт ещё один, отдельный
+   4-й параметр `$animated` — request-scoped override той же формы, что и
+   `$ocr` (hardcoded allowlist в Registry, НЕ через каталожный `executionKind`
+   — тот override per-ПАРЕ и переписал бы маршрут ОБОИХ вариантов одной пары;
+   `$animated` нужен ИМЕННО потому, что одна and та же пара, напр. svg→gif,
+   может требовать двух разных маршрутов в зависимости от запроса, а
+   `conversion_pairs.json` хранит один маршрут на пару. Ни один живой
+   HTTP-запрос сегодня не может выставить этот флаг — ни Controller, ни DTO,
+   ни Manager его не читают).
 6. Symfony Messenger отправляет в кастомный транспорт `conv_<key>`
    (`CleanRedisTransportFactory`, DSN-схема `conv+redis://`), который делает
    `XADD conv.<key> * message '<чистый JSON>'` — БЕЗ стандартной обёртки

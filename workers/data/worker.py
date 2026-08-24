@@ -154,16 +154,32 @@ def _is_null(value: Any) -> bool:
     return value is None or (isinstance(value, float) and math.isnan(value))
 
 
-def _write_data(data: Any, out_path: Path) -> None:
-    """Write Python object *data* to *out_path* in the appropriate format."""
+def _write_data(data: Any, out_path: Path, options: dict[str, Any] | None = None) -> None:
+    """Write Python object *data* to *out_path* in the appropriate format.
+
+    *options* — normalized job options (CNV-103/CNV-104). Only the CSV and JSON
+    branches read it (data.csv/data.json profiles); YAML/TOML/XML never receive
+    a profile server-side and this function never looks at *options* for those
+    branches — their output is byte-identical regardless of what is passed in.
+    """
     ext = out_path.suffix.lower().lstrip(".")
+    opts = options or {}
 
     if ext == "json":
+        # pretty (bool) / indent (1-8, only meaningful when pretty) — CNV-104.
+        # No options at all ⇒ same call as before this card: indent=2 (already
+        # pretty), so "no options" stays byte-identical to pre-CNV-104 output.
+        pretty = opts.get("pretty")
+        pretty_effective = True if pretty is None else bool(pretty)
         # default=str: TOML/YAML yield native date/datetime objects json can't serialize.
-        out_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
+        if pretty_effective:
+            indent_val = opts.get("indent")
+            indent = int(indent_val) if indent_val is not None else 2
+            text = json.dumps(data, ensure_ascii=False, indent=indent, default=str)
+        else:
+            # indent has no effect when pretty is explicitly false (CNV-103/104).
+            text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str)
+        out_path.write_text(text, encoding="utf-8")
         return
 
     if ext in ("yaml", "yml"):
@@ -175,9 +191,20 @@ def _write_data(data: Any, out_path: Path) -> None:
         return
 
     if ext == "csv":
+        # delimiter/quote (literal single characters) / encoding (utf-8 only,
+        # already the fixed behaviour below) — CNV-104. Reading the *source*
+        # file bytes with strict UTF-8 decoding (below, and via read_text for
+        # the other readers) is what gives the "no replacement fallback"
+        # guarantee for invalid UTF-8 input: Python/pandas both raise
+        # UnicodeDecodeError (a ValueError subclass -> permanent worker error)
+        # instead of substituting U+FFFD.
         import pandas as pd
+        delimiter = str(opts.get("delimiter") or ",")
+        quotechar = str(opts.get("quote") or '"')
         df = pd.DataFrame(_records_for_csv(data))
-        df.to_csv(out_path, index=False, encoding="utf-8")
+        df.to_csv(
+            out_path, index=False, encoding="utf-8", sep=delimiter, quotechar=quotechar
+        )
         return
 
     if ext == "toml":
@@ -237,6 +264,14 @@ class DataWorker(StreamConsumerBase):
         target_fmt: str = job["targetFormat"].lower().lstrip(".")
         src_fmt = str(job["sourceFormat"]).lower().lstrip(".")
 
+        # Normalized job options (CNV-103): [] when empty (PHP empty array ->
+        # JSON []), a {} map otherwise. Workers are flag-agnostic — the catalog
+        # already validated/whitelisted these; only data.csv/data.json ever
+        # carry any (YAML/TOML/XML pairs get no profile and options stays {}).
+        options = job.get("options") or {}
+        if not isinstance(options, dict):
+            raise ValueError("invalid data options")
+
         if not src.is_file():
             raise FileNotFoundError(f"input file not found: {src}")
 
@@ -254,7 +289,7 @@ class DataWorker(StreamConsumerBase):
         out_path = out_dir / f"out-{conv_id}-{uuid.uuid4().hex}.{target_fmt}"
 
         data = _read_data(src)
-        _write_data(data, out_path)
+        _write_data(data, out_path, options)
 
         if not out_path.exists():
             raise RuntimeError("data conversion produced no output file")

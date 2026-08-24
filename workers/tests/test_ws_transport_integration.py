@@ -1,4 +1,4 @@
-"""Сквозной интеграционный smoke WS-транспорта по всем 6 типам воркеров (s1-13, §9).
+"""Сквозной интеграционный smoke WS-транспорта по подключаемым типам воркеров (s1-13, §9).
 
 Гоняет РЕАЛЬНЫЙ стек транспорта в одном процессе:
   - РЕАЛЬНЫЙ KeyDB (как test_gateway_reclaim_dlq.py: XREADGROUP/XAUTOCLAIM/XACK/PEL);
@@ -14,8 +14,10 @@ gateway'ский `KeyDbGateway`. Это структурно гарантиру�
 не коннектится к KeyDB/S3».
 
 Покрытие (критерии приёмки s1-13):
-  [1] Маршрутизация: по одному воркеру на каждый из 6 типов; каждый читается из
-      своего `conv.<type>` и получает ТОЛЬКО свою задачу (image ← только conv.image).
+  [1] Маршрутизация: по одному воркеру на каждый из ПОДКЛЮЧАЕМЫХ типов (`WORKER_TYPES`
+      минус `browser` — у `conv.browser` пока нет ни одного консьюмера, см.
+      `CONSUMED_WORKER_TYPES` ниже); каждый читается из своего `conv.<type>` и получает
+      ТОЛЬКО свою задачу (image ← только conv.image).
   [2] Мульти-тип (ffmpeg audio+video): ДВА `workerId`-соединения с НЕПЕРЕСЕКАЮЩИМИСЯ
       PEL (conv.audio ← ffmpeg-audio, conv.video ← ffmpeg-video).
   [3] Backstop-reclaim (§6.6 путь «b»): мёртвый воркер посреди задачи → per-type
@@ -68,6 +70,19 @@ CONV_ID = {
     "ai": 110, "document": 120, "image": 130,
     "audio": 140, "video": 150, "data": 160,
 }
+
+# `browser` — самостоятельный роутируемый тип (`WorkerType::Browser`, CNV-88), но у
+# `conv.browser` сегодня НЕТ ни одного подключаемого консьюмера: Chromium-воркер
+# появится только в CNV-82/CNV-113. Этот тест доказывает маршрутизацию, физически
+# подключая воркера и проверяя, что до него дошла ИМЕННО его задача — засеять
+# задачу в conv.browser сегодня означало бы лишь проверить, что она вечно висит в
+# PEL никем не забранная, это ничего не доказывает. Когда воркер появится —
+# вернуть `browser` в этот набор (и завести `CONV_ID["browser"]`).
+CONSUMED_WORKER_TYPES = tuple(t for t in WORKER_TYPES if t != "browser")
+assert set(CONSUMED_WORKER_TYPES) == set(CONV_ID), (
+    "CONV_ID должен зеркалить CONSUMED_WORKER_TYPES 1:1 — иначе тест ниже упадёт "
+    "по KeyError вместо явного assert здесь"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -288,30 +303,31 @@ class FakeWorker:
 
 
 # ---------------------------------------------------------------------------
-# [1] Маршрутизация: каждый из 6 типов получает ТОЛЬКО свой conv.<type>
+# [1] Маршрутизация: каждый из ПОДКЛЮЧАЕМЫХ типов получает ТОЛЬКО свой conv.<type>
+# (`browser` намеренно исключён — см. `CONSUMED_WORKER_TYPES` выше)
 # ---------------------------------------------------------------------------
 
-async def test_all_six_types_route_to_own_stream():
+async def test_all_consumed_types_route_to_own_stream():
     client, kv = await _new_real_kv()
     rec = RelayRecorder(status=200)
     try:
         await _wipe(client)
-        # Засеять по одной задаче в КАЖДЫЙ conv.<type>.
-        for t in WORKER_TYPES:
+        # Засеять по одной задаче в КАЖДЫЙ conv.<type> подключаемого типа.
+        for t in CONSUMED_WORKER_TYPES:
             await _seed(client, stream_for(t), _job(CONV_ID[t], t[:3], "out", t))
 
         async with _gateway(kv, rec) as (_gw, port):
-            workers = [FakeWorker(port, f"w-{t}", t) for t in WORKER_TYPES]
+            workers = [FakeWorker(port, f"w-{t}", t) for t in CONSUMED_WORKER_TYPES]
             for w in workers:
                 await w.start()
             try:
                 # Каждый воркер получает ровно свою задачу.
                 await _wait_jobs(workers)
-                # Все 6 persist'нуты и все PEL опустели (gateway XACK'нул).
-                await _until(lambda: len(rec.result_job_ids()) == len(WORKER_TYPES))
+                # Все persist'нуты и все PEL опустели (gateway XACK'нул).
+                await _until(lambda: len(rec.result_job_ids()) == len(CONSUMED_WORKER_TYPES))
 
                 async def _all_pels_empty() -> bool:
-                    for t in WORKER_TYPES:
+                    for t in CONSUMED_WORKER_TYPES:
                         if await _pending(client, stream_for(t)) != 0:
                             return False
                     return True

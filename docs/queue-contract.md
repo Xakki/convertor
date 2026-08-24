@@ -13,7 +13,10 @@ hash, and the result event. If you change a field name here, update the producer
 >   and phased implementation cards.
 
 > Единственный канонический контракт — per-routing-key стримы/транспорты
-> `conv.<key>` / `conv_<key>` (ключи `document/image/audio/video/data/ai`).
+> `conv.<key>` / `conv_<key>` (ключи `document/image/audio/video/data/ai`,
+> + `browser` с CNV-88 — транспорт/стрим существуют, но пока БЕЗ консьюмера:
+> ни один worker его не потребляет и ни одна реальная пара каталога в него не
+> маршрутизируется, см. `queue-streams.md`).
 > Соглашение об именовании задокументировано ниже; обе стороны таргетят его.
 
 ---

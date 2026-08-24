@@ -9,10 +9,13 @@ use App\Entity\FileStorage;
 use App\Entity\User;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
+use App\Exception\InvalidConversionOptionException;
 use App\Repository\ConversionRepository;
 use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
+use App\Service\Conversion\Settings\ConversionSettingsCatalog;
 use App\Service\Storage\S3Storage;
+use App\Tests\Unit\Service\Conversion\Settings\ConversionSettingsCatalogTest;
 use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
@@ -166,6 +169,118 @@ final class ConversionRetryDeleteControllerTest extends WebTestCase
         self::assertResponseStatusCodeSame(403);
     }
 
+    /**
+     * CNV-85 repair round, end-to-end through HTTP: the user used a plan-gated
+     * option (`tint`, minPlan: pro in the synthetic `test.grammar` profile —
+     * real pair csv→json, no live field is plan-gated above guest yet), then
+     * downgraded — retry MUST re-validate against the CURRENT plan and reject
+     * with the same machine-readable code POST /convert would give, not
+     * silently replay the now-inaccessible value.
+     */
+    public function testRetryRejectsWhenStoredOptionNoLongerAccessibleOnCurrentPlan(): void
+    {
+        $client = static::createClient();
+        // ЕДИНОЖДЫ, до первого запроса: контейнер не даёт заменить сервис,
+        // который уже был инициализирован — конструктор ConversionController
+        // резолвит ConversionSettingsCatalog (через presenter/validator) при
+        // первом же обращении, поэтому set() ПОСЛЕ запроса всегда упадёт.
+        static::getContainer()->set(
+            ConversionSettingsCatalog::class,
+            new ConversionSettingsCatalog(ConversionSettingsCatalogTest::grammarFixturePath()),
+        );
+        $owner = $this->persistUser();
+        $owner->setPlan('pro'); // на момент исходной конвертации
+        $token = $this->jwtFor($owner);
+        $conv  = $this->seedConversion(
+            $owner,
+            'csv',
+            'json',
+            ConversionStatus::Completed,
+            category: FileCategory::Data,
+            options: ['scale' => 20, 'tint' => '#010203'],
+        );
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->flush();
+
+        $owner->setPlan('free'); // понизился ДО ретрая
+        $em->flush();
+
+        // Только HEAD (exists) — до copyObject дело не доходит: отказ по
+        // опциям бросается раньше, чем S3-копирование исходника.
+        $this->overrideS3Sequence([
+            new MockResponse('', ['http_code' => 200]),
+        ]);
+
+        $client->request(
+            'POST',
+            '/api/v1/convert/' . $conv->getId() . '/retry',
+            server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"],
+        );
+
+        // Если упадёт на 404 — это не значит, что конверсия не найдена. Проверка
+        // опции пропущена, дошли до copyObject(), S3-очередь исчерпана, и
+        // TransportException упала в generic catch → 404. Так что 404 = gate не сработал.
+        self::assertResponseStatusCodeSame(422);
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame(InvalidConversionOptionException::CODE_PLAN_REQUIRED, $data['error'] ?? null);
+        self::assertStringContainsString('tint', $data['message'] ?? '');
+
+        // Новой строки в БД не появилось — исходную конверсию НЕ трогаем.
+        $repo = static::getContainer()->get(ConversionRepository::class);
+        self::assertNotNull($repo->find($conv->getId()));
+    }
+
+    /**
+     * CNV-100 — то же самое, что и `testRetryRejectsWhenStoredOptionNoLongerAccessibleOnCurrentPlan`
+     * выше, но БЕЗ override каталога — упражняет БОЕВОЙ `media.video` (поле
+     * `resolution`, `1080p` требует `minPlan: basic`), первый живой
+     * plan-гейтнутый field на retry-пути.
+     */
+    public function testRetryRejectsMediaVideoOptionAfterDowngradeThroughHttp(): void
+    {
+        $client = static::createClient();
+        $owner  = $this->persistUser();
+        $owner->setPlan('basic'); // на момент исходной конвертации
+        $token = $this->jwtFor($owner);
+        $conv  = $this->seedConversion(
+            $owner,
+            'mp4',
+            'mkv',
+            ConversionStatus::Completed,
+            category: FileCategory::Video,
+            options: ['resolution' => '1080p', 'fps' => '30'],
+        );
+        $em = static::getContainer()->get(EntityManagerInterface::class);
+        $em->flush();
+
+        $owner->setPlan('free'); // понизился ДО ретрая
+        $em->flush();
+
+        // Только HEAD (exists) — до copyObject дело не доходит: отказ по
+        // опциям бросается раньше, чем S3-копирование исходника.
+        $this->overrideS3Sequence([
+            new MockResponse('', ['http_code' => 200]),
+        ]);
+
+        $client->request(
+            'POST',
+            '/api/v1/convert/' . $conv->getId() . '/retry',
+            server: ['HTTP_AUTHORIZATION' => "Bearer {$token}"],
+        );
+
+        // Если упадёт на 404 — это не значит, что конверсия не найдена. Проверка
+        // опции пропущена, дошли до copyObject(), S3-очередь исчерпана, и
+        // TransportException упала в generic catch → 404. Так что 404 = gate не сработал.
+        self::assertResponseStatusCodeSame(422);
+        $data = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertSame(InvalidConversionOptionException::CODE_PLAN_REQUIRED, $data['error'] ?? null);
+        self::assertStringContainsString('resolution', $data['message'] ?? '');
+
+        // Новой строки в БД не появилось — исходную конверсию НЕ трогаем.
+        $repo = static::getContainer()->get(ConversionRepository::class);
+        self::assertNotNull($repo->find($conv->getId()));
+    }
+
     public function testDeleteHardRemovesRow(): void
     {
         $client = static::createClient();
@@ -291,12 +406,15 @@ final class ConversionRetryDeleteControllerTest extends WebTestCase
         return $guest;
     }
 
+    /** @param array<string, bool|int|string> $options */
     private function seedConversion(
         User $owner,
         string $from,
         string $to,
         ConversionStatus $status,
         bool $withOutput = false,
+        FileCategory $category = FileCategory::Image,
+        array $options = [],
     ): Conversion {
         $em = static::getContainer()->get(EntityManagerInterface::class);
 
@@ -325,10 +443,11 @@ final class ConversionRetryDeleteControllerTest extends WebTestCase
             ->setOutputFile($outputFile)
             ->setFromFormat($from)
             ->setToFormat($to)
-            ->setCategory(FileCategory::Image)
+            ->setCategory($category)
             ->setStatus($status)
             ->setIsAi(false)
-            ->setIsOcr(false);
+            ->setIsOcr(false)
+            ->setOptions($options);
         $em->persist($conv);
         $this->toRemove[] = $conv;
 

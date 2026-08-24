@@ -183,6 +183,48 @@ async def test_reclaim_stale_fresh_stream_returns_none():
 
 
 @pytest.mark.asyncio
+async def test_reclaim_and_expiry_scan_harmless_on_never_created_stream(caplog):
+    """CNV-88 Task B: `WORKER_TYPES`/`ALLOWED_WORKER_TYPES` теперь несут `browser`
+    (69bbc7b), а `reclaim._sweep_all_types`/`expiry.sweep_all_types` безусловно
+    итерируют ПО ВСЕМ `WORKER_TYPES` при каждом тике — включая типы без единого
+    подключённого консьюмера (`conv.browser` сегодня). Доказываем на РЕАЛЬНОМ
+    KeyDB для стрима, который НИ РАЗУ не существовал (не только пуст — как
+    `conv.browser` до первого деплоя этого изменения):
+      - `XGROUP CREATE ... MKSTREAM` (`ensure_group`, вызывается и `reclaim_idle`,
+        и `get_last_delivered_id`) не падает и не логирует WARNING/ERROR;
+      - `XAUTOCLAIM` (reclaim.py-путь) на только что созданном пустом стриме
+        возвращает `[]`, не падает;
+      - `XINFO GROUPS` + `XRANGE` (expiry.py-путь) на нём же не падают, backlog
+        пуст.
+    Единственный побочный эффект — MKSTREAM реально создаёт пустой стрим + группу
+    в KeyDB (не no-op), это НЕ гонка/ошибка, но новый persistent-ключ.
+    """
+    client, gw = await _new_gateway()
+    stream = stream_for(_unique_type())
+    consumer = "gw-reclaim-test"
+    try:
+        assert await client.exists(stream) == 0, "стрим гарантированно не существует"
+
+        with caplog.at_level("WARNING", logger="workers.gateway.keydb"):
+            # reclaim.py-путь: ensure_group(MKSTREAM) + XAUTOCLAIM на пустом стриме.
+            assert await gw.reclaim_idle(stream, consumer, min_idle_ms=0) == []
+            # expiry.py-путь: ensure_group + XINFO GROUPS + XRANGE на пустом стриме.
+            assert await gw.get_last_delivered_id(stream) == "0-0"
+            assert await gw.scan_undelivered_backlog(stream, "0-0", count=10) == []
+
+        assert caplog.records == [], (
+            f"ни один sweep-путь не должен логировать WARNING/ERROR на пустом "
+            f"стриме без консьюмера, получили: {[r.message for r in caplog.records]}"
+        )
+        # MKSTREAM реально создал пустой стрим с группой — не поднял исключение.
+        assert await client.exists(stream) == 1
+        assert await _pending_count(client, stream) == 0
+    finally:
+        await _cleanup(client, stream)
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_get_job_meta_missing_returns_none():
     client, gw = await _new_gateway()
     try:

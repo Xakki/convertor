@@ -395,11 +395,11 @@ async def test_run_expiry_loop_ticks_and_stops():
     )
     try:
         async with asyncio.timeout(3.0):
-            while fake.calls < 6:  # WORKER_TYPES has 6 entries — one full sweep
+            while fake.calls < 7:  # WORKER_TYPES has 7 entries (incl. browser) — one full sweep
                 await asyncio.sleep(0.01)
     finally:
         stop_event.set()
         await asyncio.wait_for(task, timeout=3.0)
 
-    assert fake.calls >= 6
+    assert fake.calls >= 7
     assert relay.calls == []  # empty backlog everywhere — never called PHP

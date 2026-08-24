@@ -24,7 +24,7 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  */
 final class FormatsCatalogIndependenceTest extends WebTestCase
 {
-    private const EXPECTED_CATALOG_PAIR_COUNT = 398;
+    private const EXPECTED_CATALOG_PAIR_COUNT = 402;
 
     private function withEmptyWorkerCapabilities(): void
     {

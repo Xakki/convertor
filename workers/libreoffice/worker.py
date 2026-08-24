@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import json
 import logging
 import os
 import shutil
@@ -112,6 +113,102 @@ _SOFFICE_FILTER: dict[str, str] = {
     "ppt":  "ppt",
     "odp":  "odp",
 }
+
+# CNV-98: document settings application (pageRange/orientation → PDF export,
+# markdownDialect → txt→md pandoc writer). Normalized job['options'] arrive
+# ONLY for the two profiled document.pdf pairs (txt→pdf, md→pdf) and the two
+# markdown-target pairs (pdf→md via document.markdown.verbatim — encoding
+# only, no dialect; txt→md via document.markdown — encoding + markdownDialect)
+# — CNV-97/98 gives every other pair (incl. all docx/odt) an empty options
+# dict, so this worker stays flag-agnostic: it applies whatever is present
+# and never special-cases a source/target format to decide WHETHER to read
+# options.
+_PDF_EXPORT_FILTER = "writer_pdf_Export"
+
+
+def _reversed_page_range(page_range: str) -> bool:
+    """True, если хотя бы один элемент `a-b` каталожного pageRange перевёрнут (a>b).
+
+    Грамматика каталога (CNV-85/97) — `[1-9][0-9]*(-[1-9][0-9]*)?(,...)*` — не
+    может выразить start≤end, так что `5-3` проходит серверную валидацию и
+    доходит сюда. CNV-98 AC: worker детерминированно ОТКЛОНЯЕТ такое значение
+    (не переставляет границы молча — это замаскировало бы опечатку клиента).
+    """
+    for part in page_range.split(","):
+        if "-" in part:
+            start_s, end_s = part.split("-", 1)
+            if int(start_s) > int(end_s):
+                return True
+    return False
+
+
+def _pdf_convert_to(page_range: str | None) -> str:
+    """soffice `--convert-to` filter spec для PDF-экспорта, опционально с page range.
+
+    Catalog `pageRange` (CNV-85/97) разделяет элементы запятой; LibreOffice
+    FilterData `PageRange` (writer_pdf_Export) ждёт `;` — транслируем здесь,
+    единственном месте построения PDF export filter string (подтверждено
+    live-пробой: `soffice --convert-to 'pdf:writer_pdf_Export:{"PageRange":
+    {"type":"string","value":"1"}}'` реально ограничивает число страниц).
+    """
+    if not page_range:
+        return _SOFFICE_FILTER["pdf"]
+    lo_range = page_range.replace(",", ";")
+    filter_data = json.dumps({"PageRange": {"type": "string", "value": lo_range}})
+    return f"pdf:{_PDF_EXPORT_FILTER}:{filter_data}"
+
+
+def _apply_docx_orientation(docx_path: Path, orientation: str) -> None:
+    """Правит page orientation промежуточного .docx перед финальным PDF-экспортом.
+
+    writer_pdf_Export FilterData не содержит свойства ориентации — единственный
+    надёжный рычаг это page setup исходного документа (подтверждено пробой:
+    .docx с переставленными page_width/page_height остаётся landscape после
+    soffice --convert-to pdf). python-docx НЕ переставляет page_width/
+    page_height при смене .orientation (документированная особенность API) —
+    переставляем сами, иначе PDF унаследует старые пропорции при новом enum.
+
+    section.page_width/page_height бывают None (нет явного <w:pgSz> в XML) —
+    воспроизведено реальным пробегом на .docx, который pandoc материализует
+    для markup-источников (md/rst/latex/wiki) перед PDF-экспортом: pandoc не
+    пишет explicit page size, полагаясь на дефолт Word/LO. Соффис-путь
+    (txt/office-источники, .docx от soffice) всегда пишет explicit pgSz —
+    там это ветвление не срабатывает. Фолбэк — стандартный Word Letter
+    (8.5×11in, дефолт самого python-docx для чистого Document()).
+
+    CNV-98 hardening: `python-docx` — зависимость этого пути, добавленная
+    этой же карточкой (`docker/workers/requirements-libreoffice.txt`). На
+    хосте со старым образом (собран до CNV-98) импорт упадёт `ImportError` —
+    без перехвата это ушло бы в generic `except Exception` в
+    `stream_consumer.py` (permanent=False) и job ретраился бы бесконечно на
+    заведомо непочинимой ошибке. Ловим и переупаковываем в `ValueError`
+    (permanent=True — контракт `StreamConsumerBase.process_job()`), чтобы
+    ошибка была видна сразу, а не тонула в бесконечных ретраях.
+    """
+    try:
+        import docx as docx_lib  # локальный импорт: нужен только на этом пути (CNV-98)
+        from docx.enum.section import WD_ORIENT
+        from docx.shared import Inches
+    except ImportError as exc:
+        raise ValueError(
+            "orientation option requires python-docx, which is missing from "
+            "this worker image — the image predates CNV-98 and needs a "
+            "rebuild/redeploy (docker/workers/requirements-libreoffice.txt)"
+        ) from exc
+
+    wants_landscape = orientation == "landscape"
+    target_enum = WD_ORIENT.LANDSCAPE if wants_landscape else WD_ORIENT.PORTRAIT
+    document = docx_lib.Document(str(docx_path))
+    for section in document.sections:
+        width = section.page_width or Inches(8.5)
+        height = section.page_height or Inches(11)
+        is_landscape = width > height
+        if is_landscape != wants_landscape:
+            width, height = height, width
+        section.page_width, section.page_height = width, height
+        section.orientation = target_enum
+    document.save(str(docx_path))
+
 
 # pandoc reader name per source extension.
 _PANDOC_READER: dict[str, str] = {
@@ -258,14 +355,20 @@ def _pack_jpg_pages(
 # --------------------------------------------------------------------------
 
 async def _convert_markup(
-    src: Path, src_fmt: str, target: str, work_dir: Path, stem: str
+    src: Path, src_fmt: str, target: str, work_dir: Path, stem: str, options: dict[str, Any]
 ) -> Path:
-    """Markup (md/rst/latex/wiki): pandoc → docx → soffice при необходимости."""
+    """Markup (md/rst/latex/wiki): pandoc → docx → soffice при необходимости.
+
+    target=="md" здесь недостижим на практике: `_convert()` перехватывает
+    target=="md" для ЛЮБОГО src_fmt раньше (см. блок «target md: always
+    pandoc» ниже) — ветка оставлена как defensive fallback этой функции.
+    """
     out = work_dir / f"{stem}.{target}"
     reader = _PANDOC_READER[src_fmt]
 
     if target == "md":
-        await run_pandoc(src, out, reader, "gfm")
+        dialect = str(options.get("markdownDialect") or "gfm")
+        await run_pandoc(src, out, reader, dialect)
         return out
     if target == "docx":
         await run_pandoc(src, out, reader, "docx")
@@ -275,12 +378,19 @@ async def _convert_markup(
         tmp_dir = Path(tmp)
         docx_path = tmp_dir / f"{stem}.docx"
         await run_pandoc(src, docx_path, reader, "docx")
-        await run_soffice(docx_path, work_dir, _SOFFICE_FILTER[target])
+        if target == "pdf":
+            # CNV-98: md→pdf — один из двух document.pdf профилей (CNV-97).
+            orientation = options.get("orientation")
+            if orientation:
+                _apply_docx_orientation(docx_path, orientation)
+            await run_soffice(docx_path, work_dir, _pdf_convert_to(options.get("pageRange")))
+        else:
+            await run_soffice(docx_path, work_dir, _SOFFICE_FILTER[target])
         return out
 
 
 async def _convert(
-    src: Path, src_fmt: str, target: str, work_dir: Path
+    src: Path, src_fmt: str, target: str, work_dir: Path, options: dict[str, Any]
 ) -> tuple[Path, str, str]:
     """Produce output from src; returns (path, mime, delivery_ext)."""
     stem = src.stem
@@ -300,6 +410,12 @@ async def _convert(
             txt_path = Path(tmp) / f"{stem}.txt"
             await run_pdftotext(src, txt_path)
             if target in ("txt", "md"):
+                # CNV-98: pdf→md намеренно НЕ прогоняется через pandoc — сырой
+                # -layout вывод pdftotext (с фикс. отступами колонок) ломает
+                # markdown-reader (≥4 пробела → code block). markdownDialect
+                # для этой пары в CNV-97 назначен, но реально влияет только на
+                # txt→md (см. блок «target md» ниже); scoped-решение, см.
+                # Execution Log CNV-98 — ack team-lead.
                 out.write_bytes(txt_path.read_bytes())
                 return out, _MIME[target], target
             if target == "docx":
@@ -317,18 +433,24 @@ async def _convert(
 
     # --- target md: always pandoc ---
     if target == "md":
+        # CNV-98: markdownDialect (document.markdown profile) реально доходит
+        # сюда только для txt→md — txt не входит в _PANDOC_READER, поэтому
+        # берёт ветку soffice→docx→pandoc ниже. Остальные источники этой
+        # ветки (rst/latex/wiki/docx/odt/html) без профиля — options всегда
+        # {} → dialect тихо остаётся дефолтным "gfm", поведение не меняется.
+        dialect = str(options.get("markdownDialect") or "gfm")
         if src_fmt in _PANDOC_READER:
-            await run_pandoc(src, out, _PANDOC_READER[src_fmt], "gfm")
+            await run_pandoc(src, out, _PANDOC_READER[src_fmt], dialect)
             return out, _MIME["md"], target
         with tempfile.TemporaryDirectory(prefix="md-tmp-") as tmp:
             tmp_dir = Path(tmp)
             await run_soffice(src, tmp_dir, _SOFFICE_FILTER["docx"])
-            await run_pandoc(tmp_dir / f"{stem}.docx", out, "docx", "gfm")
+            await run_pandoc(tmp_dir / f"{stem}.docx", out, "docx", dialect)
             return out, _MIME["md"], target
 
     # --- markup sources ---
     if src_fmt in _MARKUP_SOURCES:
-        produced = await _convert_markup(src, src_fmt, target, work_dir, stem)
+        produced = await _convert_markup(src, src_fmt, target, work_dir, stem, options)
         return produced, _MIME.get(target, "application/octet-stream"), target
 
     # --- plain soffice path (office / calc / impress / html) ---
@@ -336,6 +458,25 @@ async def _convert(
         raise ValueError(f"unsupported target: {target}")
     if src_fmt in _IMPRESS_SOURCES and target not in _IMPRESS_TARGETS:
         raise ValueError(f"unsupported conversion: {src_fmt} → {target}")
+
+    if target == "pdf":
+        # CNV-98: txt→pdf — второй document.pdf профиль (CNV-97). orientation
+        # требует промежуточного .docx (page setup правится там, см.
+        # _apply_docx_orientation) — только когда реально запрошена, чтобы не
+        # трогать привычный однопроходный путь для непрофилированных pdf-target
+        # пар (docx/xlsx/pptx/html/pages→pdf и пр., у которых options всегда {}).
+        orientation = options.get("orientation")
+        if orientation:
+            with tempfile.TemporaryDirectory(prefix="doc-pdf-") as tmp:
+                tmp_dir = Path(tmp)
+                docx_path = tmp_dir / f"{stem}.docx"
+                await run_soffice(src, tmp_dir, _SOFFICE_FILTER["docx"])
+                _apply_docx_orientation(docx_path, orientation)
+                await run_soffice(docx_path, work_dir, _pdf_convert_to(options.get("pageRange")))
+            return out, _MIME.get(target, "application/octet-stream"), target
+        await run_soffice(src, work_dir, _pdf_convert_to(options.get("pageRange")))
+        return out, _MIME.get(target, "application/octet-stream"), target
+
     await run_soffice(src, work_dir, _SOFFICE_FILTER[target])
     return out, _MIME.get(target, "application/octet-stream"), target
 
@@ -354,6 +495,13 @@ class LibreOfficeWorker(StreamConsumerBase):
         src = Path(job["_localInput"])
         target_fmt: str = job["targetFormat"].lower().lstrip(".")
         src_fmt = str(job["sourceFormat"]).lower().lstrip(".")
+        # CNV-98: нормализованные options CNV-85/97 — уже провалидированы
+        # бэкендом (grammar/enum/pair-access); worker их не ревалидирует,
+        # только применяет (flag-agnostic), кроме одного детерминированного
+        # guard'а ниже (reversed pageRange — не выразим закрытой grammar'ой).
+        options = job.get("options") or {}
+        if not isinstance(options, dict):
+            raise ValueError("invalid document options")
 
         if not src.is_file():
             raise FileNotFoundError(f"input not found: {src}")
@@ -368,6 +516,13 @@ class LibreOfficeWorker(StreamConsumerBase):
                 "worker image — cannot import Apple Pages files"
             )
 
+        if target_fmt == "pdf":
+            page_range = options.get("pageRange")
+            if page_range and _reversed_page_range(str(page_range)):
+                raise ValueError(
+                    f"invalid pageRange: reversed range in {page_range!r} (start>end)"
+                )
+
         out_dir = Path(job.get("_jobDir") or str(WORK_DIR))
         out_dir.mkdir(parents=True, exist_ok=True)
         job_dir = out_dir / f"lo-{conv_id}-{uuid.uuid4().hex}"
@@ -376,7 +531,7 @@ class LibreOfficeWorker(StreamConsumerBase):
         delivery_ext = target_fmt
         try:
             produced, mime, delivery_ext = asyncio.run(
-                _convert(src, src_fmt, target_fmt, job_dir)
+                _convert(src, src_fmt, target_fmt, job_dir, options)
             )
 
             if not produced.exists():

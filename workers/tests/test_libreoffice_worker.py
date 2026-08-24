@@ -6,6 +6,7 @@ the (source,target) routing, format validation, output placement, MIME selection
 and the conv.document streams subscription — without real LibreOffice.
 """
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -16,6 +17,7 @@ from workers.libreoffice.worker import (
     LibreOfficeWorker,
     _MATRIX,
     _MIME,
+    _apply_docx_orientation,
 )
 
 
@@ -338,3 +340,245 @@ class TestLibreOfficeConvertErrors:
              patch("workers.libreoffice.worker.run_soffice", side_effect=fake_noop):
             with pytest.raises(RuntimeError, match="no output"):
                 worker.convert(_make_job(23, src, "docx", "pdf"))
+
+
+# ---------------------------------------------------------------------------
+# CNV-98 — document settings application (pageRange/orientation/markdownDialect)
+# Routing/call-argument assertions with mocked engines. Real end-to-end fixture
+# tests (actual page counts/sizes via pdfinfo) live in
+# test_libreoffice_integration.py — real soffice/pandoc are required there
+# because _apply_docx_orientation needs a real .docx (python-docx cannot open
+# the dummy bytes _Engines writes).
+# ---------------------------------------------------------------------------
+
+class TestLibreOfficeDocumentSettings:
+    def test_reversed_page_range_rejected(self, tmp_path):
+        src = _src(tmp_path, "in.txt")
+        worker = _worker(tmp_path)
+        job = _make_job(200, src, "txt", "pdf")
+        job["options"] = {"pageRange": "5-3"}
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="reversed"):
+                worker.convert(job)
+
+    def test_reversed_page_range_in_later_element_rejected(self, tmp_path):
+        src = _src(tmp_path, "in.txt")
+        worker = _worker(tmp_path)
+        job = _make_job(2001, src, "txt", "pdf")
+        job["options"] = {"pageRange": "1,9-7"}
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="reversed"):
+                worker.convert(job)
+
+    def test_equal_page_range_bounds_not_reversed(self, tmp_path):
+        """a==b (e.g. "3-3") is a valid single-page range, not reversed."""
+        src = _src(tmp_path, "in.txt")
+        worker = _worker(tmp_path)
+        job = _make_job(201, src, "txt", "pdf")
+        job["options"] = {"pageRange": "3-3"}
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), _Engines():
+            out_path, mime, ext = worker.convert(job)
+        assert ext == "pdf"
+
+    def test_docx_target_ignores_orientation_and_page_range_even_if_present(self, tmp_path):
+        """DOCX/ODT pairs always arrive with options={} in production (CNV-97
+        assigns them no profile) — but even if orientation/pageRange somehow
+        showed up in the payload, the worker must not apply them to a non-pdf
+        target: only target=="pdf" reads these keys."""
+        src = _src(tmp_path, "in.odt")
+        worker = _worker(tmp_path)
+        job = _make_job(202, src, "odt", "docx")
+        job["options"] = {"orientation": "landscape", "pageRange": "1,3"}
+        calls: list[str] = []
+
+        async def fake_soffice(src_, out_dir, convert_to):
+            calls.append(convert_to)
+            (Path(out_dir) / f"{Path(src_).stem}.docx").write_bytes(b"soffice-out")
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker.run_soffice", side_effect=fake_soffice):
+            worker.convert(job)
+        assert calls == ["docx"], f"orientation/pageRange must not affect a non-pdf target, got {calls}"
+
+    def test_pdf_target_no_options_stays_single_step(self, tmp_path):
+        """No orientation/pageRange → the original single soffice call, unchanged
+        (no intermediate .docx materialized) for every non-triangle pdf-target
+        pair (docx/xlsx/pptx/html/pages→pdf etc., which always get options={})."""
+        src = _src(tmp_path, "in.docx")
+        worker = _worker(tmp_path)
+        job = _make_job(2021, src, "docx", "pdf")  # options == [] by default → {}
+        calls: list[str] = []
+
+        async def fake_soffice(src_, out_dir, convert_to):
+            calls.append(convert_to)
+            ext = convert_to.split(":")[0]
+            (Path(out_dir) / f"{Path(src_).stem}.{ext}").write_bytes(b"soffice-out")
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker.run_soffice", side_effect=fake_soffice):
+            worker.convert(job)
+        assert calls == ["pdf"], f"expected a single plain PDF export, got {calls}"
+
+    def test_page_range_translates_comma_to_semicolon_in_filter_data(self, tmp_path):
+        src = _src(tmp_path, "in.txt")
+        worker = _worker(tmp_path)
+        job = _make_job(203, src, "txt", "pdf")
+        job["options"] = {"pageRange": "1,3-4"}
+        calls: list[str] = []
+
+        async def fake_soffice(src_, out_dir, convert_to):
+            calls.append(convert_to)
+            ext = convert_to.split(":")[0]
+            (Path(out_dir) / f"{Path(src_).stem}.{ext}").write_bytes(b"soffice-out")
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker.run_soffice", side_effect=fake_soffice):
+            worker.convert(job)
+        assert len(calls) == 1
+        assert calls[0].startswith("pdf:writer_pdf_Export:")
+        assert '"value": "1;3-4"' in calls[0], f"comma not translated to semicolon: {calls[0]}"
+
+    def test_orientation_routes_through_intermediate_docx_then_pdf_filter(self, tmp_path):
+        """orientation requires materializing an intermediate .docx (page setup is
+        edited there, see _apply_docx_orientation) BEFORE the final PDF export —
+        this pins the call SEQUENCE and that pageRange still rides along on the
+        final export. _apply_docx_orientation itself is mocked here (it needs a
+        real .docx, which _Engines-style dummy bytes are not) — its real effect
+        on PDF page geometry is proven in test_libreoffice_integration.py."""
+        src = _src(tmp_path, "in.txt")
+        worker = _worker(tmp_path)
+        job = _make_job(204, src, "txt", "pdf")
+        job["options"] = {"orientation": "landscape", "pageRange": "1,3"}
+        calls: list[str] = []
+
+        async def fake_soffice(src_, out_dir, convert_to):
+            calls.append(convert_to)
+            ext = convert_to.split(":")[0]
+            (Path(out_dir) / f"{Path(src_).stem}.{ext}").write_bytes(b"soffice-out")
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker.run_soffice", side_effect=fake_soffice), \
+             patch("workers.libreoffice.worker._apply_docx_orientation") as mock_orient:
+            worker.convert(job)
+
+        assert calls[0] == "docx", "must materialize an intermediate .docx first"
+        assert calls[1].startswith("pdf:writer_pdf_Export:")
+        assert '"value": "1;3"' in calls[1]
+        mock_orient.assert_called_once()
+        assert mock_orient.call_args[0][1] == "landscape"
+
+    def test_apply_docx_orientation_swaps_landscape_back_to_portrait(self, tmp_path):
+        """Direct unit test on _apply_docx_orientation itself (no soffice needed
+        — pure python-docx round-trip, unlike the mocked-call test above). Pins
+        the swap-BACK-to-portrait direction: a reviewer mutation of the guard
+        from `if is_landscape != wants_landscape:` to `if wants_landscape and
+        is_landscape != wants_landscape:` silently drops this branch (portrait
+        never triggers a swap) while every existing test (incl. the mocked one
+        above, which never inspects real geometry) stayed green. See CNV-98
+        Execution Log / grooming card for the can-fail proof of this test."""
+        docx_lib = pytest.importorskip("docx", reason="python-docx only in the libreoffice worker image")
+        from docx.enum.section import WD_ORIENT
+        from docx.shared import Inches
+
+        docx_path = tmp_path / "landscape-default.docx"
+        document = docx_lib.Document()
+        section = document.sections[0]
+        section.page_width, section.page_height = Inches(11), Inches(8.5)
+        section.orientation = WD_ORIENT.LANDSCAPE
+        document.save(str(docx_path))
+
+        _apply_docx_orientation(docx_path, "portrait")
+
+        result = docx_lib.Document(str(docx_path))
+        section = result.sections[0]
+        assert section.page_width < section.page_height, (
+            f"expected portrait geometry after swap-back, got "
+            f"{section.page_width}x{section.page_height}"
+        )
+        assert section.orientation == WD_ORIENT.PORTRAIT
+
+    def test_orientation_missing_python_docx_fails_permanent_not_retried(self, tmp_path, monkeypatch):
+        """CNV-98 hardening: on a stale worker image (built before python-docx
+        was added to requirements-libreoffice.txt), `import docx` inside
+        _apply_docx_orientation raises ImportError. Uncaught, that ImportError
+        would fall into stream_consumer.py's generic `except Exception`
+        (permanent=False) and the job would retry forever on an error no retry
+        can ever fix. It must surface as ValueError (permanent=True — same
+        contract as the reversed-pageRange rejection above), with a message
+        naming the actual cause. Simulates the missing dependency by forcing
+        `import docx` to fail (sys.modules[name] = None is the standard trick:
+        the import system raises ImportError for any module present in
+        sys.modules with value None) rather than actually uninstalling the
+        package from this test image."""
+        src = _src(tmp_path, "in.txt")
+        worker = _worker(tmp_path)
+        job = _make_job(2041, src, "txt", "pdf")
+        job["options"] = {"orientation": "landscape"}
+
+        async def fake_soffice(src_, out_dir, convert_to):
+            (Path(out_dir) / f"{Path(src_).stem}.docx").write_bytes(b"soffice-out")
+
+        monkeypatch.setitem(sys.modules, "docx", None)
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker.run_soffice", side_effect=fake_soffice):
+            with pytest.raises(ValueError, match="python-docx"):
+                worker.convert(job)
+
+    def test_txt_to_md_threads_markdown_dialect_to_pandoc_writer(self, tmp_path):
+        src = _src(tmp_path, "in.txt")
+        worker = _worker(tmp_path)
+        job = _make_job(205, src, "txt", "md")
+        job["options"] = {"markdownDialect": "markdown_strict"}
+        pandoc_calls: list[tuple[str, str]] = []
+
+        async def fake_pandoc(src_, out_path, reader, writer):
+            pandoc_calls.append((reader, writer))
+            Path(out_path).write_bytes(b"pandoc-out")
+
+        async def fake_soffice(src_, out_dir, convert_to):
+            (Path(out_dir) / f"{Path(src_).stem}.docx").write_bytes(b"soffice-out")
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker.run_soffice", side_effect=fake_soffice), \
+             patch("workers.libreoffice.worker.run_pandoc", side_effect=fake_pandoc):
+            worker.convert(job)
+        assert pandoc_calls == [("docx", "markdown_strict")]
+
+    def test_txt_to_md_default_dialect_is_gfm(self, tmp_path):
+        """No markdownDialect option → writer stays "gfm" (pre-CNV-98 default,
+        unchanged for every non-triangle →md pair too)."""
+        src = _src(tmp_path, "in.txt")
+        worker = _worker(tmp_path)
+        job = _make_job(206, src, "txt", "md")  # options == [] by default → {}
+        pandoc_calls: list[tuple[str, str]] = []
+
+        async def fake_pandoc(src_, out_path, reader, writer):
+            pandoc_calls.append((reader, writer))
+            Path(out_path).write_bytes(b"pandoc-out")
+
+        async def fake_soffice(src_, out_dir, convert_to):
+            (Path(out_dir) / f"{Path(src_).stem}.docx").write_bytes(b"soffice-out")
+
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), \
+             patch("workers.libreoffice.worker.run_soffice", side_effect=fake_soffice), \
+             patch("workers.libreoffice.worker.run_pandoc", side_effect=fake_pandoc):
+            worker.convert(job)
+        assert pandoc_calls == [("docx", "gfm")]
+
+    def test_pdf_to_md_dialect_option_has_no_effect_on_verbatim_wrap(self, tmp_path):
+        """CNV-98 scoped decision (Execution Log, ack team-lead): pdf→md keeps its
+        pre-existing verbatim pdftotext wrap — routing raw -layout text through
+        pandoc risks corrupting extraction (4-space indent → code blocks).
+        markdownDialect is assigned to this pair by CNV-97 but has NO effect
+        here; only txt→md genuinely threads it. This pins that scoped no-op
+        (no can-fail mutation: there is no dialect-reading code on this path
+        to break — see report point 6)."""
+        src = _src(tmp_path, "in.pdf")
+        worker = _worker(tmp_path)
+        job = _make_job(207, src, "pdf", "md")
+        job["options"] = {"markdownDialect": "markdown_strict"}
+        with patch("workers.libreoffice.worker.WORK_DIR", tmp_path), _Engines():
+            out_path, mime, ext = worker.convert(job)
+        assert ext == "md"
+        assert Path(out_path).read_bytes() == b"pdf-text", "must stay the raw pdftotext wrap"

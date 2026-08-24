@@ -203,7 +203,7 @@ final class WorkerRegisterControllerTest extends WebTestCase
         self::assertSame(400, $client->getResponse()->getStatusCode());
         $body = json_decode((string) $client->getResponse()->getContent(), true);
         self::assertSame(
-            'workerType "bogus" is not a known worker type (allowed: document, image, audio, video, data, ai)',
+            'workerType "bogus" is not a known worker type (allowed: document, image, audio, video, data, ai, browser)',
             $body['error'] ?? null,
         );
     }

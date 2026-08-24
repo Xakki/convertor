@@ -215,7 +215,9 @@ swagger полон; unit зелёные; интеграционные с зам�
 |-----------|-----------------|----------------|
 | **Архивы** | zip, tar, gz, bz2, 7z → zip, tar.gz | Python (zipfile/tarfile/py7zr) |
 | **CAD/DWG** | dwg, dxf → pdf, svg, png | LibreOffice Draw / ezdxf |
-| **Изображения (доп. форматы)** | svg, heic, avif → jpg, png, webp, avif, … | ImageMagick / Pillow |
+| **Изображения (доп. форматы)** | heic, avif → jpg, png, webp, … | ImageMagick / Pillow |
+
+*SVG как источник (→jpg/jpeg/png/webp) реализовано; SVG→gif/bmp/tiff/ico и SVG как целевой формат планируются в CNV-75.*
 
 ## Лимиты и тарифы
 

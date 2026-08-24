@@ -1,0 +1,86 @@
+{
+    "$comment": [
+        "Синтетический каталог настроек для тестов CNV-85: покрывает ВСЕ шесть типов",
+        "закрытой грамматики и ВСЕ четыре уровня доступа, включая AI-поле.",
+        "Назначен на категорию `data` (реальная пара csv→json), чтобы валидатор",
+        "проходил боевую проверку пары через ConversionRegistry."
+    ],
+    "version": "test-grammar.1",
+    "profiles": {
+        "test.grammar": {
+            "label": "Тестовый профиль",
+            "fields": [
+                {
+                    "key": "scale",
+                    "type": "range",
+                    "label": "Масштаб",
+                    "min": 0,
+                    "max": 100,
+                    "step": 5,
+                    "unit": "%",
+                    "minPlan": "guest",
+                    "default": 20
+                },
+                {
+                    "key": "preset",
+                    "type": "select",
+                    "label": "Пресет",
+                    "minPlan": "guest",
+                    "options": [
+                        { "value": "fast", "label": "Быстро", "minPlan": "guest" },
+                        { "value": "balanced", "label": "Сбалансированно", "minPlan": "free" },
+                        { "value": "ultra", "label": "Максимум", "minPlan": "pro" }
+                    ]
+                },
+                {
+                    "key": "dpi",
+                    "type": "number",
+                    "label": "DPI",
+                    "min": 72,
+                    "max": 600,
+                    "minPlan": "free"
+                },
+                {
+                    "key": "title",
+                    "type": "text",
+                    "label": "Заголовок",
+                    "minLength": 2,
+                    "maxLength": 40,
+                    "pattern": "[A-Za-z0-9 ]+",
+                    "minPlan": "basic"
+                },
+                {
+                    "key": "flatten",
+                    "type": "boolean",
+                    "label": "Свести слои",
+                    "minPlan": "basic"
+                },
+                {
+                    "key": "tint",
+                    "type": "color",
+                    "label": "Оттенок",
+                    "minPlan": "pro"
+                },
+                {
+                    "key": "model",
+                    "type": "select",
+                    "label": "AI-модель",
+                    "minPlan": "pro",
+                    "ai": true,
+                    "options": [
+                        { "value": "small", "label": "Small", "minPlan": "pro" }
+                    ]
+                }
+            ]
+        }
+    },
+    "assignments": [
+        {
+            "profile": "test.grammar",
+            "category": "data",
+            "ocr": false,
+            "from": ["csv"],
+            "to": ["json"]
+        }
+    ]
+}

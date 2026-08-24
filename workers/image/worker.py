@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+import xml.etree.ElementTree as ET
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ from typing import Any
 import pdf2image
 import pytesseract
 from cairosvg.surface import PNGSurface
-from PIL import Image
+from PIL import Image, ImageOps
 
 from workers.common.mime import DOC_TEXT_MIME
 from workers.common.stream_consumer import WORK_DIR, StreamConsumerBase
@@ -59,9 +60,15 @@ _PILLOW_FORMAT: dict[str, str] = {
     "tif":  "TIFF",
 }
 
-# SVG растеризуется только в четыре явно разрешённых CairoSVG-формата.
-# Остальные векторные форматы вне зоны ответственности этого воркера.
-_SVG_TARGETS: set[str] = {"png", "jpg", "jpeg", "webp"}
+# SVG растеризуется только в восемь явно разрешённых CairoSVG/Pillow-форматов.
+# Остальные векторные форматы (и анимация — CNV-82/CNV-106) вне зоны ответственности
+# этого воркера. gif/bmp/tiff/ico добавлены CNV-75 (static SVG legacy targets):
+# статичный однокадровый рендер, никакого browser runtime.
+_SVG_TARGETS: set[str] = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "ico"}
+
+# CNV-75: ICO — фиксированный набор PNG-кадров, независимо от исходных пропорций SVG.
+_ICO_SIZES: tuple[tuple[int, int], ...] = ((16, 16), (32, 32), (48, 48), (256, 256))
+_ICO_CANVAS = 256
 
 # Поддерживаемые конвертации: Pillow для растра и отдельная ветка CairoSVG.
 # heic/avif остаются исключёнными: для них нет optional-плагинов в базовом образе.
@@ -138,11 +145,78 @@ def _reject_external_svg_resource(url: str, resource_type: str) -> bytes:
     raise ValueError("external SVG resources are not allowed")
 
 
+def _validate_svg_well_formed(svg_bytes: bytes) -> None:
+    """Малформед XML — permanent-ошибка (ValueError), не бесконечный ретрай.
+
+    `xml.etree.ElementTree.ParseError` НЕ наследует `ValueError` — тот же класс
+    дефекта, что задокументирован в CNV-128 для XML-ветки data-воркера
+    (`ParseError` уходит в generic-except `StreamConsumerBase.process_job()` →
+    `permanent=False` → бесконечный ретрай навсегда битого файла). Перехватываем
+    здесь и перевыбрасываем как `ValueError` с безопасным сообщением (без деталей
+    парсера — тот же принцип, что и `RuntimeError("SVG rasterization failed")`
+    ниже). Вызывается ДО `try/except` в `_do_svg_convert()`, чтобы `ValueError`
+    не был проглочен и переупакован в тот же `RuntimeError`.
+    `ElementTree` не резолвит внешние entity/DTD по умолчанию — доп. SSRF/XXE
+    поверхности эта проверка не добавляет."""
+    try:
+        ET.fromstring(svg_bytes)
+    except ET.ParseError:
+        raise ValueError("malformed SVG: input is not well-formed XML") from None
+
+
+def _save_svg_bmp(image: Image.Image, out_path: Path, options: dict[str, Any]) -> None:
+    """CNV-75 AC: BMP без alpha-канала. Композит RGBA/LA/палитра-с-transparency на
+    фон — тот же приём, что и JPEG-ветка `_save_image()` (не рефакторим её, чтобы
+    не трогать уже протестированное поведение raster→jpeg)."""
+    background = options.get("background", "#FFFFFF")
+    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        canvas = Image.new("RGB", image.size, background)
+        canvas.paste(rgba, mask=rgba.getchannel("A"))
+        image = canvas
+    else:
+        image = image.convert("RGB")
+    image.save(str(out_path), "BMP")
+
+
+def _save_svg_tiff(image: Image.Image, out_path: Path) -> None:
+    """CNV-75 AC: single-page, LZW-сжатие. `save_all` не передаём — Pillow пишет
+    ровно один кадр по умолчанию."""
+    image.save(str(out_path), "TIFF", compression="tiff_lzw")
+
+
+def _save_svg_ico(image: Image.Image, out_path: Path) -> None:
+    """CNV-75 AC: PNG-кадры 16/32/48/256, независимо от исходных пропорций SVG.
+
+    Pillow's ICO-writer молча ОТБРАСЫВАЕТ любой запрошенный size больше im.size —
+    для типичного SVG-рендера (меньше 256×256) все четыре записи иначе исчезли бы
+    без единой ошибки. Поэтому контент сначала contain-fit'ится (аспект сохраняется,
+    не искажается) на прозрачный 256×256 canvas, и только этот canvas идёт в save():
+    im.size == (256, 256) гарантирует, что ни один из _ICO_SIZES не будет отфильтрован.
+
+    CNV-75-open-question (нужен team-lead ack): job-level `width`/`height` НЕ
+    применяются к этой ветке (в отличие от gif/bmp/tiff/png/jpg/webp) — ICO
+    определяет собственный фиксированный набор размеров, single-size resize
+    здесь семантически бессмысленен. Решение по образцу CNV-98 markdownDialect/
+    pdf→md: явно НЕ применяем, а не "применяем и потом перезаписываем" (что было
+    бы тем самым silently-inert паттерном, которого требует избегать CNV-75).
+    Backend-профиль для svg→ico ещё не существует (CNV-95 идёт после этой
+    карточки), поэтому в проде `options` для этой пары сегодня всегда `{}`."""
+    rgba = image.convert("RGBA")
+    canvas = Image.new("RGBA", (_ICO_CANVAS, _ICO_CANVAS), (0, 0, 0, 0))
+    fitted = ImageOps.contain(rgba, (_ICO_CANVAS, _ICO_CANVAS), Image.Resampling.LANCZOS)
+    offset = ((_ICO_CANVAS - fitted.width) // 2, (_ICO_CANVAS - fitted.height) // 2)
+    canvas.paste(fitted, offset, fitted)
+    canvas.save(str(out_path), "ICO", sizes=list(_ICO_SIZES))
+
+
 def _do_svg_convert(src: Path, out_path: Path, out_ext: str, options: dict[str, Any]) -> None:
     """Растеризует SVG, не позволяя его ссылкам выйти за пределы загрузки."""
+    svg_bytes = src.read_bytes()
+    _validate_svg_well_formed(svg_bytes)
     try:
         png_bytes = PNGSurface.convert(
-            bytestring=src.read_bytes(),
+            bytestring=svg_bytes,
             unsafe=False,
             url_fetcher=_reject_external_svg_resource,
         )
@@ -150,7 +224,15 @@ def _do_svg_convert(src: Path, out_path: Path, out_ext: str, options: dict[str, 
             out_path.write_bytes(png_bytes)
         else:
             with Image.open(BytesIO(png_bytes)) as image:
-                _save_image(_apply_image_options(image, options), out_path, out_ext, options)
+                if out_ext == "ico":
+                    # options НЕ применяются — см. докстринг _save_svg_ico().
+                    _save_svg_ico(image, out_path)
+                elif out_ext == "bmp":
+                    _save_svg_bmp(_apply_image_options(image, options), out_path, options)
+                elif out_ext == "tiff":
+                    _save_svg_tiff(_apply_image_options(image, options), out_path)
+                else:
+                    _save_image(_apply_image_options(image, options), out_path, out_ext, options)
     except Exception:
         try:
             out_path.unlink(missing_ok=True)

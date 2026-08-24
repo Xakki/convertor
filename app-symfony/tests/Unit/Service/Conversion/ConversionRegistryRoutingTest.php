@@ -72,4 +72,64 @@ final class ConversionRegistryRoutingTest extends TestCase
         self::assertFalse($this->registry->isSupported('jpg_ocr', 'txt'));
         self::assertFalse($this->registry->isSupported('pdf_ocr', 'md'));
     }
+
+    /**
+     * CNV-88 regression guard (report proof (c)): a plain existing image
+     * pair in the REAL committed catalog (no `executionKind` there today)
+     * still routes to `image`, never to `browser` — CNV-88 adds an override
+     * mechanism, it must not change any existing pair's routing.
+     */
+    public function testExistingImagePairStillRoutesToImageNotBrowser(): void
+    {
+        self::assertTrue($this->registry->isSupported('jpg', 'png'));
+        self::assertSame('image', $this->registry->streamFor('jpg', 'png'));
+        self::assertNotSame('browser', $this->registry->streamFor('jpg', 'png'));
+    }
+
+    // -------------------------------------------------------------------
+    // CNV-106: `$animated` flag — mirrors the `$ocr` flag shape exactly.
+    // -------------------------------------------------------------------
+
+    /**
+     * Can-fail proof (b) for the card: the animated flag routes svg→gif to
+     * the browser worker, via the hardcoded allowlist — NOT the catalog's
+     * per-pair `executionKind` (see {@see ConversionRegistry} class docblock:
+     * that field would also reroute the ALREADY-published static svg→gif).
+     */
+    public function testAnimatedFlagRoutesSvgGifToBrowser(): void
+    {
+        self::assertTrue($this->registry->isAnimatedConversionSupported('svg', 'gif'));
+        self::assertSame('browser', $this->registry->streamFor('svg', 'gif', ocr: false, animated: true));
+    }
+
+    /**
+     * Same real committed catalog, `$animated` omitted (default false) — the
+     * static pair keeps routing exactly as CNV-95 left it. This is the "not
+     * published" pin at the registry level: nothing here changes just
+     * because the animated mechanism now exists.
+     */
+    public function testAnimatedFlagDefaultsToFalseAndDoesNotChangeStaticSvgGifRouting(): void
+    {
+        self::assertSame('image', $this->registry->streamFor('svg', 'gif'));
+        self::assertSame('image', $this->registry->streamFor('svg', 'gif', ocr: false, animated: false));
+    }
+
+    /**
+     * Animated flag rejects any pair outside the hardcoded allowlist —
+     * mirrors {@see testStreamForWithOcrFlagRejectsNonOcrPair()}.
+     */
+    public function testAnimatedFlagRejectsUnsupportedPair(): void
+    {
+        self::assertTrue($this->registry->isSupported('jpg', 'png'), 'precondition: a real, otherwise-valid pair');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->registry->streamFor('jpg', 'png', ocr: false, animated: true);
+    }
+
+    public function testAnimatedSetMembership(): void
+    {
+        self::assertTrue($this->registry->isAnimatedConversionSupported('svg', 'gif'));
+        self::assertFalse($this->registry->isAnimatedConversionSupported('svg', 'png'));
+        self::assertFalse($this->registry->isAnimatedConversionSupported('jpg', 'gif'));
+    }
 }

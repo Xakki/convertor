@@ -65,6 +65,10 @@ composer: ## Run composer command (make composer CMD="require vendor/package")
 
 ##@ PHP / Quality
 
+.PHONY: dump-matrix-write
+dump-matrix-write: ## Regen tests/Fixtures/conversion_matrix.golden.txt из текущего conversion_pairs.json (после make formats-catalog, перед test-php)
+	$(PHP_EXEC) php bin/dump-matrix.php --write
+
 .PHONY: test-php
 test-php: ## Run PHPUnit (в php-контейнере тест-стенда; phpunit форсит APP_ENV=test). FILTER=<regex> — сузить до совпадающих тестов
 	$(REQUIRE_TEST)
