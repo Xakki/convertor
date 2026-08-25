@@ -44,6 +44,10 @@ CNV-82, CNV-90, CNV-91 и CNV-113 не смогут довести browser-ко�
 а не отдельной карточкой вслепую: нужно решить, откуда worker-blob сообщает
 `executionKind`, и одновременно поправить дрейф-тест и маппинг категории.
 
+**Open questions:**
+- Какой слой объявляет `executionKind=browser`: worker capability blob или
+  отдельное catalog assignment правило, и кто владеет его schema/mapping?
+
 **Acceptance Criteria:**
 - Generator сохраняет declared executionKind worker capability в catalog.
 - Browser routing использует `executionKind=browser`, сохраняя image/video как
