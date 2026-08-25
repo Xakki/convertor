@@ -72,3 +72,12 @@ re-raise по образцу CNV-128/131.
    перехвата) остаётся постоянной. Одинаковый вход — разная классификация в
    зависимости от формата источника. Проверить исполнением до принятия решения.
 
+**Open questions:**
+- Как разделить SVG pipeline и классифицировать подтверждённые постоянные cairo
+  отказы отдельно от transient/OOM/write failures?
+
+**Acceptance Criteria:**
+- Добавлен воспроизводимый well-formed SVG fixture для проблемной raster branch.
+- Pipeline разделён до изменения taxonomy; permanent и transient пути имеют
+  отдельные tests без раскрытия parser details пользователю.
+

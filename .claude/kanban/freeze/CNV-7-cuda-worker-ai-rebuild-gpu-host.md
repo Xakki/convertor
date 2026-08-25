@@ -1,6 +1,6 @@
 ### Пересобрать + перезапустить worker-ai:cuda на GPU-хосте
 
-**Критичность:** High (боевой AI-воркер на GPU-хосте крутится на старом образе — без
+**Criticality:** High (боевой AI-воркер на GPU-хосте крутится на старом образе — без
 `webrtcvad` и без `workers/common` → стрим/старт сломаны при пересборке)
 
 **TAGS:**
@@ -9,13 +9,20 @@
 - devops
 - gpu
 
-**Контекст:**
+**Description:**
 Harbor-base `worker-ai-base:latest` перезалит с обоими фиксами (`webrtcvad-wheels` +
 `workers/common/`), CPU-образ на saFin уже пересобран и healthy. Но **рабочий CUDA-образ
 на GPU-хосте не пересобирался** — там всё ещё старый `worker-ai:cuda`. Действие ops на
 удалённом GPU-хосте, из saFin не автоматизируется → отдельная задача.
 
-**Что сделать (по `docs/worker-ai-deploy.md`):**
+**Problem:**
+Рабочий CUDA-образ на GPU-хосте не пересобирался и остаётся без `webrtcvad` и `workers/common`, поэтому стрим/старт сломаны при пересборке.
+
+**Impact:**
+Без отдельного ops-прогона боевой GPU AI-воркер остаётся на старом образе; попытка пересборки может сломать его запуск.
+
+**Recommendation:**
+Карточка остаётся замороженной; не выполнять ops-действия до отдельного решения о разморозке и подтверждения доступа к GPU-хосту. После разморозки выполнить по `docs/worker-ai-deploy.md`:
 1. На GPU-хосте: `docker login harbor.xakki.ru` + `docker pull
    harbor.xakki.ru/convertor/worker-ai-base:latest` (КРИТИЧНО — иначе локальный устаревший
    base).
@@ -28,10 +35,11 @@ Harbor-base `worker-ai-base:latest` перезалит с обоими фикс�
 5. Пересоздать контейнер: `docker rm -f worker-ai` + `docker run … --gpus all …`
    (env — см. docs; обязательные `GATEWAY_WS_URL`/`WORKER_API_TOKEN`/`API_BASE_URL`).
 
-**Критерии приёмки:**
-- `worker-ai:cuda` на GPU-хосте пересобран из свежего Harbor-base; STANDALONE-гейт (п.4) →
+**Acceptance Criteria:**
+- Карточка остаётся замороженной; ops-действия не выполняются до отдельного решения о разморозке и подтверждения доступа к GPU-хосту.
+- После разморозки `worker-ai:cuda` на GPU-хосте пересобран из свежего Harbor-base; STANDALONE-гейт (п.4) →
   `OK` (webrtcvad + workers.common внутри образа).
-- Контейнер `worker-ai` перезапущен, healthy, логи без `ModuleNotFoundError`; воркер
+- После разморозки контейнер `worker-ai` перезапущен, healthy, логи без `ModuleNotFoundError`; воркер
   подключился к gateway (`GATEWAY_WS_URL`).
 
 **Зависит от:** свежий Harbor-base (сделано). Смежная задача — [[makefile-ai-base-freshness]]

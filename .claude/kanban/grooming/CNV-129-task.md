@@ -47,6 +47,16 @@ CNV-95 нужно было исключить ровно одну пару — `
 После внедрения — вернуть катч-оллу `image.raster` свободный `from` и выразить
 исключение `svg→ico` явно.
 
+**Acceptance Criteria:**
+- Каталог допускает `profile: null` и не применяет профиль к совпавшей паре.
+- `svg→ico` выражено явным исключением, а `image.raster` снова имеет свободный
+  catch-all по source format.
+- Покрыты parser/resolver tests для sentinel; существующие catalog tests green.
+
+**Decisions:**
+- 2026-08-26: внедрить только sentinel `profile: null`; отдельный axis-to test
+  не добавлять.
+
 **Open questions:**
 - Нужен ли тест, стерегущий ось `to` (новая цель без обдуманного профиля), или
   sentinel-правила достаточно?

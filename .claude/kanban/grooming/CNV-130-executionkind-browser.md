@@ -43,3 +43,10 @@ CNV-82, CNV-90, CNV-91 и CNV-113 не смогут довести browser-ко�
 Расширять генератор должен владелец browser-возможности вместе с CNV-82/113,
 а не отдельной карточкой вслепую: нужно решить, откуда worker-blob сообщает
 `executionKind`, и одновременно поправить дрейф-тест и маппинг категории.
+
+**Acceptance Criteria:**
+- Generator сохраняет declared executionKind worker capability в catalog.
+- Browser routing использует `executionKind=browser`, сохраняя image/video как
+  category для quota/retention.
+- Drift tests покрывают executionKind, mapping category и отсутствие
+  недостижимых browser pairs.

@@ -1,12 +1,12 @@
 ### Ban не отзывает refresh-family мгновенно
 
-**Критичность:** Minor
+**Criticality:** Minor
 
 **TAGS:**
 - enhancement
 - security
 
-**Описание:**
+**Description:**
 Найдено при реализации `admin-panel-users` (2026-07-11). Админский ban
 (`POST /api/v1/admin/users/{id}/ban` → `setIsActive(false)`) не отзывает
 refresh-token family забаненного юзера. Enforcement — только на `/auth/refresh`
@@ -15,8 +15,18 @@ refresh-token family забаненного юзера. Enforcement — толь
 затем блокируется на следующем refresh. Нет `UserChecker`, который резал бы
 активный access-JWT сразу.
 
-**Проблема:**
+**Problem:**
 - Между ban и истечением access-JWT (≤1ч) забаненный сохраняет доступ.
+
+**Impact:**
+Забаненный пользователь может сохранять доступ по уже выданному access-JWT до его истечения.
+
+**Recommendation:**
+Сохранить карточку замороженной; не начинать реализацию до отдельного решения о разморозке, после которого применить зафиксированный подход `tokenVersion` + `UserChecker`.
+
+**Acceptance Criteria:**
+- Карточка остаётся замороженной; реализация и изменение lifecycle не начинаются до отдельной разморозки.
+- После разморозки ban немедленно отзывает access-JWT и refresh-family согласно зафиксированному решению.
 
 **Decisions (2026-07-11):** мгновенный lockout через `tokenVersion` + `UserChecker`.
 - Добавить колонку `tokenVersion` (int, default 0) на сущность `User`; включать её в claims access-JWT при выпуске (LexikJWT payload-enricher / `JWTCreatedEvent`).

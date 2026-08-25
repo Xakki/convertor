@@ -24,9 +24,9 @@
 
 **Decisions:**
 - Эпик выполняется последовательно после предыдущих EPIC; подзадачи принадлежат только `worker-image`-специалисту.
+- CNV-75 completed and archived; removed from active subtask list.
 
 **Subtasks:**
-- CNV-75
 
 **Integration checklist:**
 - Выполнить профильные тесты и проверить отсутствие обратных зависимостей.

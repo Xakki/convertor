@@ -35,9 +35,9 @@ quota/retention. CNV-85 — prerequisite публичных settings profiles.
   free — базовый profile, guest — fixed default.
 - URL: public Internet через policy-enforcing egress proxy с проверкой каждого
   DNS/redirect hop; WebM без audio — MVP.
+- CNV-88 completed and archived; removed from active subtask list.
 
 **Subtasks:**
-- CNV-88 — backend browser routing/catalog
 - CNV-89 — backend URL input contract
 
 **Integration checklist:**

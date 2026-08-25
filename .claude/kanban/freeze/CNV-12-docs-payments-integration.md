@@ -10,7 +10,7 @@
 **Description:**
 From `ROADMAP.md` (Стадия 6, skeleton only): three payment gateways per project CLAUDE.md — Telegram Stars, Stripe Checkout (KZ card), Cryptomus (USDT/BTC, RU-accessible).
 
-**Problem / scope:**
+**Problem:**
 - Telegram Stars: bot invoice → `successful_payment` webhook, signature verify.
 - Stripe: Checkout session, webhook handling, KZ card validation.
 - Cryptomus: REST v1 integration, webhook verify, status polling.
@@ -21,14 +21,14 @@ From `ROADMAP.md` (Стадия 6, skeleton only): three payment gateways per pr
 No monetization path; pricing UI is non-functional.
 
 **Recommendation:**
-Implement each gateway behind a common payment abstraction; verify webhooks; reconcile quota/credit on success.
+Карточка остаётся замороженной: не начинать реализацию до отдельного решения о разморозке; после него реализовать каждый gateway за общей payment abstraction, проверить webhooks и сверять quota/credit при успехе.
 
 **Acceptance Criteria:**
-- Each gateway completes a test-mode payment and credits the user.
-- Webhook signatures verified; idempotent processing.
-- Pricing page initiates real checkouts with success/cancel handling.
+- Карточка остаётся замороженной, пока deferred considerations не будут отдельно рассмотрены и не будет принято решение о разморозке.
+- После разморозки каждый gateway completes a test-mode payment and credits the user.
+- После разморозки webhook signatures verified; idempotent processing, а pricing page initiates real checkouts with success/cancel handling.
 
-**Open questions:**
+**Unresolved / deferred considerations (not approved; resolve before reactivation):**
 - Which gateway is the MVP priority (Telegram Stars likely first)?
 - Test/sandbox credentials availability for Stripe/Cryptomus?
 - Credit model: per-conversion credits, subscription tiers, or both?
