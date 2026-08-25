@@ -105,7 +105,23 @@ def _read_data(src: Path) -> Any:
 
     if ext in ("yaml", "yml"):
         import yaml
-        return yaml.safe_load(src.read_text(encoding="utf-8"))
+
+        # CNV-131: yaml.YAMLError (и все её сабклассы — ScannerError/ParserError/
+        # ReaderError/ConstructorError) НЕ наследует ValueError — тот же класс
+        # дефекта, что CNV-128 закрыл для XML (ET.ParseError). Без перехвата
+        # уходит в generic except StreamConsumerBase.process_job() →
+        # permanent=False → бесконечный ретрай постоянно-битого YAML.
+        # Перехватываем и перевыбрасываем как ValueError, сохраняя исходное
+        # сообщение (mark/line/column у YAMLError) — это то, что делает ошибку
+        # читаемой. Аномально глубоко вложенный (но well-formed) YAML —
+        # тот же приём, что и RecursionError у CNV-128 для XML: рекурсивный
+        # конструктор PyYAML переполняет стек на тысячах уровней вложенности.
+        try:
+            return yaml.safe_load(src.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ValueError(f"malformed YAML: {exc}") from exc
+        except RecursionError as exc:
+            raise ValueError(f"malformed YAML: nesting too deep ({exc})") from exc
 
     if ext == "toml":
         import tomllib
@@ -132,9 +148,29 @@ def _read_data(src: Path) -> Any:
                     result[child.tag] = child_data
             return result
 
-        tree = ET.parse(src)
+        # CNV-128: xml.etree.ElementTree.ParseError НЕ наследует ValueError
+        # (наследует SyntaxError), а неизвестная кодировка в XML-декларации
+        # (<?xml ... encoding="bogus"?>) даёт LookupError — тоже не ValueError.
+        # Оба случая означают permanently-битый вход (повтор не поможет), но
+        # без перехвата уходят в generic except StreamConsumerBase.process_job()
+        # → permanent=False → бесконечный ретрай. Перехватываем и перевыбрасываем
+        # как ValueError, сохраняя исходное сообщение (line/column у ParseError,
+        # имя кодировки у LookupError) — это то, что делает ошибку читаемой.
+        try:
+            tree = ET.parse(src)
+        except (ET.ParseError, LookupError) as exc:
+            raise ValueError(f"malformed XML: {exc}") from exc
         root = tree.getroot()
-        return {root.tag: _elem_to_dict(root)}
+        # Well-formed XML, wrong shape для нашего обхода: _elem_to_dict()
+        # рекурсивен (1 фрейм на уровень вложенности), и на аномально глубоко
+        # вложенном документе (тысячи уровней) упирается в RecursionError —
+        # подкласс RuntimeError, тоже не ValueError. Вход постоянно
+        # непроходим этим обходчиком (повтор не поможет) — тот же класс
+        # дефекта, что и ParseError/LookupError выше.
+        try:
+            return {root.tag: _elem_to_dict(root)}
+        except RecursionError as exc:
+            raise ValueError(f"malformed XML: nesting too deep ({exc})") from exc
 
     raise ValueError(f"unsupported input format: {ext}")
 

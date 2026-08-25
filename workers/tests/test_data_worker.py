@@ -562,13 +562,48 @@ class TestMalformedInputs:
         with pytest.raises(json.JSONDecodeError):
             _read_data(empty)
 
-    def test_malformed_xml_raises(self, tmp_path: Path) -> None:
-        import xml.etree.ElementTree as ET
-
+    def test_malformed_xml_raises_value_error(self, tmp_path: Path) -> None:
+        """CNV-128: ParseError не наследует ValueError — без перехвата в
+        _read_data() job классифицировался бы как транзиентный и ретраился
+        бы вечно (process_job() маппит ValueError -> permanent=True, всё
+        остальное -> permanent=False). Сообщение обязано сохранять исходную
+        деталь парсера (line/column) — иначе ошибка не actionable."""
         bad = tmp_path / "bad.xml"
         bad.write_text("<root><item>unclosed</root>", encoding="utf-8")
-        with pytest.raises(ET.ParseError):
+        with pytest.raises(ValueError, match="line 1, column 22"):
             _read_data(bad)
+
+    def test_malformed_xml_encoding_raises_value_error(self, tmp_path: Path) -> None:
+        """Тот же дефект, другой источник: LookupError на неизвестной
+        кодировке в XML-декларации тоже не наследует ValueError."""
+        bad = tmp_path / "bad-encoding.xml"
+        bad.write_bytes(b'<?xml version="1.0" encoding="bogus-enc"?><root>x</root>')
+        with pytest.raises(ValueError, match="bogus-enc"):
+            _read_data(bad)
+
+    def test_deeply_nested_xml_raises_value_error(self, tmp_path: Path) -> None:
+        """CNV-128 доп. находка: well-formed, но аномально глубоко вложенный
+        XML переполняет рекурсию _elem_to_dict() -> RecursionError (подкласс
+        RuntimeError, не ValueError) -> без перехвата тоже ушёл бы в
+        бесконечный ретрай, хотя вход постоянно непроходим."""
+        n = 2000
+        bad = tmp_path / "deep.xml"
+        bad.write_text("<a>" * n + "x" + "</a>" * n, encoding="utf-8")
+        with pytest.raises(ValueError, match="nesting too deep"):
+            _read_data(bad)
+
+    def test_malformed_xml_via_convert_propagates_value_error(
+        self, tmp_path: Path
+    ) -> None:
+        """Тот же дефект через полный convert() — permanent=True путь в
+        StreamConsumerBase.process_job() зависит от того, что наружу выходит
+        именно ValueError, а не сырой ET.ParseError."""
+        src = tmp_path / "bad.xml"
+        src.write_text("<root><item>unclosed</root>", encoding="utf-8")
+        worker = _worker(tmp_path)
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="malformed XML"):
+                worker.convert(_make_job(31, src, "xml", "json"))
 
     def test_empty_csv_raises(self, tmp_path: Path) -> None:
         import pandas as pd
@@ -579,12 +614,40 @@ class TestMalformedInputs:
             _read_data(empty)
 
     def test_malformed_yaml_raises(self, tmp_path: Path) -> None:
-        import yaml
-
+        """CNV-131: yaml.YAMLError не наследует ValueError — без перехвата
+        StreamConsumerBase.process_job() относит его к TRANSIENT и ретраит
+        битый YAML бесконечно. Раньше этот тест закреплял именно это (сырой
+        yaml.YAMLError) как ожидаемое поведение — переписан на permanent
+        ValueError, которого требует контракт (CNV-128/CNV-98/CNV-75)."""
         bad = tmp_path / "bad.yaml"
         bad.write_text("foo: [unterminated\n  bar: : :", encoding="utf-8")
-        with pytest.raises(yaml.YAMLError):
+        with pytest.raises(ValueError, match="malformed YAML"):
             _read_data(bad)
+
+    def test_deeply_nested_yaml_raises_value_error(self, tmp_path: Path) -> None:
+        """CNV-131 доп. находка (тот же приём, что RecursionError у CNV-128
+        для XML): well-formed, но аномально глубоко вложенный YAML переполняет
+        рекурсивный конструктор PyYAML -> RecursionError (подкласс
+        RuntimeError, не ValueError) -> без перехвата тоже бесконечный ретрай,
+        хотя вход постоянно непроходим."""
+        n = 2000
+        bad = tmp_path / "deep.yaml"
+        bad.write_text("a: " + "[" * n + "1" + "]" * n, encoding="utf-8")
+        with pytest.raises(ValueError, match="nesting too deep"):
+            _read_data(bad)
+
+    def test_malformed_yaml_via_convert_propagates_value_error(
+        self, tmp_path: Path
+    ) -> None:
+        """Тот же дефект через полный convert() — permanent=True путь в
+        StreamConsumerBase.process_job() зависит от того, что наружу выходит
+        именно ValueError, а не сырой yaml.YAMLError."""
+        src = tmp_path / "bad.yaml"
+        src.write_text("foo: [unterminated\n  bar: : :", encoding="utf-8")
+        worker = _worker(tmp_path)
+        with patch("workers.data.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="malformed YAML"):
+                worker.convert(_make_job(32, src, "yaml", "json"))
 
     def test_malformed_json_via_convert_propagates(self, tmp_path: Path) -> None:
         src = tmp_path / "bad.json"

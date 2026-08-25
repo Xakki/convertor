@@ -42,6 +42,32 @@ def _make_jpg(tmp_path: Path, name: str = "input.jpg") -> Path:
     return p
 
 
+def _make_garbage_jpg(tmp_path: Path, name: str = "garbage.jpg") -> Path:
+    """Not an image at all — Image.open() itself fails to sniff the format
+    (PIL.UnidentifiedImageError, CNV-131)."""
+    p = tmp_path / name
+    p.write_bytes(b"not an image, just garbage bytes 1234567890")
+    return p
+
+
+def _make_truncated_jpg(tmp_path: Path, name: str = "truncated.jpg") -> Path:
+    """Valid JPEG header/dimensions, body cut short — Image.open() succeeds
+    lazily (format/size already known from the header), the failure only
+    surfaces once Pillow decodes pixel data (CNV-131: proves img.load() is
+    load-bearing, not just Image.open()).
+
+    Must start from a real photographic source (example_files/image.jpg), NOT
+    a synthetic solid-color Image.new() — a flat-color JPEG compresses to so
+    few bytes that truncating it cuts into the HEADER too, so Image.open()
+    itself would fail immediately and the test would pass without img.load()
+    ever mattering (verified empirically while mutation-testing this fix)."""
+    p = tmp_path / name
+    src = Path(__file__).parent / "example_files" / "image.jpg"
+    data = src.read_bytes()
+    p.write_bytes(data[: len(data) // 3])
+    return p
+
+
 def _make_svg(tmp_path: Path, name: str = "input.svg") -> Path:
     p = tmp_path / name
     p.write_text(
@@ -474,6 +500,79 @@ class TestImageConvertErrors:
             job = _make_job(8, tmp_path / "nonexistent.jpg", "jpg", "png")
             with pytest.raises(FileNotFoundError):
                 worker.convert(job)
+
+    def test_corrupt_raster_input_raises_value_error(self, tmp_path):
+        """CNV-131: PIL.UnidentifiedImageError subclasses OSError, not
+        ValueError — without the catch it retries a permanently-corrupt
+        upload forever (same defect class as CNV-128's XML ParseError)."""
+        src = _make_garbage_jpg(tmp_path)
+        worker = _worker_with_share(tmp_path)
+
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="malformed image"):
+                worker.convert(_make_job(40, src, "jpg", "png"))
+
+    def test_truncated_raster_input_raises_value_error(self, tmp_path):
+        """CNV-131 доп. находка: Image.open() only sniffs the header lazily —
+        a truncated BODY (valid header, cut-short data) passes open() and
+        fails only once Pillow decodes pixel data. Proves _open_image()'s
+        forced img.load() is load-bearing, not the header-sniff catch alone."""
+        src = _make_truncated_jpg(tmp_path)
+        worker = _worker_with_share(tmp_path)
+
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="malformed image"):
+                worker.convert(_make_job(41, src, "jpg", "png"))
+
+    def test_decompression_bomb_raises_value_error(self, tmp_path):
+        """CNV-131 доп. находка: Image.DecompressionBombError subclasses bare
+        Exception (not OSError, not ValueError) — an image whose declared
+        dimensions exceed Pillow's safety threshold would otherwise also
+        retry forever."""
+        import workers.image.worker as iw_mod
+
+        src = _make_png(tmp_path, size=(50, 50))
+        worker = _worker_with_share(tmp_path)
+
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
+            with patch.object(iw_mod.Image, "MAX_IMAGE_PIXELS", 100):
+                with pytest.raises(ValueError, match="malformed image"):
+                    worker.convert(_make_job(42, src, "png", "jpg"))
+
+    def test_corrupt_raster_input_via_ocr_raises_value_error(self, tmp_path):
+        """CNV-131: same defect, second Image.open() site — the OCR branch
+        (_extract_text) reads the raster source independently of _do_convert()."""
+        src = _make_garbage_jpg(tmp_path)
+        worker = _worker_with_share(tmp_path)
+
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
+            with pytest.raises(ValueError, match="malformed image"):
+                worker.convert(_make_job(43, src, "jpg", "txt"))
+
+    def test_kernel_io_error_on_valid_image_stays_transient(self, tmp_path):
+        """CNV-131 review fix: CNV-131's blanket `except OSError`
+        also swallowed genuine kernel-level I/O errors (disk full, permission,
+        hardware read error) into the same permanent ValueError — turning a
+        recoverable TRANSIENT failure into a dead-lettered job. Pillow's own
+        corruption signals build OSError from a bare string (errno is None,
+        see test_truncated_raster_input_raises_value_error); a real OS-level
+        failure carries a numeric errno. Input here is a VALID jpeg — only
+        Image.Image.load() is made to fail exactly like a genuine I/O error
+        would (errno=5, EIO), simulating e.g. decode-time memory pressure on
+        a constrained host."""
+        src = _make_jpg(tmp_path)
+        worker = _worker_with_share(tmp_path)
+
+        def _kernel_io_error(self):
+            raise OSError(5, "Input/output error")
+
+        with patch("workers.image.worker.WORK_DIR", tmp_path):
+            with patch.object(Image.Image, "load", _kernel_io_error):
+                with pytest.raises(OSError) as excinfo:
+                    worker.convert(_make_job(44, src, "jpg", "png"))
+
+        assert not isinstance(excinfo.value, ValueError)
+        assert excinfo.value.errno == 5
 
 
 # --------------------------------------------------------------------------

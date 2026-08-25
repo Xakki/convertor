@@ -131,8 +131,64 @@ def _save_image(image: Image.Image, out_path: Path, out_ext: str, options: dict[
     image.save(str(out_path), _pillow_fmt(out_ext), **save_options)
 
 
+def _open_image(src: Path) -> Image.Image:
+    """Open *src* and force full pixel decode — CNV-131 (narrowed on review).
+
+    `Image.open()` only sniffs the header lazily: `PIL.UnidentifiedImageError`
+    (unrecognised format) and `Image.DecompressionBombError` (absurd declared
+    dimensions) surface right there, but a truncated/corrupt BODY only raises
+    a plain `OSError` once pixel data is actually decoded — normally deferred
+    until `save()`/`convert()`, i.e. deep inside the caller. `img.load()` here
+    forces that decode immediately, so every corrupt-input shape surfaces at
+    this one call site, before any output-side I/O (a genuine write-side
+    OSError — disk full etc. — stays outside this catch and transient).
+    Neither `UnidentifiedImageError` (subclasses `OSError`) nor
+    `DecompressionBombError` (subclasses bare `Exception`) is a `ValueError` —
+    same defect class as CNV-128's XML `ParseError`: without this catch they
+    fall into `StreamConsumerBase.process_job()`'s generic except →
+    `permanent=False` → infinite retry of input that will never become valid.
+    `FileNotFoundError` is re-raised as-is — `process_job()` has a dedicated
+    TRANSIENT branch for it (missing/not-yet-uploaded input); a blanket
+    `except OSError` would otherwise silently reclassify it as permanent.
+
+    CNV-131 review fix: a bare `except OSError` was ALSO
+    swallowing genuine kernel-level I/O errors (disk full, permission,
+    hardware read error) into the same `ValueError` — turning a recoverable
+    TRANSIENT failure into a permanent dead-letter. Pillow's own corruption
+    signals are constructed from a bare string (`OSError("image file is
+    truncated (...)")`, `UnidentifiedImageError("cannot identify image
+    file...")`) so `exc.errno is None` on both (verified empirically — see
+    workers/tests probe); a real OS-level error carries a numeric `errno`
+    (e.g. `OSError(5, "Input/output error")` → `errno == 5`). Only the
+    errno-less (Pillow-signal) shape is reclassified to `ValueError`; an
+    errno-bearing `OSError` is re-raised as-is and stays TRANSIENT.
+    `DecompressionBombError` never carries an `errno` attribute at all (plain
+    `Exception` subclass) — it is always a Pillow corruption signal, so it is
+    handled in its own clause, unconditionally.
+    """
+    img: Image.Image | None = None
+    try:
+        img = Image.open(src)
+        img.load()
+    except FileNotFoundError:
+        if img is not None:
+            img.close()
+        raise
+    except OSError as exc:
+        if img is not None:
+            img.close()
+        if exc.errno is not None:
+            raise  # genuine kernel-level I/O error — stays TRANSIENT
+        raise ValueError(f"malformed image: {exc}") from exc
+    except Image.DecompressionBombError as exc:
+        if img is not None:
+            img.close()
+        raise ValueError(f"malformed image: {exc}") from exc
+    return img
+
+
 def _do_convert(src: Path, out_path: Path, out_ext: str, options: dict[str, Any]) -> None:
-    with Image.open(src) as img:
+    with _open_image(src) as img:
         img = _apply_image_options(img, options)
         if out_ext == "pdf":
             img.convert("RGB").save(str(out_path), "PDF", resolution=100.0)
@@ -260,7 +316,7 @@ def _extract_text(src: Path, src_ext: str) -> list[str]:
             finally:
                 page.close()
         return out
-    with Image.open(src) as img:
+    with _open_image(src) as img:
         return [_ocr_image(img).strip()]
 
 
