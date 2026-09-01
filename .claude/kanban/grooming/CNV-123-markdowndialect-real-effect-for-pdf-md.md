@@ -55,50 +55,74 @@ CNV-98 catalog-фикса — `document.markdown.verbatim` не декларир
 получит опцию, не имеющую эффекта на результат — недостоверный UX.
 
 **Recommendation:**
-Реализовать реальный эффект `markdownDialect` для `pdf→md`, сохранив
-целостность извлечения текста из многоколоночных/табличных PDF:
-- Не просто прогнать текущий `pdftotext -layout` вывод через pandoc
-  markdown-reader "как есть" — `-layout` сохраняет визуальные отступы
-  колонок пробелами, а markdown-reader интерпретирует ≥4 пробела как code
-  block, то есть многоколоночные/табличные PDF превратятся в мусорный
-  вывод. Нужна другая стратегия экстракции: например, `pdftotext` БЕЗ
-  `-layout` (реже подходит для многоколоночных PDF, зато не создаёт ложных
-  code-block отступов) + отдельная эвристика для таблиц, либо сторонний
-  PDF→Markdown-инструмент/библиотека, либо два режима извлечения
-  (verbatim-режим по умолчанию + markdown-режим только когда диалект
-  реально запрошен).
-- Завести новые real-fixture тесты на многоколоночные и табличные PDF (в
-  дополнение к существующим `test_libreoffice_integration.py` фикстурам),
-  чтобы регрессия по fidelity была видна сразу, а не как молчаливая
-  деградация вывода.
-- Обновить каталог (`app-symfony/config/catalog/conversion_settings.json`):
-  либо снова слить `document.markdown` и `document.markdown.verbatim` в
-  один профиль с `markdownDialect`, либо (если verbatim-режим остаётся
-  дефолтным поведением без диалекта) сознательно оставить раздельные
-  профили — решить по итогам реализации.
+Реализовать два явно различимых режима `pdf→md`, не меняя молча текущий
+результат:
+- **verbatim** — режим по умолчанию, сохраняющий `pdftotext -layout` и его
+  текущую семантику;
+- **dialect-enabled** — только при явном выборе пользователем/API/profile
+  дискриминатора, с реальным применением выбранного Markdown-диалекта.
+
+Дискриминатор должен быть явным на границе пользовательского запроса, API или
+профиля, но его точное имя и wire/schema-форма этой карточкой не выбираются.
+Нельзя просто прогонять текущий `pdftotext -layout` через pandoc: пробелы
+колонок могут стать ложными code block. Для dialect-enabled режима нужно
+эмпирически выбрать pipeline (например, другой режим `pdftotext` с эвристикой
+таблиц или PDF→Markdown-инструмент) по многоколоночным и табличным fixture.
+
+В обоих режимах добавить real-fixture тесты и bounded benchmark; benchmark
+должен измерить fidelity отдельно для verbatim и dialect-enabled и установить
+приемлемые критерии до реализации. Каталог/профили обновлять только после
+решения точной схемы дискриминатора; отсутствие явного выбора всегда означает
+verbatim. Семантика `txt→md` (включая существующее применение
+`markdownDialect` через pandoc) сохраняется без изменений.
 
 **Acceptance Criteria:**
-- `markdownDialect` реально меняет вывод `pdf→md` (не no-op) хотя бы для
-  одного нетривиального значения (напр. `markdown_strict` экранирует
-  спецсимволы иначе, чем `gfm` — тот же наблюдаемый эффект, который CNV-98
-  подтвердил живым пробегом для `txt→md`).
-- Многоколоночные/табличные PDF не деградируют по сравнению с текущим
-  `-layout` verbatim-выводом — подтверждено новыми real-fixture тестами.
-- Unit + real-fixture тесты покрывают разные диалекты на `pdf→md`.
-- Catalog (`conversion_settings.json`) актуализирован под выбранную
-  стратегию (см. Recommendation), `version` поднята.
-- Tests/QA green: `make TEST=1 test-python-libreoffice`, `make TEST=1 test-php`, `make phpstan`.
+- Без явного user/API/profile выбора `pdf→md` остаётся verbatim и использует
+  `pdftotext -layout`; существующий default не меняется silently.
+- Явный dialect-enabled выбор проходит через согласованный дискриминатор и
+  реально меняет результат хотя бы для одного нетривиального диалекта; его
+  точные имя и wire/schema-контракт должны быть отдельно утверждены.
+- `txt→md` сохраняет текущую семантику `markdownDialect` и не получает
+  побочных изменений от разделения PDF-режимов.
+- Real fixtures покрывают многоколоночный и табличный PDF в обоих режимах;
+  bounded benchmark измеряет fidelity для каждого режима и фиксирует
+  согласованные пороги/метрики до acceptance реализации.
+- Выбранный extraction pipeline и поведение при неоднозначной/неподдержанной
+  структуре подтверждены fixture/benchmark, а не предположены по unit-тесту.
+- Catalog/profile changes отражают утверждённый discriminator и режимы; до
+  этого catalog не рекламирует неподтверждённый wire/schema.
+- После реализации профильные tests/QA green: `make TEST=1
+  test-python-libreoffice`, `make TEST=1 test-php`, `make phpstan`.
 
 **Open questions:**
-- Какая стратегия извлечения даёт приемлемый баланс fidelity/диалект:
-  `pdftotext` без `-layout`, другой инструмент, или два параллельных режима
-  (verbatim по умолчанию + markdown только по явному запросу диалекта)?
-  Нужны фикстуры многоколоночных/табличных PDF, чтобы сравнить эмпирически.
-- Слить профили обратно в один `document.markdown` или оставить раздельные
-  `document.markdown` / `document.markdown.verbatim` — зависит от того,
-  остаётся ли verbatim-режим отдельным поведением или полностью заменяется.
+- Какой extraction pipeline использовать для dialect-enabled режима: другой
+  режим `pdftotext`, отдельные table heuristics или сторонний PDF→Markdown
+  инструмент? Ответить по real fixtures и bounded benchmark.
+- Как называется и где живёт явный user/API/profile discriminator (точное
+  поле, wire/schema и обратная совместимость)? Выбран только принцип явного
+  выбора; exact field/schema не утверждены.
+- Как именно представить два режима в catalog/profiles: слить профили или
+  оставить `document.markdown` / `document.markdown.verbatim` либо иную
+  структуру? Решение зависит от discriminator/schema.
+- Каковы fidelity-метрики и пороги отдельно для verbatim и dialect-enabled,
+  включая допустимое расхождение таблиц и колонок? Порог не выбран до
+  benchmark.
 
 **Decisions:**
+- 2026-09-02: утверждён продуктовый контракт двух явных `pdf→md` режимов:
+  verbatim с `pdftotext -layout` по умолчанию и opt-in dialect-enabled режим.
+  Отсутствие явного user/API/profile выбора означает verbatim; silent default
+  behavior change запрещён.
+- 2026-09-02: выбран принцип явного discriminator на границе user/API/profile,
+  но exact field name, wire/schema и profile/catalog representation не выбраны.
+  Эта запись не изобретает имя и оставляет соответствующие вопросы открытыми.
+- 2026-09-02: `txt→md` сохраняет текущую семантику — выбранный
+  `markdownDialect` применяется существующим pandoc-путём; PDF-режимы не
+  меняют этот контракт.
+- 2026-09-02: extraction pipeline, fidelity thresholds и окончательное
+  представление профилей не считаются решёнными; их нужно выбрать после
+  multi-column/table real fixtures и bounded benchmark отдельно для обоих
+  режимов. Карточка остаётся в `grooming/`, не перемещается в `todo/`.
 - CNV-98 (repair-раунд, 2026-08-24) выбрал НЕ чинить это в своём скоупе —
   вместо этого каталог перестал рекламировать `markdownDialect` для
   `pdf→md` (см. `.claude/kanban/progress/CNV-98-document-worker-settings-application.md`,
