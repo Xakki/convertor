@@ -10,7 +10,7 @@
 > 2. **CNV-124** — профили каждого worker в корневом `docker-compose.yml`.
 > 3. **Conversion settings:** `CNV-92 → CNV-93 → CNV-94`, затем доменные UI-карточки
 >    `CNV-99`, `CNV-102`, `CNV-105`, `CNV-107` (backend-часть EPIC-004 уже в `done/`).
-> 4. **Public API:** `CNV-87 → CNV-83 → CNV-84 → CNV-86 → CNV-109 → CNV-112`;
+> 4. **Public API:** `CNV-87 → CNV-83 → CNV-84 → CNV-109 → CNV-86 → CNV-112`;
 >    связанные dashboard/docs-карточки выполняются после своих контрактов.
 > 5. **Worker options:** EPIC-009 (document), EPIC-010 (FFmpeg), EPIC-011 (data)
 >    с их текущими дочерними карточками.
@@ -104,7 +104,7 @@ swagger полон; unit зелёные; интеграционные с зам�
   Все 6 подзадач в `done/`: admin-panel-auth / -stats / -users / -queues / -logs / -conv-toggle.
 - **P1 — Публичный API, последовательная цепочка:**
   `[[CNV-87-public-api-ip]] → [[CNV-83-dashboard-api-api]] → [[CNV-84-conversion-history-web-api]]
-  → [[CNV-86-openapi-public-user-admin]] → [[CNV-109-api-request-audit-backend-storage]]
+  → [[CNV-109-api-request-audit-backend-storage]] → [[CNV-86-openapi-public-user-admin]]
   → [[CNV-112-anonymous-api-identity-privacy]]`.
   Все карточки существуют в `todo/`; отсутствие карточек больше не заявляется.
   CNV-87 задаёт anonymous identity, CNV-83 — personal tokens, CNV-84 — audit contract,
