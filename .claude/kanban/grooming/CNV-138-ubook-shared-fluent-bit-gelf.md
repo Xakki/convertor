@@ -24,8 +24,8 @@ DNS, TLS и TCP connect до приёмника в проверке здоров
 - Приёмник или стоящий перед ним proxy не даёт достаточно быстрого ACK, а текущая
   доставка теряет сообщения после исчерпания retry.
 - Не зафиксировано, кому принадлежат uBook sidecar, его конфигурация, restart
-  policy, метрики и алерты; shared proxy/Graylog ingress остаются отдельной
-  downstream зоной владельцев observability.
+  policy, метрики и алерты; proxy/Graylog ingress остаются отдельной downstream
+  зоной владельцев observability.
 - Нет проверенного bounded filesystem buffer: при временной недоступности
   Graylog нужно сохранять сообщения на диске, но не разрешать неограниченный рост
   и не создавать риск заполнения диска.
@@ -45,7 +45,7 @@ runtime, конфигурации или политики инфраструкт
 Fluent Bit sidecar по проекту. Затем выбрать и внедрить подтверждённую политику
 bounded filesystem buffering (явные лимиты объёма и диска, поведение при полном
 буфере, recovery и метрики), не скрывая drops. Оформить owner/runbook/alerting
-для uBook sidecar; uBook не должен подменять диагностику или менять shared
+для uBook sidecar; uBook не должен подменять диагностику или менять
 proxy/Graylog ingress локальным обходом.
 
 **Acceptance Criteria:**
@@ -62,33 +62,37 @@ proxy/Graylog ingress локальным обходом.
   без необъяснимых drops; при искусственной задержке downstream видны bounded
   retries/buffer и явный alert, а после восстановления происходит drain без
   повторной потери сверх принятой политики.
-- Graylog/proxy ingress diagnostics и collector runbook обновлены; секреты и
+- Graylog/proxy ingress diagnostics и uBook sidecar runbook обновлены; секреты и
   реальные override из untracked env не попадают в репозиторий.
 - Не изменяются исходники приложения, project Make targets или runtime/config до
-  явного решения владельцев; любое изменение shared infrastructure проходит
-  отдельным согласованным ops-релизом с rollback и проверкой.
+  явного решения владельцев; изменения uBook sidecar проходят согласованный
+  rollout/rollback, а изменения proxy/Graylog ingress — отдельный downstream
+  ops-релиз с проверкой.
 
 **Open questions:**
-- Кто принимает решение и несёт эксплуатационное владение shared host-level
-  Fluent Bit: владелец хоста/ops, команда Graylog или отдельный observability owner?
+- Кто принимает решение и несёт эксплуатационное владение uBook
+  project-owned Fluent Bit sidecar, включая restart/update и alerting?
 - Какой proxy и какой Graylog ingress обслуживает `log.variantgood.com:443/gelf`,
   и кто даст read-only доступ к их latency/status/queue метрикам?
 - Каковы допустимые границы buffer/drop policy: максимальный объём/время на диске,
   минимум свободного места, допустимая потеря при полном буфере и ответственное
   лицо за согласование этих SLO?
-- Нужен ли отдельный rollout для uBook и остальных проектов либо единое изменение
-  shared collector; кто подтвердит окно, нагрузочный тест и rollback?
+- Какое окно, нагрузочный тест и rollback нужны для rollout/update только uBook
+  sidecar и кто из его владельцев это подтверждает? Shared host-level collector
+  остаётся явным историческим контекстом вне scope этой карточки.
 
 **Decisions:**
 - 2026-09-01: создана отдельная grooming-карточка после runtime-наблюдения;
   CNV-17/CNV-57/CNV-122 и `fluent-logging-setup` признаны смежными завершёнными
   работами (bind, crash-loop, подключение и базовая схема), но не дубликатом
-  текущей проблемы downstream drops и shared ownership.
+  текущей проблемы downstream drops; shared host-level collector — только
+  исторический контекст вне scope, текущая ownership boundary — uBook sidecar.
 - 2026-09-01: scope ограничен диагностикой и согласованным ops-дизайном;
   source code, project-specific Make targets, секреты и самостоятельные runtime
   изменения исключены.
 - 2026-09-01: card остаётся в `grooming/`, пока владельцы не ответят на вопросы
-  о shared collector, ingress-доступе, bounded buffer/SLO и rollout/rollback.
+  о владельце uBook sidecar (включая restart/update/alerting), ingress-доступе,
+  bounded buffer/SLO и sidecar rollout/rollback.
 
 **Execution Log:**
 - 2026-09-01: выполнен поиск активных и архивных карточек по Fluent Bit,
