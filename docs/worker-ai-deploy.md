@@ -18,10 +18,10 @@ curl -fsSL https://gist.githubusercontent.com/<OWNER>/<GIST_ID>/raw/install.sh |
 нужно:
 
 ```bash
-docker pull harbor.xakki.ru/convertor/worker-ai:latest-cpu
+docker pull harbor.xakki.ru/convertor/worker-ai-cpu:latest
 ```
 
-**CUDA-вариант в Harbor НЕ публикуется** — образ `worker-ai:latest-cuda` существует
+**CUDA-вариант в Harbor НЕ публикуется** — локальный образ `worker-ai-cuda:latest`
 только как ЛОКАЛЬНАЯ сборка на GPU-хосте (см. «Сборка образа» ниже), даже несмотря
 на то, что его имя выглядит как Harbor-путь (`harbor.xakki.ru/convertor/...` — это
 просто значение `IMAGE_NS` по умолчанию, `docker pull` этого тега из реального
@@ -33,7 +33,7 @@ docker rm -f worker-ai 2>/dev/null || true    # если уже запущен �
 docker run -d --name worker-ai --hostname worker-ai --restart unless-stopped --gpus all \
   -e WORKER_API_TOKEN=<ТОКЕН> \
   -v ~/.cache/huggingface:/home/app/.cache/huggingface \
-  harbor.xakki.ru/convertor/worker-ai:latest-cuda
+  worker-ai-cuda:latest
 ```
 
 `WORKER_API_TOKEN` — единственная ОБЯЗАТЕЛЬНАЯ переменная (секрет, дефолта нет и быть не
@@ -43,7 +43,7 @@ docker run -d --name worker-ai --hostname worker-ai --restart unless-stopped --g
 Кэш HuggingFace (`-v …/.cache/huggingface`) — опционален, но избавляет от повторного
 скачивания весов моделей.
 
-CPU-хост: тот же вызов с образом `harbor.xakki.ru/convertor/worker-ai:latest-cpu` и БЕЗ
+CPU-хост: тот же вызов с образом `harbor.xakki.ru/convertor/worker-ai-cpu:latest` и БЕЗ
 `--gpus all` — `WHISPER_DEVICE`/`WHISPER_COMPUTE_TYPE` автоопределятся в `cpu`/`int8` сами.
 
 **Проверка:**
@@ -68,10 +68,10 @@ harbor.xakki.ru/convertor/worker-ai-base:latest   ← публикуется в 
   │  FROM scratch — ТОЛЬКО код + requirements, без OS/Python (легковесный, ~0.5 МБ)
   │  содержит: workers/common/ + workers/ai/ + requirements-ai-*.txt
   ▼  COPY --from=aibase /app /app
-  ├─ worker-ai:latest-cpu   ← собирается через build-ai-cpu, И публикуется в Harbor
+  ├─ worker-ai-cpu:latest   ← собирается через build-ai-cpu, И публикуется в Harbor
   │    Python + CPU ML-стек (faster-whisper int8, llama.cpp без CUDA)   (release-workers)
   │
-  └─ worker-ai:latest-cuda  ← собирается через build-ai-cuda, остаётся ТОЛЬКО ЛОКАЛЬНО
+  └─ worker-ai-cuda:<APP_VER> и :latest  ← build-ai-cuda, остаётся ТОЛЬКО ЛОКАЛЬНО
        nvidia/cuda cuDNN runtime + Python + CUDA ML-стек (torch, faster-whisper, …)
        НЕ публикуется в Harbor (большой, привязан к GPU-архитектуре)
 ```
@@ -130,7 +130,7 @@ Harbor-тега не зависит.
 `docker/workers/ai.cuda.Dockerfile`), затем — с ПУСТЫМ контекстом сборки:
 
 ```bash
-docker build -t harbor.xakki.ru/convertor/worker-ai:latest-cuda -f ai.cuda.Dockerfile .
+docker build -t worker-ai-cuda:${APP_VER} -t worker-ai-cuda:latest -f ai.cuda.Dockerfile .
 ```
 (`.` как контекст безвреден — Dockerfile из контекста ничего не копирует. ARG'и
 `AI_BASE_IMAGE`/`CUDA_ARCH`/`TORCH_CUDA_ARCH`/`WITH_LLAMACPP` по умолчанию уже равны
@@ -143,7 +143,7 @@ docker build -t harbor.xakki.ru/convertor/worker-ai:latest-cuda -f ai.cuda.Docke
 Проверка БЕЗ bind-mount — зеркалит прод (ловит отсутствие кода/зависимостей в образе):
 
 ```bash
-docker run --rm --entrypoint python3 harbor.xakki.ru/convertor/worker-ai:latest-cuda \
+docker run --rm --entrypoint python3 worker-ai-cuda:latest \
   -c "import workers.ai.config, workers.ai.worker, webrtcvad, av, faster_whisper; print('STANDALONE BOOT OK')"
 ```
 Печатает `STANDALONE BOOT OK` → образ валиден. Падает с `ModuleNotFoundError` → база
@@ -157,20 +157,21 @@ worker-ai — обычный сервис в основном `docker-compose.ym
 ```bash
 docker compose up -d --no-deps worker-ai
 ```
-Для GPU — задать `AI_VARIANT=cuda` + `AI_RUNTIME=nvidia` в `.env.local` (образ
-переключается на `:cuda`-тег, runtime — на `nvidia`) и раскомментировать блок
+Для GPU — задать `AI_VARIANT=cuda` + `AI_IMAGE=worker-ai-cuda:latest` +
+`AI_RUNTIME=nvidia` в `.env.local` (образ переключается на локальный тег,
+runtime — на `nvidia`) и раскомментировать блок
 `deploy.resources.devices` у сервиса `worker-ai` в `docker-compose.yml`, затем
 выставить `WHISPER_DEVICE=cuda`.
 
 `pull_policy` сервиса `worker-ai` управляется отдельной переменной
 `AI_PULL_POLICY` (`docker-compose.yml`: `${AI_PULL_POLICY:-missing}`), не
 общей `WORKER_PULL_POLICY` остальных пяти воркеров: CPU-хост ставит
-`AI_PULL_POLICY=always` (`worker-ai:latest-cpu` публикуется в Harbor, см.
+`AI_PULL_POLICY=always` (`worker-ai-cpu:latest` публикуется в Harbor, см.
 «Быстрый старт»), GPU-хост — ОБЯЗАТЕЛЬНО `AI_PULL_POLICY=build`
-(`worker-ai:latest-cuda` в Harbor не публикуется, `always` хардфейлит
+(`worker-ai-cuda` в Harbor не публикуется, `always` хардфейлит
 «pull access denied»; `missing` спасает только `make up` — фолбэк на build:
 при отсутствии локального образа — но НЕ явный `docker compose pull`/
-`make pull`: тот build-фолбэка не знает и падает с exit 2 «not found» на
+`make workers-pull`: тот build-фолбэка не знает и падает с exit 2 «not found» на
 несуществующем теге; `build` заставляет `pull` пропустить сервис, Skipped).
 Шаблон `.env.local_worker_example` уже задаёт это верно для обоих случаев.
 
@@ -273,11 +274,11 @@ they are unused.
 
 **Remote CPU-хост (обычный случай, без сборки):**
 ```bash
-git pull && make pull && make workers-recreate
+git pull && make workers-pull && make workers-recreate
 ```
-`worker-ai:latest-cpu` тянется готовым из Harbor вместе с остальными 5 воркерами —
+`worker-ai-cpu:latest` тянется готовым из Harbor вместе с остальными 5 воркерами —
 шаги ниже (2a/2b) не нужны на этом хосте. Они остаются актуальны для GPU-хоста
-(`worker-ai:cuda` в Harbor не публикуется, только локальная сборка) и для машины,
+(`worker-ai-cuda` в Harbor не публикуется, только локальная сборка) и для машины,
 где готовится релиз (`saFin`, см. `harbor-published-worker-images` §5).
 
 На хосте с репозиторием (путь 2a, обычный случай):

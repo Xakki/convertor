@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Service\Conversion\Settings;
 
+use App\Entity\WorkerCapability;
+use App\Repository\WorkerCapabilityRepository;
+use App\Service\Conversion\Settings\ApiModelAvailability;
 use App\Service\Conversion\Settings\ConversionCatalogPresenter;
 use App\Service\Conversion\Settings\ConversionSettingsCatalog;
 use App\Service\Conversion\Settings\SettingsAccessLevel;
@@ -21,7 +24,14 @@ final class ConversionCatalogPresenterTest extends TestCase
 
     private function productionPresenter(): ConversionCatalogPresenter
     {
-        return new ConversionCatalogPresenter($this->newSeedRegistry(), new ConversionSettingsCatalog());
+        return new ConversionCatalogPresenter(
+            $this->newSeedRegistry(),
+            new ConversionSettingsCatalog(),
+            $this->availability('fast', [
+                ['value' => 'fast', 'label' => 'GPT-4o'],
+                ['value' => 'balanced', 'label' => 'GPT-4.1'],
+            ]),
+        );
     }
 
     public function testEveryPairEitherReferencesAProfileOrExplicitlyDeclaresNone(): void
@@ -112,9 +122,7 @@ final class ConversionCatalogPresenterTest extends TestCase
         self::assertNull($byPair['csv->yaml']);
         self::assertArrayHasKey('json->toml', $byPair);
         self::assertNull($byPair['json->toml']);
-        // document AI-экстракция делит `to=json` с data.json, но не category.
-        self::assertArrayHasKey('txt->json', $byPair);
-        self::assertNull($byPair['txt->json']);
+        self::assertSame('api.chat', $byPair['txt->json_ai'] ?? 'missing');
 
         // CNV-95 — static SVG (bmp/gif/ico/tiff) профили.
         self::assertSame('image.raster', $byPair['svg->gif'] ?? 'missing');
@@ -129,6 +137,53 @@ final class ConversionCatalogPresenterTest extends TestCase
         self::assertSame('image.raster', $byPair['jpg->bmp'] ?? 'missing');
     }
 
+    public function testChatProfilePublishesPublicModelChoicesAndDefault(): void
+    {
+        $payload = $this->productionPresenter()->present(SettingsAccessLevel::Free);
+        $model   = $payload['settings']['profiles']['api.chat']['fields'][0];
+
+        self::assertSame('model', $model['key']);
+        self::assertSame('fast', $model['default']);
+        self::assertSame(['fast', 'balanced'], array_column($model['options'], 'value'));
+        self::assertSame(['GPT-4o', 'GPT-4.1'], array_column($model['options'], 'label'));
+    }
+
+    public function testChatProfilePublishesArbitraryLiveYamlModelIdentifiers(): void
+    {
+        $presenter = new ConversionCatalogPresenter(
+            $this->newSeedRegistry(),
+            new ConversionSettingsCatalog(),
+            $this->availability('quality', [
+                ['value' => 'openai/gpt-4o', 'label' => 'GPT-4o'],
+                ['value' => 'quality', 'label' => 'Claude Sonnet'],
+            ]),
+        );
+
+        $model = $presenter->present(SettingsAccessLevel::Free)['settings']['profiles']['api.chat']['fields'][0];
+
+        self::assertSame('quality', $model['default']);
+        self::assertSame([
+            ['value' => 'openai/gpt-4o', 'label' => 'GPT-4o', 'minPlan' => 'free', 'editable' => true],
+            ['value' => 'quality', 'label' => 'Claude Sonnet', 'minPlan' => 'free', 'editable' => true],
+        ], $model['options']);
+    }
+
+    public function testChatPairIsNotAdvertisedWithoutLiveApiRegistration(): void
+    {
+        $presenter = new ConversionCatalogPresenter(
+            $this->newSeedRegistry(),
+            new ConversionSettingsCatalog(),
+            $this->availability(null, []),
+        );
+        $payload = $presenter->present(SettingsAccessLevel::Free);
+
+        self::assertNotContains('txt->json_ai', array_map(
+            static fn (array $pair): string => $pair['from'] . '->' . $pair['to'],
+            $payload['formats'],
+        ));
+        self::assertArrayNotHasKey('api.chat', $payload['settings']['profiles']);
+    }
+
     /**
      * Персонализация проверяется на синтетическом профиле со СМЕШАННЫМИ
      * `minPlan` — у боевых image-профилей все поля объявлены `guest`
@@ -140,6 +195,7 @@ final class ConversionCatalogPresenterTest extends TestCase
         $presenter = new ConversionCatalogPresenter(
             $this->newSeedRegistry(),
             new ConversionSettingsCatalog(ConversionSettingsCatalogTest::grammarFixturePath()),
+            $this->availability(null, []),
         );
 
         $expected = [
@@ -168,6 +224,7 @@ final class ConversionCatalogPresenterTest extends TestCase
         $presenter = new ConversionCatalogPresenter(
             $this->newSeedRegistry(),
             new ConversionSettingsCatalog(ConversionSettingsCatalogTest::grammarFixturePath()),
+            $this->availability(null, []),
         );
 
         $fields = $presenter->present(SettingsAccessLevel::Guest)['settings']['profiles']['test.grammar']['fields'];
@@ -257,6 +314,7 @@ final class ConversionCatalogPresenterTest extends TestCase
         $presenter = new ConversionCatalogPresenter(
             $this->newSeedRegistry(),
             new ConversionSettingsCatalog(ConversionSettingsCatalogTest::grammarFixturePath()),
+            $this->availability(null, []),
         );
 
         foreach (['guest' => false, 'free' => false, 'basic' => false, 'pro' => true] as $levelName => $ultraEditable) {
@@ -279,5 +337,21 @@ final class ConversionCatalogPresenterTest extends TestCase
             self::assertNotNull($ultra);
             self::assertSame($ultraEditable, $ultra['editable'], "Вариант ultra на уровне {$levelName}");
         }
+    }
+
+    /** @param list<array{value: string, label: string}> $choices */
+    private function availability(?string $default, array $choices): ApiModelAvailability
+    {
+        $repo = $this->createStub(WorkerCapabilityRepository::class);
+        $repo->method('findLiveForWorkerType')->willReturn($default === null ? [] : [
+            new WorkerCapability('api', 'test-api', [
+                'executionKind' => 'api',
+                'routingKeys'   => ['api'],
+                'streams'       => ['api'],
+                'settings'      => ['model' => ['default' => $default, 'choices' => $choices]],
+            ]),
+        ]);
+
+        return new ApiModelAvailability($repo);
     }
 }

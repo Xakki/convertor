@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Service\Conversion\Settings;
 
+use App\Entity\WorkerCapability;
 use App\Exception\InvalidConversionOptionException;
+use App\Repository\WorkerCapabilityRepository;
+use App\Service\Conversion\Settings\ApiModelAvailability;
 use App\Service\Conversion\Settings\ConversionOptionsValidator;
 use App\Service\Conversion\Settings\ConversionSettingsCatalog;
 use App\Service\Conversion\Settings\SettingsAccessLevel;
@@ -30,12 +33,72 @@ final class ConversionOptionsValidatorTest extends TestCase
         return new ConversionOptionsValidator(
             new ConversionSettingsCatalog(ConversionSettingsCatalogTest::grammarFixturePath()),
             $this->newSeedRegistry(),
+            $this->availability(null, []),
         );
     }
 
     private function productionValidator(): ConversionOptionsValidator
     {
-        return new ConversionOptionsValidator(new ConversionSettingsCatalog(), $this->newSeedRegistry());
+        return new ConversionOptionsValidator(
+            new ConversionSettingsCatalog(),
+            $this->newSeedRegistry(),
+            $this->availability('fast', [
+                ['value' => 'fast', 'label' => 'GPT-4o'],
+                ['value' => 'balanced', 'label' => 'GPT-4.1'],
+            ]),
+        );
+    }
+
+    public function testChatModelUsesDefaultAndRejectsOutsideAllowlist(): void
+    {
+        $validator = $this->productionValidator();
+
+        self::assertSame(['model' => 'fast'], $validator->validate('txt', 'json_ai', [], SettingsAccessLevel::Free));
+        self::assertSame(['model' => 'balanced'], $validator->validate('txt', 'json_ai', ['model' => 'balanced'], SettingsAccessLevel::Free));
+
+        $this->expectException(InvalidConversionOptionException::class);
+        $validator->validate('txt', 'json_ai', ['model' => 'internal-model-id'], SettingsAccessLevel::Free);
+    }
+
+    public function testChatModelUsesArbitraryLiveYamlChoiceAndDefault(): void
+    {
+        $validator = new ConversionOptionsValidator(
+            new ConversionSettingsCatalog(),
+            $this->newSeedRegistry(),
+            $this->availability('quality', [
+                ['value' => 'openai/gpt-4o', 'label' => 'GPT-4o'],
+                ['value' => 'quality', 'label' => 'Claude Sonnet'],
+            ]),
+        );
+
+        self::assertSame(['model' => 'quality'], $validator->validate('txt', 'json_ai', [], SettingsAccessLevel::Free));
+        self::assertSame(
+            ['model' => 'openai/gpt-4o'],
+            $validator->validate('txt', 'json_ai', ['model' => 'openai/gpt-4o'], SettingsAccessLevel::Free),
+        );
+
+        try {
+            $validator->validate('txt', 'json_ai', ['model' => 'unregistered/model'], SettingsAccessLevel::Free);
+            self::fail('An unregistered model must be rejected');
+        } catch (InvalidConversionOptionException $e) {
+            self::assertSame(InvalidConversionOptionException::CODE_INVALID_VALUE, $e->getErrorCode());
+        }
+    }
+
+    public function testChatPairRejectsWithoutLiveApiRegistration(): void
+    {
+        $validator = new ConversionOptionsValidator(
+            new ConversionSettingsCatalog(),
+            $this->newSeedRegistry(),
+            $this->availability(null, []),
+        );
+
+        try {
+            $validator->validate('txt', 'json_ai', [], SettingsAccessLevel::Free);
+            self::fail('A chat request must be rejected without a live API registration');
+        } catch (InvalidConversionOptionException $e) {
+            self::assertSame(InvalidConversionOptionException::CODE_NOT_SUPPORTED, $e->getErrorCode());
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -494,9 +557,9 @@ final class ConversionOptionsValidatorTest extends TestCase
         yield 'xml target rejects settings as a pair without a profile' => ['csv', 'xml', ['encoding' => 'utf-8'], InvalidConversionOptionException::CODE_NOT_SUPPORTED];
         yield 'yml target rejects settings as a pair without a profile' => ['json', 'yml', ['pretty' => '1'], InvalidConversionOptionException::CODE_NOT_SUPPORTED];
 
-        // document AI-экстракция (txt→json) делит `to=json` с data.json, но не
-        // category — остаётся без профиля этой карточки.
-        yield 'document AI extraction pair has no configurable data settings' => ['txt', 'json', ['pretty' => '1'], InvalidConversionOptionException::CODE_NOT_SUPPORTED];
+        // Chat API владеет txt→json_ai и публикует только model; data-настройки
+        // на этой паре отклоняются как неизвестные внутри chat-профиля.
+        yield 'chat pair rejects data settings outside its model profile' => ['txt', 'json_ai', ['pretty' => '1'], InvalidConversionOptionException::CODE_UNKNOWN_OPTION];
     }
 
     // -----------------------------------------------------------------------
@@ -695,5 +758,21 @@ final class ConversionOptionsValidatorTest extends TestCase
         );
 
         self::assertSame(['width' => 1280, 'height' => 1280, 'fps' => '24'], $normalized);
+    }
+
+    /** @param list<array{value: string, label: string}> $choices */
+    private function availability(?string $default, array $choices): ApiModelAvailability
+    {
+        $repo = $this->createStub(WorkerCapabilityRepository::class);
+        $repo->method('findLiveForWorkerType')->willReturn($default === null ? [] : [
+            new WorkerCapability('api', 'test-api', [
+                'executionKind' => 'api',
+                'routingKeys'   => ['api'],
+                'streams'       => ['api'],
+                'settings'      => ['model' => ['default' => $default, 'choices' => $choices]],
+            ]),
+        ]);
+
+        return new ApiModelAvailability($repo);
     }
 }

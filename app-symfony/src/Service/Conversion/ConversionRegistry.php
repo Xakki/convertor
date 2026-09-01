@@ -50,32 +50,13 @@ use Psr\Log\LoggerInterface;
  *
  * Сигнатуры {@see getSupportedFormats()}, {@see isSupported()}, {@see streamFor()} не меняются.
  *
- * CNV-88: каждый ряд каталога МОЖЕТ нести необязательное поле `executionKind`
- * (строка — валидное значение {@see \App\Enum\WorkerType}, напр. `browser`) —
- * ЕДИНСТВЕННЫЙ признак маршрутизации, которым {@see streamFor()} переопределяет
- * category-based роутинг для пары (после OCR- и AI-веток, до category-
- * фолбэка). `category` при этом остаётся как есть — источник quota/retention,
- * НЕ роутинга. Отсутствующий/`null`
- * `executionKind` — 100% сегодняшних рядов коммиченного
- * `conversion_pairs.json` — не меняет поведение ни на бит (генератор
- * {@see getSupportedFormatsFromBlobs()}/{@see reduceCapabilities()} НИКОГДА
- * не эмитит это поле — ни один worker-blob его сегодня не объявляет, так что
- * маршрут `browser` недостижим ни для одного реального запроса, пока
- * CNV-82/90/91/113 не заведут capability-блоб с этим полем). Невалидное
- * значение (не входящее в {@see \App\Enum\WorkerType}) — громкая
- * `\RuntimeException` при загрузке каталога, той же политикой, что и
- * невалидная `category`.
- *
- * CNV-106 Task A: `isAi=true` вместе с ненулевым `executionKind` на одном
- * ряду — тоже громкая `\RuntimeException` при загрузке (см.
- * {@see loadCatalogMatrix()}). Причина: {@see streamFor()} проверяет
- * `isAi()` СТРОГО РАНЬШЕ `executionKind`, так что при обоих флагах
- * одновременно override маршрутизации был бы резолвлен, загружен без единой
- * ошибки — и молча отброшен `streamFor()`, пара всегда уезжала бы в `'ai'`.
- * До этой карточки недостижимо (ни один ряд не нёс `executionKind`); строгая
- * проверка стоит здесь, чтобы CNV-106 (первая карточка с реальным
- * `executionKind`-профилем) и любая последующая не могли тихо воспроизвести
- * этот пробел.
+ * CNV-88/CNV-27: ряд каталога МОЖЕТ нести `executionKind` — валидное значение
+ * {@see \App\Enum\WorkerType}. После специальных request-scoped OCR/animated-
+ * веток {@see streamFor()} проверяет этот override ДО `isAi`: `isAi` остаётся
+ * quota/auth-флагом, а transport выбирается независимо. CNV-27 первым публикует
+ * `txt→json` с `isAi=true` и `executionKind=api`. Отсутствующий/null override
+ * сохраняет прежний isAi/category-based маршрут. Невалидное значение громко
+ * отклоняется при загрузке каталога.
  *
  * CNV-106: скорректирована находка CNV-88 «animated SVG→GIF может нести
  * `executionKind: browser`» — НЕВЕРНО как факт: `conversion_pairs.json`
@@ -210,7 +191,7 @@ class ConversionRegistry
     }
 
     /**
-     * @return list<array{from: string, to: string, category: string, isAi: bool, ocrCapable: bool}>
+     * @return list<array{from: string, to: string, category: string, isAi: bool, ocrCapable: bool, executionKind?: string}>
      */
     public function getSupportedFormats(): array
     {
@@ -252,7 +233,7 @@ class ConversionRegistry
      * @param list<array<string, mixed>> $blobs raw register-payload blobs — same
      *   shape as the `capabilities` column / `config/catalog/worker_capabilities.json`
      *   entries, each carrying its own `workerType` key.
-     * @return list<array{from: string, to: string, category: string, isAi: bool, ocrCapable: bool}>
+     * @return list<array{from: string, to: string, category: string, isAi: bool, ocrCapable: bool, executionKind?: string}>
      */
     public function getSupportedFormatsFromBlobs(array $blobs): array
     {
@@ -267,13 +248,17 @@ class ConversionRegistry
         $result = [];
         foreach ($this->reduceCapabilities($entries) as $from => $targets) {
             foreach ($targets as $to => $meta) {
-                $result[] = [
+                $row = [
                     'from'       => $from,
                     'to'         => $to,
                     'category'   => $meta['category']->value,
                     'isAi'       => $meta['isAi'],
                     'ocrCapable' => $this->isOcrSupported($from, $to),
                 ];
+                if (($meta['executionKind'] ?? null) !== null) {
+                    $row['executionKind'] = $meta['executionKind'];
+                }
+                $result[] = $row;
             }
         }
 
@@ -432,7 +417,7 @@ class ConversionRegistry
      *   'browser' ({@see WorkerType::Browser}), via the hardcoded allowlist
      *   {@see isAnimatedConversionSupported()} — NOT via the catalog's
      *   per-pair `executionKind` (see {@see ANIMATED_SOURCES} docblock for
-     *   why). Checked before the `isAi()`/`executionKind` branches below,
+     *   why). Checked before the `executionKind`/`isAi()` branches below,
      *   same precedence position as `$ocr` — both are explicit
      *   execution-mode overrides requested by the caller. NOT reachable from
      *   any live request today (see {@see ANIMATED_SOURCES} docblock).
@@ -460,16 +445,13 @@ class ConversionRegistry
             return WorkerType::Browser->value;
         }
 
-        if ($this->isAi($from, $to)) {
-            return 'ai';
-        }
-
-        // CNV-88: at this point isAi($from, $to) above already proved the pair
-        // is supported (it would have thrown otherwise) — safe to read the
-        // matrix entry directly without a second isSupported() round-trip.
         $executionKind = $this->getMatrix()[$from][$to]['executionKind'] ?? null;
         if ($executionKind !== null) {
             return $executionKind;
+        }
+
+        if ($this->isAi($from, $to)) {
+            return 'ai';
         }
 
         $category = $this->getCategory($from, $to)->value;
@@ -663,20 +645,6 @@ class ConversionRegistry
                 $executionKind = $executionKindRaw;
             }
 
-            // CNV-106 Task A: streamFor() checks isAi() BEFORE executionKind (class
-            // docblock/`streamFor()`), so a row with BOTH `isAi: true` AND a
-            // non-null `executionKind` would load silently and always route to
-            // 'ai' — the executionKind override is unreachable, discarded with no
-            // signal. Reject the combination LOUDLY at load time, same policy as
-            // the other malformed-catalog checks above.
-            if (((bool) $row['isAi']) && $executionKind !== null) {
-                throw new \RuntimeException(
-                    "ConversionRegistry: файл каталога {$path}, ряд #{$i} — isAi=true и executionKind "
-                    . "=\"{$executionKind}\" одновременно недопустимы: streamFor() проверяет isAi() ДО "
-                    . 'executionKind, поэтому override маршрутизации был бы молча отброшен',
-                );
-            }
-
             $matrix[$row['from']][$row['to']] = [
                 'category'      => $category,
                 'isAi'          => (bool) $row['isAi'],
@@ -709,7 +677,7 @@ class ConversionRegistry
      * catalog-generation time, never per-request.
      *
      * @param list<array{workerType: string, blob: array<string, mixed>}> $entries
-     * @return array<string, array<string, array{category: FileCategory, isAi: bool}>>
+     * @return array<string, array<string, array{category: FileCategory, isAi: bool, executionKind?: ?string}>>
      */
     private function reduceCapabilities(array $entries): array
     {
@@ -750,7 +718,12 @@ class ConversionRegistry
                         if (isset($matrix[$from][$to]) && ! $matrix[$from][$to]['isAi']) {
                             continue;
                         }
-                        $matrix[$from][$to] = ['category' => $category, 'isAi' => true];
+                        $executionKind      = isset($blob['executionKind']) ? (string) $blob['executionKind'] : null;
+                        $matrix[$from][$to] = [
+                            'category'      => $category,
+                            'isAi'          => true,
+                            'executionKind' => $executionKind,
+                        ];
                     }
                 }
             } else {

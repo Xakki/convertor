@@ -7,14 +7,17 @@ namespace App\Tests\Unit\Service\Conversion;
 use App\DTO\ConversionRequestDTO;
 use App\Entity\Conversion;
 use App\Entity\User;
+use App\Entity\WorkerCapability;
 use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
 use App\Exception\InsufficientBalanceException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
+use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionChainFailPropagator;
 use App\Service\Conversion\ConversionManager;
+use App\Service\Conversion\Settings\ApiModelAvailability;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
 use App\Service\Quota\QuotaService;
@@ -88,6 +91,25 @@ final class ConversionManagerOcrTest extends TestCase
             },
         );
 
+        $apiModels = null;
+        if ($registry->streamFor($from, $to, $ocr) === 'api') {
+            $workerCapabilities = $this->createStub(WorkerCapabilityRepository::class);
+            $capabilities       = [
+                'executionKind' => 'api',
+                'routingKeys'   => ['api'],
+                'streams'       => ['api'],
+                'settings'      => ['model' => [
+                    'default' => 'fast',
+                    'choices' => [['value' => 'fast', 'label' => 'Fast']],
+                ]],
+            ];
+            $workerCapabilities->method('findLiveForWorkerType')->willReturn([
+                new WorkerCapability('api', 'api-live-a', $capabilities),
+                new WorkerCapability('api', 'api-live-b', $capabilities),
+            ]);
+            $apiModels = new ApiModelAvailability($workerCapabilities);
+        }
+
         $manager = new ConversionManager(
             $registry,
             $this->createStub(ConversionRepository::class),
@@ -101,6 +123,7 @@ final class ConversionManagerOcrTest extends TestCase
                 $this->createStub(EntityManagerInterface::class),
                 $this->createStub(QuotaService::class),
             ),
+            apiModels: $apiModels,
         );
 
         $file = $this->makeUpload($from);
@@ -608,11 +631,11 @@ final class ConversionManagerOcrTest extends TestCase
         self::assertSame('document', $r['message']->category);
     }
 
-    public function testTxtToJsonRoutesToAiStream(): void
+    public function testTxtToJsonAiRoutesToApiStream(): void
     {
-        $r = $this->runConversion('txt', 'json', ['expectAi' => true]);
+        $r = $this->runConversion('txt', 'json_ai', ['expectAi' => true]);
 
-        self::assertSame(['conv_ai'], $r['transports']);
+        self::assertSame(['conv_api'], $r['transports']);
         self::assertTrue($r['message']->isAi);
         self::assertSame('document', $r['message']->category);
     }

@@ -1305,6 +1305,27 @@ def test_build_register_body_matrix_categories_absent_when_source_has_none(tmp_p
     assert body["matrix_categories"] == {}
 
 
+def test_register_forwards_runtime_provenance(monkeypatch, tmp_path):
+    """Provenance передаётся отдельным аддитивным объектом и не меняет version."""
+    monkeypatch.setenv("APP_VER", "0.1.2")
+    monkeypatch.setenv("GIT_REVISION", "abcdef123456")
+    monkeypatch.setenv("SOURCE_STATE", "clean")
+    monkeypatch.setenv("IMAGE_REPOSITORY", "harbor.example/worker-image")
+    cfg = _cfg(9999, tmp_path, version="0.1.2")
+    client = WsClient(cfg, lambda job, progress: None, capabilities={"matrix": {}})
+    body = client._build_register_body()
+    assert body["version"] == "0.1.2"
+    build_path = Path(ws_client_mod.__file__).resolve().parents[2] / ".i"
+    expected_build = build_path.read_text(encoding="utf-8").strip() if build_path.is_file() else ""
+    assert body["provenance"] == {
+        "appVersion": "0.1.2",
+        "build": expected_build or None,
+        "revision": "abcdef123456",
+        "sourceState": "clean",
+        "imageRepository": "harbor.example/worker-image",
+    }
+
+
 @pytest.mark.asyncio
 async def test_no_register_when_no_capabilities(tmp_path):
     """Без capabilities воркер НЕ делает POST /register."""
@@ -1691,6 +1712,16 @@ def test_instance_id_override_does_not_affect_register_host(tmp_path, monkeypatc
     body = client._build_register_body()
     assert body["instanceId"] == "pinned-id.1"
     assert body["host"] == "xbook-remote"
+
+
+def test_session_close_without_close_fields_is_diagnosed_as_transport_drop(tmp_path):
+    """ClientConnection-compatible shapes may omit close diagnostics entirely."""
+    cfg = _cfg(9999, tmp_path)
+    client = WsClient(cfg, lambda job, progress: None)
+
+    description = client._note_session_close(object())
+
+    assert description == "TCP-соединение оборвано без close-фрейма (сеть/таймаут/OOM на другой стороне)"
 
 
 # --------------------------------------------------------------------------

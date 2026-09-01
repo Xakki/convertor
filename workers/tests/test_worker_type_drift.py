@@ -7,7 +7,7 @@ set declared by each of three PHP-independent static whitelists:
   - `workers/common/ws_client.py`  — `ALLOWED_WORKER_TYPES` tuple
   - `workers/gateway/keydb.py`     — `WORKER_TYPES` tuple
   - `app-symfony/config/packages/messenger.yaml` — the `conv.<type>` streams
-    of the 6 `conv_*` Messenger transports
+    of the 8 `conv_*` Messenger transports
 
 These mirrors are INTENTIONALLY independent of the enum at runtime, not an
 oversight to "fix" by importing/deriving from it: the Python worker process

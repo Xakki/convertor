@@ -40,5 +40,6 @@ enum WorkerType: string
     case Video    = 'video';
     case Data     = 'data';
     case Ai       = 'ai';
+    case Api      = 'api';
     case Browser  = 'browser';
 }

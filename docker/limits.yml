@@ -70,6 +70,19 @@ services:
                     cpus: "0.5"
                     memory: "256M"
 
+    # Network-bound adapter: reserve a small baseline and leave enough headroom
+    # for concurrent HTTP buffers plus catalog/schema parsing.
+    worker-api:
+        deploy:
+            mode: global
+            resources:
+                limits:
+                    cpus: "0.5"
+                    memory: "256M"
+                reservations:
+                    cpus: "0.05"
+                    memory: "64M"
+
     worker-ffmpeg-audio:
         deploy:
             mode: global

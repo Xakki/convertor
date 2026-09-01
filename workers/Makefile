@@ -8,18 +8,13 @@ IMG = $(IMAGE_NS)
 # make-подстановку в shell-исходник.
 export STREAM
 
-# Релизный тег = APP_VER + git short SHA (иммутабельный) — см. решение §2 в карте
-# harbor-published-worker-images. Грязное рабочее дерево → release-guard стопит релиз
-# (SHA не отражал бы фактическое содержимое образа).
-RELEASE_SHA := $(shell git rev-parse --short HEAD)
-RELEASE_TAG := $(APP_VER)-$(RELEASE_SHA)
-# SHA передаётся в gateway отдельно от release-тега: запущенный gateway можно
-# сравнить с checkout репозитория даже после локальной нерелизной сборки.
-GATEWAY_GIT_SHA := $(shell git rev-parse --short HEAD)
-# SHA не описывает незакоммиченные изменения, поэтому образ несёт отдельную
-# метку состояния исходников. Локальная сборка намеренно остаётся доступной:
-# gateway-verify-sha лишь откажется сертифицировать такой образ.
-GATEWAY_SOURCE_STATE := $(shell if [ -z "$$(git status --porcelain)" ]; then printf clean; else printf dirty; fi)
+# Публичный релизный тег содержит только APP_VER и latest. Build-счётчик `.i`,
+# revision и состояние исходников — отдельная runtime provenance, не часть тега.
+RELEASE_TAG := $(APP_VER)
+GIT_REVISION := $(shell git rev-parse HEAD)
+BUILD_SOURCE_STATE := $(shell if [ -z "$$(git status --porcelain)" ]; then printf clean; else printf dirty; fi)
+GATEWAY_GIT_SHA := $(GIT_REVISION)
+GATEWAY_SOURCE_STATE := $(BUILD_SOURCE_STATE)
 
 .PHONY: release-guard
 release-guard:  # служебный prereq release-workers, не пользовательская команда
@@ -46,6 +41,9 @@ define build_img
 docker build $(DOCKER_BUILD_FLAGS) -t $(IMG)/$(1):latest \
     --build-arg APP_VER=$(APP_VER) \
     --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
+    --build-arg GIT_REVISION=$(GIT_REVISION) \
+    --build-arg SOURCE_STATE=$(BUILD_SOURCE_STATE) \
+    --build-arg IMAGE_REPOSITORY=$(IMG)/$(1) \
     -f docker/workers/$(2).Dockerfile .
 endef
 
@@ -55,6 +53,9 @@ docker build $(DOCKER_BUILD_FLAGS) -t $(IMG)/ws-gateway:latest \
     --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
     --build-arg GATEWAY_GIT_SHA=$(GATEWAY_GIT_SHA) \
     --build-arg GATEWAY_SOURCE_STATE=$(GATEWAY_SOURCE_STATE) \
+    --build-arg GIT_REVISION=$(GIT_REVISION) \
+    --build-arg SOURCE_STATE=$(BUILD_SOURCE_STATE) \
+    --build-arg IMAGE_REPOSITORY=$(IMG)/ws-gateway \
     -f docker/workers/gateway.Dockerfile .
 endef
 
@@ -83,6 +84,14 @@ build-image: bump-i ## Build worker-image image
 build-data: bump-i ## Build worker-data image
 	$(call build_img,worker-data,data)
 
+.PHONY: build-api
+build-api: bump-i ## Build worker-api image
+	$(call build_img,worker-api,api)
+
+.PHONY: build-api-test
+build-api-test: build-api ## Build worker-api:test with test dependencies
+	$(call build_test_img,worker-api)
+
 .PHONY: build-metrics-exporter
 build-metrics-exporter: bump-i ## Build metrics-exporter image
 	$(call build_img,metrics-exporter,metrics_exporter)
@@ -92,19 +101,19 @@ build-gateway: bump-i ## Build ws-gateway image (Harbor-suitable)
 	$(call build_gateway_img)
 
 .PHONY: gateway-up
-gateway-up: ## Start только ws-gateway (глобальный `make up` тоже его поднимает)
+gateway-up: validate-ai-image ## Start только ws-gateway (глобальный `make up` тоже его поднимает)
 	$(DC) up -d ws-gateway
 
 .PHONY: gateway-down
-gateway-down: ## Stop & remove только ws-gateway
+gateway-down: validate-ai-image ## Stop & remove только ws-gateway
 	$(DC) rm -sf ws-gateway
 
 .PHONY: gateway-recreate
-gateway-recreate: ## Force-recreate ТОЛЬКО ws-gateway на свежий образ, --no-deps (иначе depends_on тянет keydb)
+gateway-recreate: validate-ai-image ## Force-recreate ТОЛЬКО ws-gateway на свежем образе, --no-deps (иначе depends_on тянет keydb)
 	$(DC) up -d --force-recreate --no-deps ws-gateway
 
 .PHONY: metrics-exporter-recreate
-metrics-exporter-recreate: ## Force-recreate metrics-exporter (profile monitoring), --no-deps
+metrics-exporter-recreate: validate-ai-image ## Force-recreate metrics-exporter (profile monitoring), --no-deps
 	$(DC) up -d --force-recreate --no-deps metrics-exporter
 
 .PHONY: gateway-logs
@@ -155,13 +164,79 @@ gateway-verify-code: ## RO: скопировать dlq_consumer.py ИЗ конт
 	@tmp=$$(mktemp); $(DC) cp ws-gateway:/app/workers/gateway/dlq_consumer.py $$tmp && grep -n DLQ_AUDIT_LOG_MARKER $$tmp; rm -f $$tmp
 
 .PHONY: build-workers
-build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway ## Build все on-server образы КРОМЕ worker-ai (у него своя двухступенчатая сборка: build-ai-cpu / build-ai-cuda)
+build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway ## REMOTE-safe: build 6 runnable образов без server-only worker-api и worker-ai
 
-# Пересоздать ТОЛЬКО контейнеры воркеров из свежих образов, не трогая
-# php/nginx/keydb/mariadb/ws-gateway. --no-deps — чтобы up не поднимал зависимости.
+.PHONY: build-server-workers
+build-server-workers: build-workers build-api ## SERVER: build generic remote-safe images + production-only worker-api
+
+# Эти guard'ы относятся только к операциям основного application Compose-файла.
+# Fluent sidecar targets ниже используют отдельный DC_FLUENT и намеренно не
+# требуют AI_IMAGE.
+# Профиль и allowlist для безопасного точечного recreate. Профиль saVpn намеренно
+# ограничен data/image: это единственный документированный способ включить такой
+# хост, без чтения или изменения его секретного .env.local.
+WORKER_RECREATE_PROFILE ?= remote
+WORKER_RECREATE_SERVICES ?=
+WORKER_RECREATE_REMOTE_SERVICES := worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
+WORKER_RECREATE_LOCAL_SERVICES := $(WORKER_RECREATE_REMOTE_SERVICES)
+WORKER_RECREATE_SAVPN_SERVICES := worker-data worker-image
+
+# Пересоздать/пуллить ТОЛЬКО контейнеры из проверенного effective set, не трогая
+# php/nginx/keydb/mariadb/ws-gateway/db-dump-cron. worker-api отделён от worker-*.
+# Compose service worker-ai намеренно маппится на публичный image worker-ai-cpu.
+.PHONY: workers-pull
+workers-pull: validate-ai-image ## Pull только worker-образы: WORKER_RECREATE_PROFILE=remote|local|uBook|saVpn; опционально WORKER_RECREATE_SERVICES=<allowlist>
+	@set -eu; \
+	case "$(WORKER_RECREATE_PROFILE)" in \
+	    remote|uBook|ubook) allowed="$(WORKER_RECREATE_REMOTE_SERVICES)" ;; \
+	    local) allowed="$(WORKER_RECREATE_LOCAL_SERVICES)" ;; \
+	    saVpn) allowed="$(WORKER_RECREATE_SAVPN_SERVICES)" ;; \
+	    *) echo "workers-pull: unknown profile '$(WORKER_RECREATE_PROFILE)' (use remote, local, ubook or saVpn)"; exit 2 ;; \
+	esac; \
+	requested="$(WORKER_RECREATE_SERVICES)"; \
+	if [ -z "$$requested" ]; then requested="$$allowed"; fi; \
+	for service in $$requested; do case " $$allowed " in *" $$service "*) ;; *) echo "workers-pull: service '$$service' is not allowed by profile $(WORKER_RECREATE_PROFILE)"; exit 2 ;; esac; done; \
+	requested=$$(printf '%s\n' $$requested | sort -u | tr '\n' ' '); \
+	case " $$requested " in *" worker-ai "*) compose_profiles=ai ;; *) compose_profiles= ;; esac; \
+	echo "workers-pull: profile=$(WORKER_RECREATE_PROFILE) effective services=$$requested compose_profiles=$${compose_profiles:-none}"; \
+	available="$$(COMPOSE_PROFILES="$$compose_profiles" $(DC) config --services)"; \
+	images="$$(COMPOSE_PROFILES="$$compose_profiles" $(DC) config --images)"; \
+	for service in $$requested; do if ! printf '%s\n' "$$available" | grep -Fqx "$$service"; then echo "workers-pull: service '$$service' is not in the effective Compose service set"; exit 2; fi; done; \
+	case " $$requested " in *" worker-ai "*) printf '%s\n' "$$images" | grep -Fqx "$(IMG)/worker-ai-cpu:$(IMAGE_TAG)" || { echo "workers-pull: worker-ai must render $(IMG)/worker-ai-cpu:$(IMAGE_TAG)"; exit 2; } ;; esac; \
+	COMPOSE_PROFILES="$$compose_profiles" $(DC) pull $$requested
+
 .PHONY: workers-recreate
-workers-recreate: ## Recreate все 6 worker-контейнеров, вкл. worker-ai (не трогает php/nginx/gateway/keydb/mariadb)
-	$(DC) up -d --no-deps worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
+workers-recreate: validate-ai-image ## Recreate только worker-образы: WORKER_RECREATE_PROFILE=remote|local|uBook|saVpn; опционально WORKER_RECREATE_SERVICES=<allowlist>
+	@set -eu; \
+	case "$(WORKER_RECREATE_PROFILE)" in \
+	    remote|uBook|ubook) allowed="$(WORKER_RECREATE_REMOTE_SERVICES)" ;; \
+	    local) allowed="$(WORKER_RECREATE_LOCAL_SERVICES)" ;; \
+	    saVpn) allowed="$(WORKER_RECREATE_SAVPN_SERVICES)" ;; \
+	    *) echo "workers-recreate: unknown profile '$(WORKER_RECREATE_PROFILE)' (use remote, local, ubook or saVpn)"; exit 2 ;; \
+	esac; \
+	requested="$(WORKER_RECREATE_SERVICES)"; \
+	if [ -z "$$requested" ]; then requested="$$allowed"; fi; \
+	for service in $$requested; do case " $$allowed " in *" $$service "*) ;; *) echo "workers-recreate: service '$$service' is not allowed by profile $(WORKER_RECREATE_PROFILE)"; exit 2 ;; esac; done; \
+	requested=$$(printf '%s\n' $$requested | sort -u | tr '\n' ' '); \
+	case " $$requested " in *" worker-ai "*) compose_profiles=ai ;; *) compose_profiles= ;; esac; \
+	effective="$$requested"; \
+	echo "workers-recreate: profile=$(WORKER_RECREATE_PROFILE) effective services=$$effective compose_profiles=$${compose_profiles:-none}"; \
+	available="$$(COMPOSE_PROFILES="$$compose_profiles" $(DC) config --services)"; \
+	for service in $$effective; do if ! printf '%s\n' "$$available" | grep -Fqx "$$service"; then echo "workers-recreate: service '$$service' is not in the effective Compose service set"; exit 2; fi; done; \
+	COMPOSE_PROFILES="$$compose_profiles" $(DC) up -d --force-recreate --no-deps $$effective
+
+.PHONY: worker-api-pull
+worker-api-pull: validate-ai-image ## Pull только production worker-api image (server,api profiles)
+	@set -eu; \
+	available="$$(COMPOSE_PROFILES=server,api $(DC) config --services)"; \
+	images="$$(COMPOSE_PROFILES=server,api $(DC) config --images)"; \
+	printf '%s\n' "$$available" | grep -Fqx worker-api || { echo "worker-api-pull: worker-api is not in the effective Compose service set"; exit 2; }; \
+	printf '%s\n' "$$images" | grep -Fqx "$(IMG)/worker-api:$(IMAGE_TAG)" || { echo "worker-api-pull: worker-api image does not match $(IMG)/worker-api:$(IMAGE_TAG)"; exit 2; }; \
+	COMPOSE_PROFILES=server,api $(DC) pull worker-api
+
+.PHONY: worker-api-recreate
+worker-api-recreate: validate-ai-image ## SERVER: force-recreate production-only worker-api, --no-deps
+	COMPOSE_PROFILES=server,api $(DC) up -d --force-recreate --no-deps worker-api
 
 .PHONY: build-data-test
 build-data-test: build-data ## Build worker-data:test (test deps pre-baked, не попадает в :latest)
@@ -184,7 +259,7 @@ build-metrics-test: build-metrics-exporter ## Build metrics-exporter:test (test 
 	$(call build_test_img,metrics-exporter)
 
 .PHONY: build-workers-test
-build-workers-test: build-data-test build-ffmpeg-test build-image-test build-libreoffice-test build-metrics-test ## Build all worker :test images (test deps pre-baked)
+build-workers-test: build-data-test build-ffmpeg-test build-image-test build-libreoffice-test build-api-test build-metrics-test ## Build all 6 worker :test images (test deps pre-baked)
 
 ##@ Build worker-ai (remote / Harbor + local GPU)
 
@@ -198,13 +273,14 @@ build-workers-test: build-data-test build-ffmpeg-test build-image-test build-lib
 HARBOR_NS       ?= harbor.xakki.ru/convertor
 # AI_BASE_IMAGE/AI_BASE_LOCAL — промежуточные локальные теги сборки, версию не пиннят
 # намеренно (см. комментарии у build-ai-base). AI_CUDA_IMAGE/AI_CPU_IMAGE — то, что
-# реально запускает docker-compose (image: worker-ai:${IMAGE_TAG:-latest}-${AI_VARIANT}),
-# поэтому обязаны следовать IMAGE_TAG — иначе GPU-хост с запиненной версией получит
-# тег-mismatch (build-ai-cuda соберёт :latest-cuda, а compose ищет :<IMAGE_TAG>-cuda).
+# реально запускает docker-compose (CPU: worker-ai-cpu:${IMAGE_TAG:-latest}; CUDA:
+# локальный worker-ai-cuda:<APP_VER>),
+# поэтому CPU-образ обязан следовать IMAGE_TAG, а GPU-хост явно задаёт локальный тег.
 AI_BASE_IMAGE   ?= $(HARBOR_NS)/worker-ai-base:latest
 AI_BASE_LOCAL   ?= worker-ai-base:local
-AI_CUDA_IMAGE   ?= $(IMG)/worker-ai:$(IMAGE_TAG)-cuda
-AI_CPU_IMAGE    ?= $(IMG)/worker-ai:$(IMAGE_TAG)-cpu
+AI_CUDA_IMAGE   ?= worker-ai-cuda:$(APP_VER)
+# CPU AI is a separately published repository; CUDA remains local-only.
+AI_CPU_IMAGE    ?= $(HARBOR_NS)/worker-ai-cpu:$(IMAGE_TAG)
 
 # Compute capability целым числом (86 для RTX 3080/3090):
 #   nvidia-smi --query-gpu=compute_cap --format=csv,noheader → "8.6" → 86.
@@ -227,17 +303,25 @@ APP_GID         ?= 1000
 AI_STAGE_BUILD_FLAGS := $(filter-out --pull,$(DOCKER_BUILD_FLAGS))
 
 .PHONY: build-ai-base
-build-ai-base: ## Build LIGHT ai-base (код + pure-python deps, без ML); тегирует Harbor-тег + локальный
-	docker build $(DOCKER_BUILD_FLAGS) -t $(AI_BASE_IMAGE) -t $(AI_BASE_LOCAL) \
+build-ai-base: ## Build LIGHT ai-base (код + pure-python deps, без ML); теги APP_VER/latest + локальный
+	docker build $(DOCKER_BUILD_FLAGS) \
+	    -t $(HARBOR_NS)/worker-ai-base:$(APP_VER) \
+	    -t $(HARBOR_NS)/worker-ai-base:latest \
+	    -t $(AI_BASE_LOCAL) \
+	    --build-arg APP_VER=$(APP_VER) \
+	    --build-arg GIT_REVISION=$(GIT_REVISION) \
+	    --build-arg SOURCE_STATE=$(BUILD_SOURCE_STATE) \
+	    --build-arg IMAGE_REPOSITORY=$(HARBOR_NS)/worker-ai-base \
 	    -f docker/workers/ai-base.Dockerfile .
 
 .PHONY: push-ai-base
 push-ai-base: build-ai-base ## Раздать ai-base на другие хосты: push в Harbor (build-ai-cpu/cuda от push не зависят)
-	docker push $(AI_BASE_IMAGE)
+	docker push $(HARBOR_NS)/worker-ai-base:$(APP_VER)
+	docker push $(HARBOR_NS)/worker-ai-base:latest
 
 .PHONY: build-ai-cuda
 build-ai-cuda: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cuda (CUDA ML). CUDA_ARCH=86 WITH_LLAMACPP=0|1
-	docker build $(AI_STAGE_BUILD_FLAGS) -t $(AI_CUDA_IMAGE) \
+	docker build $(AI_STAGE_BUILD_FLAGS) -t $(AI_CUDA_IMAGE) -t worker-ai-cuda:latest \
 	    --build-arg AI_BASE_IMAGE=$(AI_BASE_LOCAL) \
 	    --build-arg CUDA_ARCH=$(CUDA_ARCH) \
 	    --build-arg TORCH_CUDA_ARCH=$(TORCH_CUDA_ARCH) \
@@ -246,6 +330,9 @@ build-ai-cuda: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cu
 	    --build-arg APP_GID=$(APP_GID) \
 	    --build-arg APP_VER=$(APP_VER) \
 	    --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
+	    --build-arg GIT_REVISION=$(GIT_REVISION) \
+	    --build-arg SOURCE_STATE=$(BUILD_SOURCE_STATE) \
+	    --build-arg IMAGE_REPOSITORY=worker-ai-cuda \
 	    -f docker/workers/ai.cuda.Dockerfile .
 
 .PHONY: build-ai-cpu
@@ -256,33 +343,39 @@ build-ai-cpu: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cpu
 	    --build-arg APP_GID=$(APP_GID) \
 	    --build-arg APP_VER=$(APP_VER) \
 	    --build-arg WORKER_BUILD="$$(cat $(CURDIR)/.i 2>/dev/null || echo 0)" \
+	    --build-arg GIT_REVISION=$(GIT_REVISION) \
+	    --build-arg SOURCE_STATE=$(BUILD_SOURCE_STATE) \
+	    --build-arg IMAGE_REPOSITORY=$(HARBOR_NS)/worker-ai-cpu \
 	    -f docker/workers/ai.cpu.Dockerfile .
 
 ##@ Release (Harbor)
 
 # Явный поимённый список runnable-образов на push — НИКАКИХ tag-glob'ов (решение §7:
 # после смены IMAGE_NS на Harbor-namespace build_test_img тегает :test прямо в Harbor,
-# такой образ никогда не должен уехать push'ем). worker-ai:cuda НЕ публикуется —
+# такой образ никогда не должен уехать push'ем). worker-ai-cuda НЕ публикуется —
 # остаётся локальной сборкой GPU-хоста (§1, карта CNV-7-cuda-worker-ai-rebuild-gpu-host).
-RELEASE_IMAGES := worker-libreoffice worker-ffmpeg worker-image worker-data metrics-exporter ws-gateway
+RELEASE_IMAGES := worker-libreoffice worker-ffmpeg worker-image worker-data worker-api metrics-exporter ws-gateway
 
 .PHONY: release-tag
 release-tag:  # служебный prereq release-workers — печатает RELEASE_TAG до старта сборки
 	@echo "release-workers: RELEASE_TAG=$(RELEASE_TAG) → $(HARBOR_NS)"
 
 .PHONY: release-workers
-release-workers: release-tag release-guard build-workers build-ai-cpu ## Cache-warm build + push в Harbor: релизный тег APP_VER-sha + latest (явный список, БЕЗ :test, БЕЗ worker-ai:cuda)
+release-workers: IMAGE_TAG := $(RELEASE_TAG)
+release-workers: release-tag release-guard build-server-workers build-ai-cpu ## SERVER release: build incl. worker-api + push only APP_VER/latest (без :test и worker-ai-cuda)
 	@set -e; for name in $(RELEASE_IMAGES); do \
-	    echo "push $(HARBOR_NS)/$$name:$(RELEASE_TAG)"; \
+	    echo "push $(HARBOR_NS)/$$name:$(RELEASE_TAG) and :latest"; \
 	    docker tag $(IMG)/$$name:latest $(HARBOR_NS)/$$name:$(RELEASE_TAG); \
 	    docker tag $(IMG)/$$name:latest $(HARBOR_NS)/$$name:latest; \
 	    docker push $(HARBOR_NS)/$$name:$(RELEASE_TAG); \
 	    docker push $(HARBOR_NS)/$$name:latest; \
 	done
-	docker tag $(AI_CPU_IMAGE) $(HARBOR_NS)/worker-ai:$(RELEASE_TAG)-cpu
-	docker tag $(AI_CPU_IMAGE) $(HARBOR_NS)/worker-ai:latest-cpu
-	docker push $(HARBOR_NS)/worker-ai:$(RELEASE_TAG)-cpu
-	docker push $(HARBOR_NS)/worker-ai:latest-cpu
+	docker tag $(AI_CPU_IMAGE) $(HARBOR_NS)/worker-ai-cpu:$(RELEASE_TAG)
+	docker tag $(AI_CPU_IMAGE) $(HARBOR_NS)/worker-ai-cpu:latest
+	docker push $(HARBOR_NS)/worker-ai-cpu:$(RELEASE_TAG)
+	docker push $(HARBOR_NS)/worker-ai-cpu:latest
+	docker push $(HARBOR_NS)/worker-ai-base:$(RELEASE_TAG)
+	docker push $(HARBOR_NS)/worker-ai-base:latest
 	@$(MAKE) publish-deploy-gist
 
 # Публикация deploy/ в публичный gist (проекция для curl|bash). Warn+skip если
@@ -298,21 +391,25 @@ rebuild-workers: build-workers build-ai-cpu ## Full --no-cache --pull перес
 ##@ Queue / Workers
 
 .PHONY: worker-logs
-worker-logs: ## Tail logs всех 6 on-server воркеров вкл. worker-ai
+worker-logs: ## REMOTE-safe: tail logs 6 worker-контейнеров, вкл. worker-ai; без server-only worker-api
 	$(DC) logs -f worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
+
+.PHONY: server-worker-logs
+server-worker-logs: ## SERVER: tail logs 7 worker-контейнеров, вкл. production-only worker-api
+	COMPOSE_PROFILES=server,api $(DC) logs -f worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai worker-api
 
 # Свой fluent-bit нужен ТОЛЬКО remote-хосту (на главном сервере логи шлём в общий
 # host-wide сборщик на ${EXT_FLUENT_PORT}, и порт уже занят им).
 .PHONY: fluent-up
-fluent-up: ## REMOTE-хост: поднять fluent-bit+logrotate (на главном сервере не нужен — там общий)
+fluent-up: ## REMOTE-хост: поднять fluent-bit+logrotate (отдельный Compose, без CUDA guard)
 	$(DC_FLUENT) up -d fluent-bit logrotate
 
 .PHONY: fluent-recreate
-fluent-recreate: ## REMOTE-хост: force-recreate fluent-bit+logrotate (после смены bind paths)
+fluent-recreate: ## REMOTE-хост: force-recreate fluent-bit+logrotate (отдельный Compose, без CUDA guard)
 	$(DC_FLUENT) up -d --force-recreate fluent-bit logrotate
 
 .PHONY: fluent-restart
-fluent-restart: ## Restart fluent-bit-сайдкара (подхватить изменения conf.d)
+fluent-restart: ## Restart fluent-bit-сайдкара (отдельный Compose, без CUDA guard)
 	$(DC_FLUENT) restart fluent-bit
 
 .PHONY: fluent-logs
@@ -357,6 +454,10 @@ dlq-inspect: ## RO-инспекция DLQ-стрима STREAM=conv.dead (default
 
 ##@ Worker tests
 
+.PHONY: test-makefile-worker-pull
+test-makefile-worker-pull: ## Structural fake-Compose tests for profile-scoped worker pulls
+	python3 -m pytest workers/tests/test_makefile_worker_pull.py -p no:cacheprovider -q
+
 # Per-worker unit runs: тесты каждого воркера идут внутри pre-baked :test образа
 # (test-deps запечены — никакого pip install в runtime). Стенд НЕ нужен.
 # Исходники bind-mount'ятся read-only; PYTHONPATH=/src подключает рабочее дерево.
@@ -368,7 +469,11 @@ docker run --rm \
 endef
 
 .PHONY: test-python
-test-python: test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai ## Unit-сюита по воркерам ВНУТРИ их образов (без e2e и drift; стенд не нужен)
+test-python: test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai test-python-api ## 7 unit-сюит по воркерам ВНУТРИ образов (без e2e и drift; стенд не нужен)
+
+.PHONY: test-python-api
+test-python-api: build-api-test ## Unit + schema-drift тесты worker-api в его контейнере
+	$(call RUN_PYTEST_TEST,$(IMG)/worker-api:test,workers/tests/test_api_worker.py workers/tests/test_api_schema_drift.py workers/tests/test_api_generic_contract.py workers/tests/test_gonka_provider.py)
 
 .PHONY: test-python-data
 test-python-data: build-data-test ## Unit тесты worker-data (+ shared common: stream_consumer, envelope, safe_path) + WS transport
@@ -411,9 +516,9 @@ test-python-ai: build-ffmpeg-test ## Unit тесты AI-воркера + dev-ser
 # а не молча терять из графа CAPABILITIES; bare-host, тех же зависимостей
 # что и test_catalog_drift.py не требует.
 .PHONY: test-drift
-test-drift: ## Drift guards: routing (dump-matrix.php vs CAPABILITIES) + worker-type (enum vs 3 зеркала) + каталог форматов + mutation-guard
+test-drift: ## Drift guards: routing/types/catalog + worker-api ops config + mutation-guard
 	$(REQUIRE_TEST)
-	PYTHONPATH=. pytest workers/tests/test_routing_drift.py workers/tests/test_worker_type_drift.py workers/tests/test_catalog_drift.py workers/tests/test_capabilities_mutation_guard.py workers/tests/test_makefile_gateway_sha.py -v
+	PYTHONPATH=. pytest workers/tests/test_routing_drift.py workers/tests/test_worker_type_drift.py workers/tests/test_catalog_drift.py workers/tests/test_capabilities_mutation_guard.py workers/tests/test_makefile_gateway_sha.py workers/tests/test_worker_api_ops_config.py -v
 
 # Регенерация каталога — 2 стадии. Stage 1: bare host, stdlib only (тот же
 # принцип, что и test-drift Python-сторона) — gen_worker_capabilities.py не
@@ -426,7 +531,7 @@ formats-catalog: ## Regen каталог форматов: CAPABILITIES ворк
 	$(CONSOLE) app:catalog:generate-conversion-pairs
 
 .PHONY: test-gateway
-test-gateway: build-data-test ## KeyDB-слой WS-Gateway на РЕАЛЬНОМ keydb тест-стенда (async, pytest-asyncio)
+test-gateway: validate-ai-image build-data-test ## KeyDB-слой WS-Gateway на РЕАЛЬНОМ keydb тест-стенда (async, pytest-asyncio)
 	$(REQUIRE_TEST)
 	$(DC) up -d --wait keydb
 	docker run --rm -u root \
@@ -456,7 +561,8 @@ test-e2e: build-workers build-ffmpeg-test ## Реальный S3 in/out e2e (в�
 	$(MAKE) COMPOSE_PROFILES=server,test,ai up migrate
 	$(RUN_E2E_PYTEST)
 
-# Smoke = тот же e2e-прогон (1 конвертация на document/image/audio/video/data/ai).
+# Smoke = тот же e2e-прогон локальных worker-категорий
+# document/image/audio/video/data/ai; provider-backed api здесь намеренно нет.
 # AI-профиль включается явно (в .env.test по умолчанию ai выключен — тяжёлый образ).
 # Вызов: `make smoke` (пере-вход TEST=1) или `make TEST=1 smoke-run`.
 .PHONY: smoke-run

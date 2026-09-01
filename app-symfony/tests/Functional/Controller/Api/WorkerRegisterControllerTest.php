@@ -72,6 +72,183 @@ final class WorkerRegisterControllerTest extends WebTestCase
         self::assertTrue($body['ok'] ?? false);
     }
 
+    public function testRegisterPersistsOptionalExecutionKindAndSettings(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+        $payload   = $this->validApiPayload();
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::once())
+            ->method('upsert')
+            ->with('api', 'host-a.api-0', $payload, null);
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+    }
+
+    public function testRegisterRejectsApiWorkerWithoutApiExecutionKind(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+        $payload   = $this->validApiPayload();
+        unset($payload['executionKind']);
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::never())->method('upsert');
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertStringContainsString('executionKind', (string) ($body['error'] ?? ''));
+    }
+
+    public function testRegisterRejectsApiWorkerWithoutExclusiveApiRoutingKey(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+        $payload   = array_merge($this->validApiPayload(), ['routingKeys' => ['api', 'ai']]);
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::never())->method('upsert');
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertStringContainsString('routingKeys', (string) ($body['error'] ?? ''));
+    }
+
+    public function testRegisterRejectsApiWorkerWithoutExclusiveApiStream(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+        $payload   = array_merge($this->validApiPayload(), ['streams' => ['ai']]);
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::never())->method('upsert');
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertStringContainsString('streams', (string) ($body['error'] ?? ''));
+    }
+
+    public function testRegisterRejectsApiWorkerWithoutModelSettings(): void
+    {
+        $client    = static::createClient();
+        $container = static::getContainer();
+        $payload   = $this->validApiPayload();
+        unset($payload['settings']);
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::never())->method('upsert');
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertStringContainsString('settings.model', (string) ($body['error'] ?? ''));
+    }
+
+    public function testRegisterRejectsApiWorkerWhenModelDefaultIsNotAChoice(): void
+    {
+        $client                       = static::createClient();
+        $container                    = static::getContainer();
+        $payload                      = $this->validApiPayload();
+        $payload['settings']['model'] = [
+            'default' => 'balanced',
+            'choices' => [['value' => 'fast', 'label' => 'Fast']],
+        ];
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::never())->method('upsert');
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertStringContainsString('settings.model.default', (string) ($body['error'] ?? ''));
+    }
+
+    public function testRegisterRejectsApiWorkerWithAssociativeModelChoices(): void
+    {
+        $client                                  = static::createClient();
+        $container                               = static::getContainer();
+        $payload                                 = $this->validApiPayload();
+        $payload['settings']['model']['choices'] = [
+            'fast' => ['value' => 'fast', 'label' => 'Fast'],
+        ];
+
+        $repo = $this->createMock(WorkerCapabilityRepository::class);
+        $repo->expects(self::never())->method('upsert');
+        $container->set(WorkerCapabilityRepository::class, $repo);
+
+        $client->request(
+            'POST',
+            self::URL,
+            [],
+            [],
+            ['HTTP_AUTHORIZATION' => self::TOKEN, 'CONTENT_TYPE' => 'application/json'],
+            (string) json_encode($payload),
+        );
+
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+        $body = json_decode((string) $client->getResponse()->getContent(), true);
+        self::assertStringContainsString('settings.model.choices', (string) ($body['error'] ?? ''));
+    }
+
     /**
      * Повторный вызов register с тем же workerType возвращает 200.
      * Idempotency на уровне БД обеспечивает WorkerCapabilityRepository::upsert().
@@ -203,7 +380,7 @@ final class WorkerRegisterControllerTest extends WebTestCase
         self::assertSame(400, $client->getResponse()->getStatusCode());
         $body = json_decode((string) $client->getResponse()->getContent(), true);
         self::assertSame(
-            'workerType "bogus" is not a known worker type (allowed: document, image, audio, video, data, ai, browser)',
+            'workerType "bogus" is not a known worker type (allowed: document, image, audio, video, data, ai, api, browser)',
             $body['error'] ?? null,
         );
     }
@@ -280,5 +457,24 @@ final class WorkerRegisterControllerTest extends WebTestCase
             'routingKeys not array'  => [array_merge($base, ['routingKeys' => 'image']), 'routingKeys'],
             'matrix not array'       => [array_merge($base, ['matrix' => 'jpg:png']), 'matrix'],
         ];
+    }
+
+    /** @return array<string, mixed> */
+    private function validApiPayload(): array
+    {
+        return array_merge(self::VALID_PAYLOAD, [
+            'workerType'    => 'api',
+            'instanceId'    => 'host-a.api-0',
+            'isAi'          => true,
+            'streams'       => ['api'],
+            'routingKeys'   => ['api'],
+            'executionKind' => 'api',
+            'settings'      => [
+                'model' => [
+                    'default' => 'fast',
+                    'choices' => [['value' => 'fast', 'label' => 'Fast']],
+                ],
+            ],
+        ]);
     }
 }

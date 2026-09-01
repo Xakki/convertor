@@ -266,10 +266,12 @@ final class InternalWorkerController extends AbstractController
      * sends neither keeps the exact registry-06 delta-only behaviour.
      *
      * `status` IS persisted ({@see WorkerCapability::$status},
-     * {@see \App\Enum\WorkerLivenessStatus}) — it does NOT gate routing
-     * (`ConversionRegistry` never reads it), it is a pure monitoring signal
-     * for the admin page. `metrics` is validated (shape-checked, malformed
-     * rejects the batch same as any other field) and, since the admin
+     * {@see \App\Enum\WorkerLivenessStatus}). Normal worker admission ignores
+     * this short-lived monitoring signal and remains durable until long-TTL GC.
+     * API model publication/validation/admission is the narrow exception: it
+     * reads only fresh alive rows through `ApiModelAvailability`.
+     * `metrics` is validated (shape-checked; malformed input rejects the batch
+     * like any other field) and, since the admin
      * workers page now surfaces cpu/mem/load ({@see \App\Service\Admin\WorkerStatsProvider}),
      * IS persisted too ({@see \App\Entity\WorkerCapability::$metrics},
      * {@see WorkerCapabilityRepository::updateLiveness()}) — null when the

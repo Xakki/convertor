@@ -4,7 +4,7 @@
 #
 # Профили (один сервис = один профиль):
 #   document | audio | video | image | data | ai
-# CUDA / worker-ai:cuda в публичный путь НЕ входят.
+# CUDA / worker-ai-cuda в публичный путь НЕ входят.
 #
 # Пример:
 #   docker compose --env-file .env --profile document --profile image up -d
@@ -150,7 +150,7 @@ services:
     # Только CPU. CUDA в публичный путь не входит — см. docs/worker-ai-deploy.md.
     worker-ai:
         profiles: ["ai"]
-        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-ai:${IMAGE_TAG:-latest}-cpu
+        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-ai-cpu:${IMAGE_TAG:-latest}
         pull_policy: ${AI_PULL_POLICY:-always}
         container_name: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ai"
         hostname: "${COMPOSE_PROJECT_NAME:-convertor-remote}-worker-ai"

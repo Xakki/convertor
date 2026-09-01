@@ -63,6 +63,41 @@
     "workerType": "ai"
   },
   {
+    "executionKind": "api",
+    "isAi": true,
+    "matrix": {
+      "txt": [
+        "json_ai",
+        "txt_ai"
+      ]
+    },
+    "matrix_categories": {
+      "txt": "document"
+    },
+    "routingKeys": [
+      "api"
+    ],
+    "settings": {
+      "model": {
+        "choices": [
+          {
+            "label": "GPT-4o",
+            "value": "fast"
+          },
+          {
+            "label": "GPT-4.1",
+            "value": "balanced"
+          }
+        ],
+        "default": "fast"
+      }
+    },
+    "streams": [
+      "api"
+    ],
+    "workerType": "api"
+  },
+  {
     "isAi": false,
     "matrix": {
       "aac": [

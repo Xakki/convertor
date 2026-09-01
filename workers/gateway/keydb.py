@@ -40,7 +40,7 @@ STALE_IDLE_MS = 300_000         # 5 min — порог XAUTOCLAIM reclaim
 # `App\Enum\WorkerType` — gateway обязан стартовать и обслуживать стримы даже
 # если PHP/БД недоступны. Синхронизацию держит drift-guard
 # `workers/tests/test_worker_type_drift.py` (`make test-drift` из корня репо).
-WORKER_TYPES = ("ai", "document", "image", "audio", "video", "data", "browser")
+WORKER_TYPES = ("ai", "api", "document", "image", "audio", "video", "data", "browser")
 # Верхняя граница записей PEL, возобновляемых за один read_pending при reconnect.
 PENDING_BATCH = 100
 

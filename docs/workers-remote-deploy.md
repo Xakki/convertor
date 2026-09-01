@@ -2,7 +2,7 @@
 
 Как поднять на отдельном (CPU) хосте только конвертационных воркеров —
 5 non-AI (`worker-libreoffice`, `worker-ffmpeg-audio`, `worker-ffmpeg-video`,
-`worker-image`, `worker-data`) + `worker-ai:cpu` — не разворачивая на нём
+`worker-image`, `worker-data`) + `worker-ai-cpu` — не разворачивая на нём
 `php`/`mariadb`/`nginx`/`keydb`/`ws-gateway`/`metrics-exporter`. Все воркеры —
 чистые WS-клиенты (см. `docs/queue-contract.md`): ни KeyDB, ни S3 напрямую не
 трогают, только публичный `wss://…/ws/worker/` gateway'я и Symfony API по
@@ -39,9 +39,9 @@ on-server воркерам: gateway балансирует задачи межд
 
 - Docker (24+) на remote-хосте.
 - Клон репозитория `convertor` НА remote-хосте — нужен `docker-compose.yml` +
-  Makefile-таргеты (`pull`, `workers-recreate`). Сами образы собирать не
+  Makefile-таргеты (`workers-pull`, `workers-recreate`). Сами образы собирать не
   нужно: 5 обычных воркеров + `ws-gateway` + `metrics-exporter` +
-  `worker-ai:cpu` публикуются в Harbor (`harbor-published-worker-images`, см.
+  `worker-ai-cpu` публикуется в Harbor (`harbor-published-worker-images`, см.
   `docs/worker-ai-deploy.md`) — happy path тянет их готовыми. Локальная
   сборка из исходников остаётся фолбэком для свежего хоста без доступа к
   Harbor или разработки (см. «Получение образов» ниже).
@@ -110,19 +110,19 @@ metrics-exporter — под `monitoring` (он к тому же требует �
 | `COMPOSE_PROJECT_NAME` | своё уникальное, НЕ `xakki-convertor` | **Критично.** `WORKER_ID` каждого воркера = hostname контейнера = `${COMPOSE_PROJECT_NAME}-worker-*` (`docker-compose.yml`), и ЭТО ЖЕ имя используется дословно как имя KeyDB-consumer'а в `XREADGROUP` (`workers/gateway/ws_server.py`). Одинаковый `COMPOSE_PROJECT_NAME` на двух хостах → два физически разных контейнера претендуют на одно имя consumer'а — gateway не различит их, reclaim/ack начнут путаться. |
 | `WORKER_API_TOKEN` | реальный токен | Единственная обязательная переменная без дефолта — пустая строка блокирует старт воркера (`WsClientConfig.validate()`), это НАМЕРЕННО (без него был бы reconnect-storm против недоступного/неавторизованного gateway). |
 | `COMPOSE_PROFILES` | `ai` (или пусто на CPU-хосте без worker-ai) | НЕ добавлять `server`/`monitoring` — иначе `make up` потянет серверную часть, которой здесь нет. |
-| `WORKER_PULL_POLICY` | `missing` | Happy path: `make pull`/`make up` тянет готовые образы из Harbor вместо сборки; если тега ещё нет (свежий хост до первого релиза) — падает обратно на `build:`-секцию. Это и дефолт `docker-compose.yml`, `.env.local_worker_example` просто фиксирует его явно. |
-| `AI_PULL_POLICY` | `always` на CPU-хосте / `build` на GPU-хосте | Отдельная политика для `worker-ai`: `worker-ai:latest-cpu` публикуется в Harbor (`always` безопасен), `worker-ai:latest-cuda` — НЕТ (GPU-хост обязан ставить `build`: `missing` спасает только `make up`, явный `make pull` при `missing` всё равно пытается запросить несуществующий тег и падает exit 2; `always` хардфейлит «pull access denied» сразу). |
-| `IMAGE_TAG` | `latest` (или запиненная версия релиза, напр. `0.1-a1b2c3d`) | Какой тег пуллить/использовать в compose; пиновка версии — только на remote, главный сервер всегда на `latest`. |
+| `WORKER_PULL_POLICY` | `missing` | Happy path: `make workers-pull`/`make up` тянет готовые образы из Harbor вместо сборки; если тега ещё нет (свежий хост до первого релиза) — падает обратно на `build:`-секцию. Это и дефолт `docker-compose.yml`, `.env.local_worker_example` просто фиксирует его явно. |
+| `AI_PULL_POLICY` | `always` на CPU-хосте / `build` на GPU-хосте | Отдельная политика для `worker-ai`: `worker-ai-cpu:latest` публикуется в Harbor (`always` безопасен), `worker-ai-cuda` — НЕТ (GPU-хост обязан ставить `build`: `missing` спасает только `make up`, явный `make workers-pull` при `missing` всё равно пытается запросить несуществующий образ и падает exit 2; `always` хардфейлит «pull access denied» сразу). |
+| `IMAGE_TAG` | `latest` (или запиненная версия релиза, напр. `0.1.2`) | Какой тег пуллить/использовать в compose; публичные образы имеют только `APP_VER` и `latest`, главный сервер всегда на `latest`. |
 | `COMPOSE_FILE` | из шаблона (+ `docker/fluent-log/docker-fluent.yml`) | Свой fluent-bit-сайдкар поднимается вместе со стеком: общего host-wide сборщика на remote-хосте нет. |
 | `EXT_FLUENT_PORT` | `127.0.0.1:24224` (loopback) | Intake сайдкара — только localhost: docker logging-driver на хосте шлёт логи в sidecar. Не переопределять на `0.0.0.0` — сборщик не должен слушать снаружи. |
 | `GATEWAY_WS_URL` / `API_BASE_URL` | дефолты из трекаемого `.env` подходят (`wss://convertor.xakki.pro/ws/worker/`, `https://convertor.xakki.pro`) | Переопределять только для нестандартного стенда; `API_BASE_URL` — корень API, БЕЗ `/api`-суффикса. |
-| `AI_VARIANT`/`AI_RUNTIME` | опционально: `cuda`/`nvidia` на GPU-хосте | По умолчанию `cpu`/`runc` (см. `docker-compose.yml` сервис `worker-ai`) — задавать нужно только на GPU-хосте. |
+| `AI_VARIANT` / `AI_IMAGE` / `AI_RUNTIME` | CPU: `cpu` / Harbor `worker-ai-cpu:latest` / `runc` по умолчанию; CUDA: **все три обязательны**, например `cuda` / локальный `worker-ai-cuda:latest` / `nvidia` | CUDA-образ локальный и никогда не публикуется в Harbor. `make config-check` хардфейлит при `AI_VARIANT=cuda`, если `AI_IMAGE` отсутствует или пуст; также задать `AI_PULL_POLICY=build`. |
 
 Почему `missing`, а не `always`: под `pull_policy: always` Compose хардфейлит
 `make up`, если пулл не удался, вместо фолбэка на `build:`-секцию — это ломает
 и свежий хост (образ ещё не долетел до Harbor), и любой хост до первого
-релиза. Обновления и так приходят через явный `make pull` (уже в happy path:
-`git pull && make pull && make workers-recreate`) — `always` тут ничего не
+релиза. Обновления и так приходят через явный `make workers-pull` (уже в
+happy path: `git pull && make workers-pull && make workers-recreate`) — `always` тут ничего не
 даёт, а фолбэк ломает. Проверено эмпирически.
 
 `GRAYLOG_HOST`/`GRAYLOG_PORT`/`GRAYLOG_URI`/`HOST_NAME`/`HOST_IP` **на remote
@@ -163,18 +163,29 @@ metrics-exporter — под `monitoring` (он к тому же требует �
 **Happy path — образы уже в Harbor, собирать ничего не нужно:**
 
 ```bash
-git pull && make pull && make workers-recreate
+git pull && make workers-pull && make workers-recreate
 ```
 
-`make pull` (с `WORKER_PULL_POLICY=missing` + `AI_PULL_POLICY=always` в
+`make workers-pull` использует те же параметры и allowlist, что и
+`workers-recreate`: `WORKER_RECREATE_PROFILE=remote|local|uBook|saVpn` и, при
+необходимости, `WORKER_RECREATE_SERVICES="worker-data worker-image"`. Перед
+пуллом он рендерит effective services/images и отказывается от неизвестного
+профиля, запрещённого сервиса или неверного `worker-ai` → `worker-ai-cpu`
+образа. Профиль `ai` передаётся только если выбран `worker-ai`; `db-dump-cron`,
+server и monitoring в worker-пулл не входят. Для production-only API-воркера
+есть отдельный `make worker-api-pull` (профили `server,api`), он не является
+частью remote/local/uBook/saVpn allowlist.
+
+`make workers-pull` (с `WORKER_PULL_POLICY=missing` + `AI_PULL_POLICY=always` в
 `.env.local`, см. таблицу выше) тянет готовые `worker-libreoffice`,
-`worker-ffmpeg`, `worker-image`, `worker-data`, `worker-ai:latest-cpu` из
+`worker-ffmpeg`, `worker-image`, `worker-data`, `worker-ai-cpu:latest` из
 `harbor.xakki.ru/convertor` — килобайты кода на обычный релиз, не пересборка.
-GPU на remote-хосте не предполагается: `worker-ai:cuda` в Harbor не
-публикуется (см. `docs/worker-ai-deploy.md`), если он есть — воркер остаётся
-на локальной сборке (`build-ai-cuda`) с `AI_VARIANT=cuda` + `AI_RUNTIME=nvidia`
+GPU на remote-хосте не предполагается: `worker-ai-cuda` в Harbor не
+публикуется (см. `docs/worker-ai-deploy.md`), если он есть — для GPU/CUDA
+используется отдельный локальный build flow, а не общий remote pull: воркер
+остаётся на локальной сборке (`build-ai-cuda`) с `AI_VARIANT=cuda` + `AI_RUNTIME=nvidia`
 + `AI_PULL_POLICY=build` в `.env.local` (`build`, а не `missing` — иначе
-именно этот `make pull` падает на несуществующем `worker-ai:latest-cuda`).
+именно этот `make workers-pull` падает на несуществующем `worker-ai-cuda`).
 
 ### Фолбэк: локальная сборка (свежий хост без доступа к Harbor / разработка)
 
@@ -185,7 +196,7 @@ make build-ai-cpu    # worker-ai (двухступенчато: ai-base → :cpu
 
 Собирает все 6 worker-образов из исходников: `worker-libreoffice`,
 `worker-ffmpeg` (общий образ для worker-ffmpeg-audio/video), `worker-image`,
-`worker-data` (обычные `build-*`-таргеты) + `worker-ai:cpu` (через
+`worker-data` (обычные `build-*`-таргеты) + `worker-ai-cpu` (через
 `build-ai-cpu`, который сам сначала пересобирает свежий `worker-ai-base`
 локально — см. `docs/worker-ai-deploy.md`, «Двухслойная схема»).
 
@@ -204,12 +215,27 @@ make up
 безвреден: ротировать ему на remote-хосте нечего — воркеры пишут только в
 stdout через `fluentd`-driver.
 
-Точечно, без полного `up`: `make workers-recreate` (пересоздать 6 воркеров из
-свежих образов, `--no-deps`) и `make fluent-up` (только сайдкар).
+Точечно, без полного `up`: `make workers-recreate` (по умолчанию профиль
+`remote`, то есть все 6 воркеров) и `make fluent-up` (только сайдкар). CUDA-
+гейт `AI_VARIANT=cuda` → `AI_IMAGE` применяется к операциям основного
+`docker-compose.yml`; `fluent-up`/`fluent-recreate`/`fluent-restart` используют
+отдельный fluent Compose и намеренно от него не зависят.
+Профили `remote` и `uBook` — один и тот же полный remote-набор; `local` —
+такой же набор для локального хоста; `saVpn` разрешает только `worker-data`
+и `worker-image`. Набор можно сузить через `WORKER_RECREATE_SERVICES`, но
+нельзя добавить сервис вне allowlist и нельзя выбрать `worker-api`.
+
+Если в effective-набор входит `worker-ai`, `workers-recreate` сам передаёт
+Compose профиль `ai` и запускает CPU-вариант по умолчанию (`AI_VARIANT=cpu`,
+`AI_RUNTIME=runc`). Без `worker-ai` профиль `ai` не передаётся. Для обычного
+`make up` на remote/local/uBook-хосте `.env.local` должен содержать
+`COMPOSE_PROFILES=ai`, если нужен CPU-AI; оставьте его пустым, если AI на этом
+хосте не запускается. Профили `server`, `api` и `monitoring` на таких хостах
+не нужны.
 
 Обновление (happy path — pull, без сборки):
 ```bash
-git pull && make pull && make workers-recreate
+git pull && make workers-pull && make workers-recreate
 ```
 
 Обновление после локальной пересборки (фолбэк, см. «Получение образов»):
@@ -266,8 +292,8 @@ docker compose stop worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video w
 
 ## AI на CPU — ограничение производительности
 
-`worker-ai:cpu` (Whisper `int8`, `llama.cpp` без CUDA) заметно медленнее GPU-
-сборки (`worker-ai:cuda`) — STT/LLM-инференс на CPU может занимать секунды-
+`worker-ai-cpu` (Whisper `int8`, `llama.cpp` без CUDA) заметно медленнее GPU-
+сборки (`worker-ai-cuda`) — STT/LLM-инференс на CPU может занимать секунды-
 десятки секунд там, где GPU укладывается в доли секунды. Для remote-хоста без
 GPU это ожидаемо и штатно (пропускная способность гейтится `WS_SLOTS`/
 конкуренцией с другими типами задач на том же хосте), но не рассчитывайте на
@@ -281,5 +307,5 @@ production-SLA для `conv.ai` без хотя бы одного GPU-ворке
   (GPU/CPU, двухслойная `ai-base` схема).
 - `docs/queue-contract.md`, `docs/queue-streams.md` — контракт очередей и
   WS-транспорт (воркер — WS-клиент gateway, не трогает KeyDB/S3 напрямую).
-- `workers/Makefile` — исходники таргетов `build-workers`, `workers-recreate`,
-  `worker-logs`, `fluent-up`/`fluent-restart`/`fluent-logs`.
+- `workers/Makefile` — исходники таргетов `build-workers`, `workers-pull`,
+  `workers-recreate`, `worker-api-pull`, `worker-logs`, `fluent-up`/`fluent-restart`/`fluent-logs`.

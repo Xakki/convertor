@@ -6,6 +6,7 @@ namespace App\Repository;
 
 use App\Entity\WorkerCapability;
 use App\Enum\WorkerLivenessStatus;
+use App\Service\Worker\WorkerLivenessTtl;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -14,7 +15,7 @@ use Doctrine\Persistence\ManagerRegistry;
  */
 class WorkerCapabilityRepository extends ServiceEntityRepository
 {
-    public function __construct(ManagerRegistry $registry)
+    public function __construct(ManagerRegistry $registry, private readonly int $silenceSeconds = 120)
     {
         parent::__construct($registry, WorkerCapability::class);
     }
@@ -104,20 +105,9 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
     }
 
     /**
-     * CNV-71-03: "воркер такого типа когда-либо существовал" — ЛЮБАЯ строка с
-     * этим `worker_type`. CNV-71-04 удалил seed-строки `__seed__` (миграция
-     * `Version20260807060000`) — их больше нет, и для этого метода их
-     * присутствие никогда и не было нужно: он не исключает НИКАКИЕ строки по
-     * `instance_id`, в отличие от {@see markSilentDisconnected()} /
-     * {@see deleteStaleByStatus()}. НЕ проверяет alive/offline/disconnected
-     * статус — только сам факт регистрации типа
-     * ({@see \App\Service\Conversion\ConversionManager} гейтит по этому
-     * методу: нет ни одной строки → немедленный отказ 503
-     * `worker_unavailable`; строка есть, даже offline, → задача принимается и
-     * ждёт claim с таймаутом). Без seed-строк тип воркера без хотя бы одной
-     * живой/когда-либо зарегистрированной строки теперь по-настоящему
-     * возвращает `false` — это и делает 503-гейт в `ConversionManager`
-     * достижимым на практике, а не только в теории.
+     * Durable admission for normal queues: any registered row keeps the worker
+     * type admissible until long-TTL GC removes it. Short liveness state must
+     * not turn transient disconnects into global submit failures.
      */
     public function existsForWorkerType(string $workerType): bool
     {
@@ -127,6 +117,25 @@ class WorkerCapabilityRepository extends ServiceEntityRepository
             'SELECT 1 FROM worker_capabilities WHERE worker_type = :workerType LIMIT 1',
             ['workerType' => $workerType],
         ) !== false;
+    }
+
+    /**
+     * Fresh alive rows for live-only capability publication and admission.
+     *
+     * @return list<WorkerCapability>
+     */
+    public function findLiveForWorkerType(string $workerType): array
+    {
+        return $this->createQueryBuilder('capability')
+            ->andWhere('capability.workerType = :workerType')
+            ->andWhere('capability.status = :status')
+            ->andWhere('capability.lastSeen >= :threshold')
+            ->setParameter('workerType', $workerType)
+            ->setParameter('status', WorkerLivenessStatus::Alive)
+            ->setParameter('threshold', WorkerLivenessTtl::silenceThreshold($this->silenceSeconds))
+            ->orderBy('capability.instanceId', 'ASC')
+            ->getQuery()
+            ->getResult();
     }
 
     /**

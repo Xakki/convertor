@@ -46,7 +46,15 @@ ENV WORKER_MODULE=workers.image.worker
 # APP_VER → ENV (ws_client читает os.getenv); WORKER_BUILD → /app/.i (ws_client читает файл).
 ARG APP_VER=0
 ARG WORKER_BUILD=0
+ARG GIT_REVISION=unknown
+ARG SOURCE_STATE=unknown
+ARG IMAGE_REPOSITORY=unknown
 ENV APP_VER=${APP_VER}
+ENV GIT_REVISION=${GIT_REVISION} SOURCE_STATE=${SOURCE_STATE} IMAGE_REPOSITORY=${IMAGE_REPOSITORY}
+LABEL org.opencontainers.image.version=${APP_VER} \
+      org.opencontainers.image.revision=${GIT_REVISION} \
+      org.opencontainers.image.source-state=${SOURCE_STATE} \
+      org.opencontainers.image.repository=${IMAGE_REPOSITORY}
 RUN printf '%s' "${WORKER_BUILD}" > /app/.i
 
 USER app

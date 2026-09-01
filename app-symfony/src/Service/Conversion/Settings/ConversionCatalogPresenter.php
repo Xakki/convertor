@@ -29,6 +29,7 @@ class ConversionCatalogPresenter
     public function __construct(
         private readonly ConversionRegistry $registry,
         private readonly ConversionSettingsCatalog $catalog,
+        private readonly ApiModelAvailability $apiModels,
     ) {
     }
 
@@ -40,11 +41,17 @@ class ConversionCatalogPresenter
      */
     public function present(SettingsAccessLevel $level): array
     {
-        $formats = [];
-        $used    = [];
+        $formats    = [];
+        $used       = [];
+        $apiProfile = $this->catalog->getProfiles()['api.chat'] ?? null;
+        $modelField = $apiProfile?->field('model');
+        $liveModels = $modelField?->dynamic === true ? $this->apiModels->current() : null;
 
         foreach ($this->registry->getSupportedFormats() as $pair) {
             $profileId = $this->catalog->resolveProfileId($pair['from'], $pair['to'], $pair['category']);
+            if ($profileId === 'api.chat' && $liveModels === null) {
+                continue;
+            }
             if ($profileId !== null) {
                 $used[$profileId] = true;
             }
@@ -60,6 +67,19 @@ class ConversionCatalogPresenter
             // не раздувает payload.
             if (isset($used[$id])) {
                 $profiles[$id] = $profile->toArray($level);
+                if ($id === 'api.chat' && $liveModels !== null) {
+                    foreach ($profiles[$id]['fields'] as &$field) {
+                        if ($field['key'] !== 'model') {
+                            continue;
+                        }
+                        $field['default'] = $liveModels['default'];
+                        $field['options'] = array_map(
+                            static fn (array $choice): array => $choice + ['minPlan' => $field['minPlan'], 'editable' => $field['editable']],
+                            $liveModels['choices'],
+                        );
+                    }
+                    unset($field);
+                }
             }
         }
 

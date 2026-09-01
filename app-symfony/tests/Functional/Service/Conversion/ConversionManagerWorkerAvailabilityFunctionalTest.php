@@ -10,6 +10,7 @@ use App\Exception\WorkerUnavailableException;
 use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionManager;
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 
@@ -93,6 +94,79 @@ final class ConversionManagerWorkerAvailabilityFunctionalTest extends KernelTest
         }
     }
 
+    public function testStaleApiCapabilityRejectsApiJob(): void
+    {
+        $this->assertApiJobRejected([
+            'executionKind' => 'api',
+            'routingKeys'   => ['api'],
+            'streams'       => ['api'],
+            'settings'      => ['model' => [
+                'default' => 'fast',
+                'choices' => [['value' => 'fast', 'label' => 'Fast']],
+            ]],
+        ], stale: true);
+    }
+
+    public function testMissingApiCapabilityRejectsApiJob(): void
+    {
+        $this->assertApiJobRejected(null);
+    }
+
+    /** @param array<string, mixed> $capabilities */
+    #[DataProvider('invalidApiCapabilityProvider')]
+    public function testFreshApiCapabilityViolatingCompleteContractRejectsApiJob(array $capabilities): void
+    {
+        $this->assertApiJobRejected($capabilities);
+    }
+
+    /** @return iterable<string, array{0: array<string, mixed>}> */
+    public static function invalidApiCapabilityProvider(): iterable
+    {
+        $valid = self::completeApiCapabilities();
+
+        yield 'executionKind' => [array_diff_key($valid, ['executionKind' => true])];
+        yield 'routingKeys' => [array_replace($valid, ['routingKeys' => ['api', 'ai']])];
+        yield 'streams' => [array_replace($valid, ['streams' => ['ai']])];
+        yield 'settings model' => [array_replace($valid, ['settings' => []])];
+    }
+
+    /** @param array<string, mixed>|null $capabilities */
+    private function assertApiJobRejected(?array $capabilities, bool $stale = false): void
+    {
+        self::bootKernel();
+        $container = static::getContainer();
+        $em        = $container->get(EntityManagerInterface::class);
+        $repo      = $container->get(WorkerCapabilityRepository::class);
+        $conn      = $em->getConnection();
+        $conn->beginTransaction();
+
+        try {
+            $conn->executeStatement("DELETE FROM worker_capabilities WHERE worker_type = 'api'");
+            $capability = $capabilities !== null
+                ? $repo->upsert('api', 'cnv-27-functional', $capabilities)
+                : null;
+            if ($stale && $capability !== null) {
+                $conn->executeStatement(
+                    'UPDATE worker_capabilities SET last_seen = :lastSeen WHERE id = :id',
+                    ['lastSeen' => '2000-01-01 00:00:00', 'id' => $capability->getId()],
+                );
+            }
+
+            $this->expectException(WorkerUnavailableException::class);
+            $this->expectExceptionMessage('Конвертация временно недоступна');
+
+            $container->get(ConversionManager::class)->createConversion(new ConversionRequestDTO(
+                new User(),
+                $this->makeTxtUpload(),
+                'json',
+                false,
+                true,
+            ));
+        } finally {
+            $conn->rollBack();
+        }
+    }
+
     private function makeJpgUpload(): UploadedFile
     {
         $bytes = "\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xFF\xD9";
@@ -101,5 +175,28 @@ final class ConversionManagerWorkerAvailabilityFunctionalTest extends KernelTest
         file_put_contents($path, $bytes);
 
         return new UploadedFile($path, 'sample.jpg', null, null, true);
+    }
+
+    private function makeTxtUpload(): UploadedFile
+    {
+        $path = tempnam(sys_get_temp_dir(), 'conv');
+        self::assertNotFalse($path);
+        file_put_contents($path, 'hello');
+
+        return new UploadedFile($path, 'prompt.txt', 'text/plain', null, true);
+    }
+
+    /** @return array<string, mixed> */
+    private static function completeApiCapabilities(): array
+    {
+        return [
+            'executionKind' => 'api',
+            'routingKeys'   => ['api'],
+            'streams'       => ['api'],
+            'settings'      => ['model' => [
+                'default' => 'fast',
+                'choices' => [['value' => 'fast', 'label' => 'Fast']],
+            ]],
+        ];
     }
 }

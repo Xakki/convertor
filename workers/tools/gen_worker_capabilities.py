@@ -11,10 +11,10 @@ AST-экстрактор, что использует `workers/tests/test_routin
 (`make TEST=1 test-drift`) провалится, если закоммиченная версия разошлась
 со свежим извлечением.
 
-Канонические `workerType` — 6 значений PHP-enum `App\\Enum\\WorkerType`
-(`document`/`image`/`audio`/`video`/`data`/`ai`, см.
+Канонические `workerType` берутся из PHP-enum `App\\Enum\\WorkerType`
+(`document`/`image`/`audio`/`video`/`data`/`ai`/`api`, см.
 `app-symfony/src/Enum/WorkerType.php` и `workers/common/ws_client.py`
-`ALLOWED_WORKER_TYPES`), а НЕ 5 директорий `workers/*`:
+`ALLOWED_WORKER_TYPES`), а не выводятся из количества директорий `workers/*`:
   - ffmpeg — единственный воркер, регистрирующий ДВА workerType из одного
     файла (module-level `AUDIO_CAPABILITIES`/`VIDEO_CAPABILITIES`, см.
     `workers/ffmpeg/__main__.py::run_dual` — два независимых WS-подключения).
@@ -35,8 +35,9 @@ execution-time guard'ом внутри `convert()` (permanent-ошибка на 
 
 Каждый блок в выходном массиве — урезанная версия register-payload'а,
 который воркер реально шлёт в `POST /api/v1/worker/register`
-(`workers/common/ws_client.py::_build_register_body`): ключи `workerType`,
-`isAi`, `streams`, `routingKeys`, `matrix`, `matrix_categories`.
+(`workers/common/ws_client.py::_build_register_body`): обязательные ключи `workerType`,
+`isAi`, `streams`, `routingKeys`, `matrix`, `matrix_categories`; декларативные
+`executionKind` и public `settings` сохраняются, если воркер их объявил.
 Инстанс-специфичные поля живого payload'а (`instanceId`, `image`, `version`,
 `host`) в статическом каталоге отсутствуют намеренно — каталогу неоткуда
 взять живой инстанс. `streams` и `routingKeys` всегда идентичны (тот же
@@ -66,9 +67,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_PATH = REPO_ROOT / "app-symfony" / "config" / "catalog" / "worker_capabilities.json"
 
 # (workerType, worker.py путь относительно workers/, имя CAPABILITIES-словаря в AST).
-# Порядок и состав — см. докстринг модуля (6 канонических workerType, не 5 файлов).
+# Порядок и состав — см. докстринг модуля; не выводить их из числа файлов.
 _SOURCES: tuple[tuple[str, str, str], ...] = (
     ("ai", "ai/worker.py", "CAPABILITIES"),
+    ("api", "api/worker.py", "CAPABILITIES"),
     ("data", "data/worker.py", "CAPABILITIES"),
     ("image", "image/worker.py", "CAPABILITIES"),
     ("document", "libreoffice/worker.py", "CAPABILITIES"),
@@ -97,7 +99,7 @@ def _build_blob(worker_type: str, rel_path: str, name: str) -> dict[str, Any]:
             "fix whichever drifted, do not paper over the mismatch here"
         )
 
-    return {
+    blob = {
         "workerType": worker_type,
         "isAi": bool(raw.get("isAi", False)),
         "streams": declared_routing_keys,
@@ -105,10 +107,15 @@ def _build_blob(worker_type: str, rel_path: str, name: str) -> dict[str, Any]:
         "matrix": caps["matrix"],
         "matrix_categories": dict(raw.get("matrix_categories", {})),
     }
+    if raw.get("executionKind") is not None:
+        blob["executionKind"] = raw["executionKind"]
+    if raw.get("settings") is not None:
+        blob["settings"] = raw["settings"]
+    return blob
 
 
 def generate_catalog() -> list[dict[str, Any]]:
-    """Собрать каталог: список из 6 register-payload блоков, отсортированных по workerType."""
+    """Собрать register-payload блоки, отсортированные по workerType."""
     blobs = [_build_blob(worker_type, rel_path, name) for worker_type, rel_path, name in _SOURCES]
     blobs.sort(key=lambda b: b["workerType"])
     return blobs

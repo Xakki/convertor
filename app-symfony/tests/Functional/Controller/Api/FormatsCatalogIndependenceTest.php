@@ -24,7 +24,7 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  */
 final class FormatsCatalogIndependenceTest extends WebTestCase
 {
-    private const EXPECTED_CATALOG_PAIR_COUNT = 402;
+    private const EXPECTED_NON_API_PAIR_COUNT = 402;
 
     private function withEmptyWorkerCapabilities(): void
     {
@@ -46,15 +46,21 @@ final class FormatsCatalogIndependenceTest extends WebTestCase
         $body = json_decode((string) $client->getResponse()->getContent(), true);
         self::assertIsArray($body['formats'] ?? null);
         self::assertCount(
-            self::EXPECTED_CATALOG_PAIR_COUNT,
+            self::EXPECTED_NON_API_PAIR_COUNT,
             $body['formats'],
-            '/api/v1/formats must serve the full static catalog regardless of worker_capabilities content',
+            '/api/v1/formats must keep every non-API static pair independent of worker_capabilities content',
         );
 
         $pairs = array_map(
             static fn (array $f): string => "{$f['from']}->{$f['to']}",
             $body['formats'],
         );
+        self::assertNotContains(
+            'txt->json_ai',
+            $pairs,
+            'The API chat pair must stay hidden until a live validated API capability exists',
+        );
+        self::assertNotContains('txt->txt_ai', $pairs);
         self::assertContains('docx->pdf', $pairs);
         self::assertContains('csv->json', $pairs);
         foreach (['svg->png', 'svg->jpg', 'svg->jpeg', 'svg->webp'] as $svgPair) {

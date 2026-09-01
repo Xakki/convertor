@@ -37,7 +37,7 @@
     // Клиентская эвристика «это текстовый превью-результат», когда сервер не
     // прислал явный previewable-флаг (job на `/` и admin-лог) — 1:1 со
     // старым PREVIEWABLE_TARGET_FORMATS / ConversionController::PREVIEWABLE_FORMATS.
-    const FILE_PREVIEW_PREVIEWABLE_FORMATS = ['md', 'txt', 'json', 'csv', 'html'];
+    const FILE_PREVIEW_PREVIEWABLE_FORMATS = ['md', 'txt', 'json', 'json_ai', 'txt_ai', 'csv', 'html'];
     // Отдельный (более узкий) список для ИКОНКИ файла — 1:1 со старым
     // exampleIconKey(): именно эти форматы получают иконку 'text' (json/csv
     // разруливаются отдельными ветками выше по format/mime).

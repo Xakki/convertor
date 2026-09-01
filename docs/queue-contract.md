@@ -13,8 +13,9 @@ hash, and the result event. If you change a field name here, update the producer
 >   and phased implementation cards.
 
 > Единственный канонический контракт — per-routing-key стримы/транспорты
-> `conv.<key>` / `conv_<key>` (ключи `document/image/audio/video/data/ai`,
-> + `browser` с CNV-88 — транспорт/стрим существуют, но пока БЕЗ консьюмера:
+> `conv.<key>` / `conv_<key>` (ключи `document/image/audio/video/data/ai/api`,
+> включая активный `conv.api` для `worker-api`; + `browser` с CNV-88 —
+> транспорт/стрим существуют, но пока БЕЗ консьюмера:
 > ни один worker его не потребляет и ни одна реальная пара каталога в него не
 > маршрутизируется, см. `queue-streams.md`).
 > Соглашение об именовании задокументировано ниже; обе стороны таргетят его.
@@ -62,9 +63,12 @@ There are **two distinct wire shapes** on **two sets of streams** — do not
 conflate them (see the producer/consumer/field/decode table below).
 
 **Job streams `conv.<key>`** — PHP produces, Python consumes:
-- **Routing key:** `key = isAi ? 'ai' : category`. `markup` is folded into
-  `document`. Keys: `document`, `image`, `audio`, `video`, `data`, `ai`.
-- **Stream name:** `conv.<key>` (e.g. `conv.document`, `conv.ai`).
+- **Routing key:** после request-scoped OCR/animated overrides применяется
+  `key = executionKind ?? (isAi ? 'ai' : category)`. Поэтому CNV-27
+  `isAi=true` + `executionKind=api` маршрутизируется в `api`, а не в `ai`;
+  `markup` без override сворачивается в `document`. Keys: `document`, `image`,
+  `audio`, `video`, `data`, `ai`, `api`, `browser`.
+- **Stream name:** `conv.<key>` (e.g. `conv.document`, `conv.ai`, `conv.api`).
 - **Transport name (messenger.yaml):** `conv_<key>` (e.g. `conv_document`),
   routed via `TransportNamesStamp(['conv_'.$key])`.
 - **Consumer group:** `convertor` (one per stream). PHP only **produces** (XADD)
@@ -98,7 +102,7 @@ Applies to the job streams `conv.<key>` only. **Clean single-JSON — decode onc
 > `Connection::add()` unconditionally wraps the payload in
 > `json_encode(['body' => …, 'headers' => …])` (that wrap is structural to the
 > stock transport, so a custom *serializer* could not remove it — only a custom
-> *transport* can). We bind the 6 `conv_*` transports to
+> *transport* can). We bind the `conv_*` transports to
 > `App\Messenger\Transport\CleanRedisTransport` (DSN scheme `conv+redis://`,
 > `messenger.yaml`), whose `send()` writes `Serializer::encode()['body']`
 > **directly** into the `message` field. Nothing consumes these streams via
@@ -181,7 +185,7 @@ name converter is configured), so the JSON keys are the property names verbatim.
 | `sourceFormat`     | string          | Source format (lowercased extension / registry virtual key). |
 | `targetFormat` | string          | Target format. **Renamed from `outputFormat`** for contract parity. |
 | `category`     | string          | `FileCategory` value: document/image/audio/video/data/markup/archive. |
-| `isAi`         | bool            | AI job flag. Routing key = `isAi ? 'ai' : category`. |
+| `isAi`         | bool            | AI job flag. Routing key = `executionKind ?? (isAi ? 'ai' : category)`. |
 | `options`      | object/array    | Per-job options bag. Для image target: `width`/`height` (1–10000 px), `quality` (1–100 для JPEG/WebP), `background` (`#RRGGBB` для JPEG). **Empty = `[]`** (PHP empty array serializes to JSON `[]`, not `{}`) — workers must not assume a map when empty. |
 | `attempt`      | string (int)    | Generation/attempt marker of the `Conversion` (JSON string, e.g. `"0"`). Bumped by operator-requeue; echoed into the DLQ payload so a stale `dlq-fail` can be ignored (`ConversionResultPersister` stale-guard). Absent on legacy jobs → treated as `0`. |
 
@@ -189,15 +193,15 @@ name converter is configured), so the JSON keys are the property names verbatim.
 
 ## 4. Redis status hash — `conv:status:{conversionId}`
 
-Live status, written by workers, read by the PHP status endpoint. **TTL 24h.**
+Live status, written by WS-Gateway, read by the PHP status endpoint. **TTL 24h.**
 MariaDB remains authoritative for `/history` + `/download`; Redis is live state.
 
 **`state` vocabulary — MUST match the `ConversionStatus` enum `.value`** (PHP
-stores these in DB rows + returns them as the public API value, so workers HSET
+stores these in DB rows + returns them as the public API value, so gateway HSETs
 the SAME strings to avoid live-vs-history drift):
 
-| `state` HSET by worker | meaning |
-|------------------------|---------|
+| `state` HSET by gateway | meaning |
+|-------------------------|---------|
 | `pending`              | accepted, not yet started |
 | `processing`           | worker picked it up |
 | `completed`            | success (output in S3) |
@@ -244,12 +248,14 @@ See `docs/superpowers/specs/2026-07-02-ws-worker-transport-design.md` §3/§5.
 
 ### Expiry path — never-claimed jobs (CNV-71-03)
 
-`ConversionManager::createSingleHop()`/`createChain()` accept a job as soon as
-ANY `worker_capabilities` row exists for the target `workerType` — even
-offline/disconnected (the "worker existence" gate only checks the row exists,
-not liveness). If no worker of that type ever actually connects, the stream
-entry is never delivered to any consumer (`XREADGROUP`), so it never enters a
-PEL and idle-reclaim (§6.3 of the design spec) structurally cannot see it.
+`ConversionManager::createSingleHop()`/`createChain()` use durable admission for
+normal queues: any registered capability row keeps its worker type available
+until long-TTL GC removes it, regardless of short liveness status. API-backed
+jobs are the narrow live-only exception: they require a fresh `alive` row with a
+currently validated model. A job can still become never-claimed if no worker is
+connected when the gateway tries to deliver the stream entry. Such an entry
+never enters a consumer PEL, so idle-reclaim (§6.3 of the design spec)
+structurally cannot see it.
 
 The gateway's own expiry-sweep (`workers/gateway/expiry.py`, on its own
 `EXPIRY_SWEEP_INTERVAL_S` tick, default 300s) closes this gap: for each

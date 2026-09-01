@@ -10,7 +10,7 @@
 #   curl -fsSL <gist-raw-url>/install.sh | bash -s -- update
 #   bash install.sh update
 #
-# CUDA / worker-ai:cuda в этот путь НЕ входят.
+# CUDA / worker-ai-cuda в этот путь НЕ входят.
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ PROFILE_LABELS=(
   "video     worker-ffmpeg-video"
   "image     worker-image"
   "data      worker-data"
-  "ai        worker-ai:latest-cpu (без CUDA)"
+  "ai        worker-ai-cpu:latest (без CUDA)"
 )
 
 DEFAULT_GATEWAY_WS_URL="wss://convertor.xakki.pro/ws/worker/"

@@ -13,9 +13,11 @@ use App\Enum\FileCategory;
 use App\Exception\ConversionDisabledException;
 use App\Exception\InvalidConversionOptionException;
 use App\Repository\ConversionRepository;
+use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionChainFailPropagator;
 use App\Service\Conversion\ConversionManager;
 use App\Service\Conversion\ConversionToggleService;
+use App\Service\Conversion\Settings\ApiModelAvailability;
 use App\Service\Conversion\Settings\ConversionOptionsValidator;
 use App\Service\Conversion\Settings\ConversionSettingsCatalog;
 use App\Service\Queue\ConversionStatusReader;
@@ -658,6 +660,7 @@ final class ConversionManagerRetryDeleteTest extends TestCase
         return new ConversionOptionsValidator(
             new ConversionSettingsCatalog(ConversionSettingsCatalogTest::grammarFixturePath()),
             $this->newSeedRegistry(),
+            $this->apiModelAvailability(),
         );
     }
 
@@ -667,7 +670,16 @@ final class ConversionManagerRetryDeleteTest extends TestCase
      */
     private function productionOptionsValidator(): ConversionOptionsValidator
     {
-        return new ConversionOptionsValidator(new ConversionSettingsCatalog(), $this->newSeedRegistry());
+        return new ConversionOptionsValidator(
+            new ConversionSettingsCatalog(),
+            $this->newSeedRegistry(),
+            $this->apiModelAvailability(),
+        );
+    }
+
+    private function apiModelAvailability(): ApiModelAvailability
+    {
+        return new ApiModelAvailability($this->createStub(WorkerCapabilityRepository::class));
     }
 
     private function buildManager(

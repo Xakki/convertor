@@ -18,7 +18,7 @@ use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
  * instance_id (кроме известного junk-набора {@see WorkerCapabilityGcService::JUNK_INSTANCE_IDS}).
  *
  * Использует workerType `gc-test-fixture`, не пересекающийся ни с одним
- * реальным worker-type (document/image/audio/video/data/ai) — чтобы не
+ * реальным worker-type из WorkerType — чтобы не
  * задеть реальные ряды, которые могут уже сидеть в convertor-test.
  */
 final class WorkerCapabilityGcServiceTest extends KernelTestCase

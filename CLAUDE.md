@@ -28,7 +28,7 @@ Backend по образцу **https://github.com/Xakki/ExRate** (Registry для
 REST под префиксом `/api/v1/` (версионирование), JSON request/response, JWT Bearer (LexikJWT), OpenAPI через NelmioApiDocBundle. Карта эндпоинтов, firewalls/роли, конвенции ошибок — skill `api-design`.
 
 ## Queue Architecture
-- Каналы (KeyDB Streams): `conv.document`, `conv.image`, `conv.audio`, `conv.video`, `conv.data`, `conv.ai`.
+- Каналы (KeyDB Streams): `conv.document`, `conv.image`, `conv.audio`, `conv.video`, `conv.data`, `conv.ai`, `conv.api`; `conv.browser` зарезервирован, но пока не имеет consumer.
 - **Единая модель транспорта: ВСЕ воркеры (on-server + remote) — WS-клиенты gateway. Ни один воркер не трогает KeyDB или S3 напрямую — только WS-Gateway (единственный читатель Streams: `XREADGROUP`/`XACK`/`XAUTOCLAIM`) + Symfony API.** KeyDB наружу НЕ публикуется; удалённый воркер подключается к публичному `wss://`.
 - **Воркеры flag-agnostic: валидируют только форматы (source→target) и выполняют конвертацию; флаги (`ocr`, `subType` и пр.) выбирает БЭК/API при постановке задачи в нужный stream.**
 - Контракт очередей и дизайн транспорта — `docs/queue-contract.md`, `docs/queue-streams.md`, `docs/queue-redesign-design.md`.
@@ -67,10 +67,12 @@ MVP = оплата **только через Telegram** (Bot API: invoice → `s
   добавить в Makefile, не запускать руками. `make docker-check` = `docker compose config -q`.
 - docker-compose.yml — основной, docker/limits.yml — лимиты для прода
 - **Образы публикуем в наш Harbor-registry** (авторизация в консоли уже настроена). Сборка/пуш —
-  через `make release-workers`. Remote-хосты пуллят готовые runnable-образы (5 воркеров +
-  `ws-gateway` + `metrics-exporter` + `worker-ai:latest-cpu`) — сборка на них не нужна;
+  через `make release-workers`. Remote-хосты пуллят готовые runnable-образы
+  (`worker-libreoffice`, `worker-image`, `worker-ffmpeg`, `worker-data`,
+  `worker-ai:latest-cpu`, `ws-gateway`, `metrics-exporter`) — сборка на них не
+  нужна; production-only `worker-api` также публикуется, но на remote-хосты не разворачивается;
   `worker-ai:cuda` (GPU) в Harbor не публикуется, GPU-хост по-прежнему собирает его локально.
-- **KeyDB наружу НЕ публикуется** — доступ к очередям off-server только через HTTP pull-API (см. Queue Architecture).
+- **KeyDB наружу НЕ публикуется** — off-server воркеры получают задачи только через публичный `wss://` WS-Gateway (см. Queue Architecture).
 - Каждый воркер — отдельный контейнер
 - Файлы (вход и результат) — только в S3 (`${S3_BUCKET_PREFIX}-inputs` / `-results`); общего volume
   `/shared-files` больше нет

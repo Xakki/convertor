@@ -38,11 +38,14 @@ ARG APP_VER=0
 ARG WORKER_BUILD=0
 ARG GATEWAY_GIT_SHA=unknown
 ARG GATEWAY_SOURCE_STATE=unknown
+ARG IMAGE_REPOSITORY=unknown
 ENV APP_VER=${APP_VER}
 ENV GATEWAY_GIT_SHA=${GATEWAY_GIT_SHA}
 ENV GATEWAY_SOURCE_STATE=${GATEWAY_SOURCE_STATE}
-LABEL org.opencontainers.image.revision=${GATEWAY_GIT_SHA} \
-      org.opencontainers.image.source-state=${GATEWAY_SOURCE_STATE}
+LABEL org.opencontainers.image.version=${APP_VER} \
+      org.opencontainers.image.revision=${GATEWAY_GIT_SHA} \
+      org.opencontainers.image.source-state=${GATEWAY_SOURCE_STATE} \
+      org.opencontainers.image.repository=${IMAGE_REPOSITORY}
 RUN printf '%s' "${WORKER_BUILD}" > /app/.i
 
 USER app

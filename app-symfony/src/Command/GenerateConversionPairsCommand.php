@@ -16,7 +16,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 /**
  * CNV-71-01 stage 2: PHP half of the two-stage `make formats-catalog` pipeline.
  * Stage 1 (Python, `workers/tools/gen_worker_capabilities.py`) statically
- * extracts the 6 registering workers' hardcoded matrices into the COMMITTED
+ * extracts the 7 registering workers' hardcoded matrices into the COMMITTED
  * `config/catalog/worker_capabilities.json` (register-payload blobs). This
  * command is stage 2: reads that file and reduces it into the RESOLVED pair
  * catalog `config/catalog/conversion_pairs.json` — `{from, to, category, isAi,

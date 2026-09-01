@@ -1,0 +1,28 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gonka OpenAI-compatible interface compatibility snapshot",
+    "version": "1"
+  },
+  "servers": [
+    {"url": "https://gate.joingonka.ai"}
+  ],
+  "x-compatibility": {
+    "chat_endpoint": "/v1/chat/completions",
+    "models_endpoint": "/v1/models",
+    "capabilities_endpoint": "/v1/capabilities",
+    "plugins_nodes_endpoint": "/v1/plugins/nodes",
+    "authenticated_read_only": ["GET /v1/models", "GET /v1/capabilities", "GET /v1/plugins/nodes"],
+    "supported": ["chat", "stream", "tools", "responses", "anthropic"],
+    "unsupported": ["image", "audio", "vision", "json_mode", "structured_output"],
+    "verified_pairs": [
+      {"from": "txt", "to": "txt_ai", "response": "content"},
+      {"from": "txt", "to": "json_ai", "response": "raw"}
+    ],
+    "models": [
+      {"id": "MiniMaxAI/MiniMax-M2.7", "tier": "fast"},
+      {"id": "deepseek-ai/DeepSeek-V4-Flash-0731", "tier": "normal"},
+      {"id": "moonshotai/Kimi-K2.6", "tier": "hard"}
+    ]
+  }
+}

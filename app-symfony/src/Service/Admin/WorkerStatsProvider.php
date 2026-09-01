@@ -61,6 +61,7 @@ final readonly class WorkerStatsProvider
      *         instanceId: string,
      *         image: string|null,
      *         version: string|null,
+     *         provenance: array{appVersion: string|null, build: string|null, revision: string|null, sourceState: string|null, imageRepository: string|null},
      *         lastSeen: string,
      *         status: string,
      *         stale: bool,
@@ -69,6 +70,8 @@ final readonly class WorkerStatsProvider
      *         isAi: bool,
      *         streams: list<string>,
      *         routingKeys: list<string>,
+     *         executionKind: string|null,
+     *         settings: array<string, mixed>|null,
      *         matrix_categories: array<string, string>,
      *         metrics: array{cpu: float|null, mem: float|null, load: float|null}|null,
      *         host: string|null,
@@ -290,9 +293,11 @@ final readonly class WorkerStatsProvider
      * @return array{
      *     workerType: string, instanceId: string,
      *     image: string|null, version: string|null, lastSeen: string,
+     *     provenance: array{appVersion: string|null, build: string|null, revision: string|null, sourceState: string|null, imageRepository: string|null},
      *     status: string, stale: bool, pairCount: int,
      *     matrix: array<string, list<string>>,
      *     isAi: bool, streams: list<string>, routingKeys: list<string>,
+     *     executionKind: string|null, settings: array<string, mixed>|null,
      *     matrix_categories: array<string, string>,
      *     metrics: array{cpu: float|null, mem: float|null, load: float|null}|null,
      *     host: string|null,
@@ -336,12 +341,26 @@ final readonly class WorkerStatsProvider
         $routingKeys = is_array($blob['routingKeys'] ?? null) ? array_values($blob['routingKeys']) : [];
         /** @var array<string, string> $matrixCategories */
         $matrixCategories = is_array($blob['matrix_categories'] ?? null) ? $blob['matrix_categories'] : [];
+        $executionKind    = isset($blob['executionKind']) && is_string($blob['executionKind'])
+            ? $blob['executionKind']
+            : null;
+        /** @var array<string, mixed>|null $settings */
+        $settings = is_array($blob['settings'] ?? null) ? $blob['settings'] : null;
+        $rawProvenance = is_array($blob['provenance'] ?? null) ? $blob['provenance'] : [];
+        $provenance = [
+            'appVersion' => isset($rawProvenance['appVersion']) && is_string($rawProvenance['appVersion']) ? $rawProvenance['appVersion'] : null,
+            'build' => isset($rawProvenance['build']) && is_string($rawProvenance['build']) ? $rawProvenance['build'] : null,
+            'revision' => isset($rawProvenance['revision']) && is_string($rawProvenance['revision']) ? $rawProvenance['revision'] : null,
+            'sourceState' => isset($rawProvenance['sourceState']) && is_string($rawProvenance['sourceState']) ? $rawProvenance['sourceState'] : null,
+            'imageRepository' => isset($rawProvenance['imageRepository']) && is_string($rawProvenance['imageRepository']) ? $rawProvenance['imageRepository'] : null,
+        ];
 
         return [
             'workerType'        => $cap->getWorkerType(),
             'instanceId'        => $cap->getInstanceId(),
             'image'             => isset($blob['image'])   && is_string($blob['image']) ? $blob['image'] : null,
             'version'           => isset($blob['version']) && is_string($blob['version']) ? $blob['version'] : null,
+            'provenance'        => $provenance,
             'lastSeen'          => $cap->getLastSeen()->format(\DateTimeInterface::ATOM),
             'status'            => $cap->getStatus()->value,
             'stale'             => $cap->getLastSeen() < $staleThreshold,
@@ -351,6 +370,8 @@ final readonly class WorkerStatsProvider
             'streams'           => $streams,
             'routingKeys'       => $routingKeys,
             'matrix_categories' => $matrixCategories,
+            'executionKind'     => $executionKind,
+            'settings'          => $settings,
             'metrics'           => $metrics,
             'host'              => $cap->getHost(),
             'inflight'          => $inflight,

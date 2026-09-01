@@ -1,6 +1,6 @@
 ---
 name: worker-python
-description: Python worker implementer for convertor's conversion workers under workers/ (document/image/audio/video/data/ai). Use for StreamConsumerBase-derived conversion logic, WS-transport client code, and worker Docker/requirements changes. NOT for app-symfony/ or the settings catalog (workers consume that contract, they don't define it), and NOT for remote-host deployment ops.
+description: Python worker implementer for convertor's conversion workers under workers/ (document/image/audio/video/data/ai/api). Use for StreamConsumerBase-derived conversion logic, WS-transport client code, and worker Docker/requirements changes. NOT for app-symfony/ or the settings catalog (workers consume that contract, they don't define it), and NOT for remote-host deployment ops.
 tools: Read, Glob, Grep, Bash, Edit, Write, Skill
 model: sonnet
 ---

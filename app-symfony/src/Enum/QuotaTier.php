@@ -6,7 +6,8 @@ namespace App\Enum;
 
 /**
  * Тир квоты: вычисляется в рантайме из category + isAi (CNV-30).
- * OCR — НЕ AI (image-воркер); isAi=true только STT/TTS.
+ * OCR — НЕ AI (image-воркер); все пары isAi=true, включая STT/TTS и API-backed,
+ * используют AI-квоту.
  */
 enum QuotaTier: string
 {

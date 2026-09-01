@@ -6,7 +6,7 @@ SaaS-сервис конвертации файлов всех форматов:
 
 - **Backend:** PHP 8.5 + Symfony 7 (REST API `/api/v1/`, JWT, OpenAPI через NelmioApiDoc)
 - **Frontend:** Twig + Alpine.js 3 + HTMX + Tailwind CSS (без тяжёлых SPA, всё с CDN)
-- **Воркеры:** Python 3.12 — по одному контейнеру на категорию (libreoffice/document, ffmpeg audio+video, image, data, AI — CPU по умолчанию, GPU через `AI_VARIANT=cuda`+`AI_RUNTIME=nvidia`)
+- **Воркеры:** Python 3.12 — отдельные контейнеры для document (LibreOffice), audio/video (FFmpeg), image, data, AI и API-backed конвертаций; AI — CPU по умолчанию, GPU через `AI_VARIANT=cuda`+`AI_RUNTIME=nvidia`
 - **Очереди:** KeyDB Streams (Redis-совместимый) + Symfony Messenger
 - **WS-Gateway:** асинхронный Python-сервис — единственный мост между очередями и воркерами
 - **БД:** MariaDB 11 + Doctrine ORM
@@ -14,11 +14,11 @@ SaaS-сервис конвертации файлов всех форматов:
 
 ## Архитектура
 
-Сервис поднимается одним docker-compose стеком из **13 сервисов**:
+Сервис поднимается одним docker-compose стеком из **15 сервисов**:
 
-`php`, `cron`, `mariadb`, `keydb`, `nginx`, `worker-libreoffice`, `worker-ffmpeg-audio`, `worker-ffmpeg-video`, `worker-image`, `worker-data`, `worker-ai`, `ws-gateway`, `metrics-exporter`.
+`php`, `cron`, `mariadb`, `db-dump-cron`, `keydb`, `nginx`, `worker-libreoffice`, `worker-ffmpeg-audio`, `worker-ffmpeg-video`, `worker-image`, `worker-data`, `worker-ai`, `worker-api`, `ws-gateway`, `metrics-exporter`.
 
-`worker-ai` (CPU-образ по умолчанию, `image: ${IMAGE_NS}/worker-ai:${AI_VARIANT:-cpu}`) поднимается вместе со всеми (`make up`), подключаясь по внутреннему `ws://ws-gateway:8091`; удалённые GPU-хосты (напр. домашний WSL+GPU) поднимают тот же воркер с `AI_VARIANT=cuda`/`AI_RUNTIME=nvidia` и подключаются к публичному `wss://` — оба независимые consumer'ы `conv.ai`, задачи балансируются между ними.
+`worker-ai` (CPU-образ по умолчанию, `worker-ai-cpu:${IMAGE_TAG:-latest}`) поднимается вместе со всеми (`make up`), подключаясь по внутреннему `ws://ws-gateway:8091`; удалённые GPU-хосты (напр. домашний WSL+GPU) поднимают локальный `worker-ai-cuda:latest` с `AI_VARIANT=cuda`/`AI_IMAGE=worker-ai-cuda:latest`/`AI_RUNTIME=nvidia` и подключаются к публичному `wss://` — оба независимые consumer'ы `conv.ai`, задачи балансируются между ними.
 
 ### Транспорт: WS-Gateway как единственный читатель очередей
 
@@ -59,6 +59,17 @@ make down      # остановить
 make restart   # перезапустить
 make ps        # статус контейнеров
 make logs      # логи всех сервисов (make logs-<service> — по одному)
+```
+
+Worker-операции разделены по scope: generic targets безопасны для remote-хостов
+и не затрагивают production-only `worker-api`; server aggregates добавляют его
+через отдельный Compose profile `api`:
+
+```bash
+make build-workers         # 6 remote-safe runnable образов
+make worker-logs           # 6 remote-capable worker-контейнеров
+make build-server-workers  # build-workers + worker-api
+make server-worker-logs    # те же логи + worker-api (server,api profiles)
 ```
 
 ### Создать первого админа

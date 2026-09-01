@@ -229,10 +229,7 @@ final class WorkerCapabilityRepositoryTest extends KernelTestCase
         );
     }
 
-    /**
-     * CNV-71-03: existsForWorkerType() отвечает true при ЛЮБОЙ строке этого
-     * worker_type (гейт ConversionManager) и false, если строк вообще нет.
-     */
+    /** CNV-27: durable admission survives short-lived liveness changes. */
     public function testExistsForWorkerTypeTrueAfterUpsert(): void
     {
         self::bootKernel();
@@ -244,6 +241,38 @@ final class WorkerCapabilityRepositoryTest extends KernelTestCase
         $this->toRemove[] = $cap;
 
         self::assertTrue($repo->existsForWorkerType('test-wc-exists'));
+    }
+
+    public function testExistsForWorkerTypeTrueForDisconnectedRegistration(): void
+    {
+        self::bootKernel();
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $cap              = $repo->upsert('test-wc-disconnected', 'host-a', ['settings' => ['model' => ['default' => 'fast', 'choices' => []]]]);
+        $this->toRemove[] = $cap;
+        $repo->updateLiveness([[
+            'workerType' => 'test-wc-disconnected',
+            'instanceId' => 'host-a',
+            'status'     => \App\Enum\WorkerLivenessStatus::Disconnected,
+            'lastSeenAt' => new \DateTimeImmutable(),
+        ]]);
+
+        self::assertTrue($repo->existsForWorkerType('test-wc-disconnected'));
+    }
+
+    public function testExistsForWorkerTypeTrueForStaleAliveRegistration(): void
+    {
+        self::bootKernel();
+        $repo = static::getContainer()->get(WorkerCapabilityRepository::class);
+
+        $cap              = $repo->upsert('test-wc-stale', 'host-a', ['settings' => ['model' => ['default' => 'fast', 'choices' => []]]]);
+        $this->toRemove[] = $cap;
+        static::getContainer()->get(EntityManagerInterface::class)->getConnection()->executeStatement(
+            'UPDATE worker_capabilities SET last_seen = :lastSeen WHERE id = :id',
+            ['lastSeen' => '2000-01-01 00:00:00', 'id' => $cap->getId()],
+        );
+
+        self::assertTrue($repo->existsForWorkerType('test-wc-stale'));
     }
 
     public function testExistsForWorkerTypeFalseForNeverRegisteredType(): void

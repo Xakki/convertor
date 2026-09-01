@@ -71,6 +71,11 @@ services:
         labels:
             tier: "worker"
             log_format: "auto"
+    worker-api:
+        <<: *_logging
+        labels:
+            tier: "worker"
+            log_format: "auto"
     ws-gateway:
         <<: *_logging
         labels:

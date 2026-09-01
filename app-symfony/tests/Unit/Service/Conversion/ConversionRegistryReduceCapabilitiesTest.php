@@ -28,7 +28,7 @@ use Psr\Log\LoggerInterface;
  * tie-break, AI `matrix_categories` resolution, multi-instance union) — that
  * logic still runs for real, at catalog-generation time
  * (`App\Command\GenerateConversionPairsCommand`), and is worth a fast, DB-free
- * regression suite independent of the 394-pair committed catalog's current
+ * regression suite independent of the 402-pair committed catalog's current
  * content. Catalog-loading failure modes (missing/malformed file) have their
  * own test file — {@see ConversionRegistryCatalogLoadingTest}.
  */

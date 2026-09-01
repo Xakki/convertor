@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Controller\Api;
 
 use App\Entity\Conversion;
+use App\Entity\User;
 use App\Enum\BillingMode;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
+use App\Repository\WorkerCapabilityRepository;
 use App\Service\Conversion\ConversionChainFailPropagator;
 use App\Service\Conversion\ConversionManager;
+use App\Service\Conversion\Settings\ApiModelAvailability;
 use App\Service\Queue\ConversionStatusReader;
 use App\Service\Queue\RedisConnectionFactory;
 use App\Service\Quota\QuotaService;
@@ -19,6 +22,7 @@ use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
+use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\Messenger\Envelope;
@@ -214,6 +218,66 @@ final class ConversionTextInputControllerTest extends WebTestCase
         self::assertSame(['width' => 100, 'quality' => 75], $message->options);
     }
 
+    public function testMultipartFileInputPreservesSelectedApiModelInWorkerMessage(): void
+    {
+        $client   = static::createClient();
+        $captured = ['message' => null];
+        static::getContainer()->set(ConversionManager::class, $this->stubbedManager($captured));
+
+        $connection = static::getContainer()->get(EntityManagerInterface::class)->getConnection();
+        $connection->beginTransaction();
+
+        try {
+            $this->registerLiveApiCapability();
+            $token = $this->persistedUserToken();
+            parse_str('to_format=json_ai&options%5Bmodel%5D=balanced', $form);
+
+            $client->request(
+                'POST',
+                '/api/v1/convert',
+                $form,
+                ['file'               => $this->uploadedTxt('prompt.txt', 'Extract JSON')],
+                ['HTTP_AUTHORIZATION' => 'Bearer ' . $token],
+            );
+
+            self::assertSame(202, $client->getResponse()->getStatusCode(), (string) $client->getResponse()->getContent());
+            /** @var ConversionMessage|null $message */
+            $message = $captured['message'];
+            self::assertNotNull($message);
+            self::assertSame(['model' => 'balanced'], $message->options);
+        } finally {
+            $connection->rollBack();
+        }
+    }
+
+    public function testTextInputPreservesLiveDefaultApiModelInWorkerMessage(): void
+    {
+        $client   = static::createClient();
+        $captured = ['message' => null];
+        static::getContainer()->set(ConversionManager::class, $this->stubbedManager($captured));
+
+        $connection = static::getContainer()->get(EntityManagerInterface::class)->getConnection();
+        $connection->beginTransaction();
+
+        try {
+            $this->registerLiveApiCapability();
+            $token = $this->persistedUserToken();
+            parse_str('text=Extract+JSON&source_format=txt&to_format=json_ai', $form);
+
+            $client->request('POST', '/api/v1/convert', $form, [], [
+                'HTTP_AUTHORIZATION' => 'Bearer ' . $token,
+            ]);
+
+            self::assertSame(202, $client->getResponse()->getStatusCode(), (string) $client->getResponse()->getContent());
+            /** @var ConversionMessage|null $message */
+            $message = $captured['message'];
+            self::assertNotNull($message);
+            self::assertSame(['model' => 'fast'], $message->options);
+        } finally {
+            $connection->rollBack();
+        }
+    }
+
     /**
      * @param array{message: object|null} $captured filled by reference with the
      *                                                dispatched ConversionMessage
@@ -256,7 +320,40 @@ final class ConversionTextInputControllerTest extends WebTestCase
                 $this->createStub(EntityManagerInterface::class),
                 $this->createStub(QuotaService::class),
             ),
+            workerCapabilities: static::getContainer()->get(WorkerCapabilityRepository::class),
+            apiModels: static::getContainer()->get(ApiModelAvailability::class),
         );
+    }
+
+    private function persistedUserToken(): string
+    {
+        $entityManager = static::getContainer()->get(EntityManagerInterface::class);
+        $user          = (new User())->setPlan('free');
+        $entityManager->persist($user);
+        $entityManager->flush();
+
+        return static::getContainer()->get(JWTTokenManagerInterface::class)->create($user);
+    }
+
+    private function registerLiveApiCapability(): void
+    {
+        $repository = static::getContainer()->get(WorkerCapabilityRepository::class);
+        $connection = static::getContainer()->get(EntityManagerInterface::class)->getConnection();
+        $connection->executeStatement("DELETE FROM worker_capabilities WHERE worker_type = 'api'");
+        $capabilities = [
+            'executionKind' => 'api',
+            'routingKeys'   => ['api'],
+            'streams'       => ['api'],
+            'settings'      => ['model' => [
+                'default' => 'fast',
+                'choices' => [
+                    ['value' => 'fast', 'label' => 'Fast'],
+                    ['value' => 'balanced', 'label' => 'Balanced'],
+                ],
+            ]],
+        ];
+        $repository->upsert('api', 'cnv-27-controller-model-options-a', $capabilities);
+        $repository->upsert('api', 'cnv-27-controller-model-options-b', $capabilities);
     }
 
     private function uploadedTxt(string $name, string $content): UploadedFile

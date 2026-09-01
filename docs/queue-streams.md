@@ -24,10 +24,16 @@
 | `conv.video`     | `video`     | video/ffmpeg |
 | `conv.data`      | `data`      | structured-data |
 | `conv.ai`        | `ai`        | AI (STT / TTS / GPT-OCR) |
-| `conv.browser`   | `browser`   | CNV-88: browser execution kind (screenshot/recording, изолированный Chromium runtime). Transport/stream существуют, но **пока БЕЗ консьюмера** — ни один worker не зарегистрирован (CNV-82/90/91/113, отдельные карточки), и ни одна реальная пара `conversion_pairs.json` в него не маршрутизируется сегодня (генератор каталога не эмитит `executionKind`, см. ниже) |
+| `conv.api`       | `api`       | external API/CLI execution; CNV-27 `worker-api` consumes it |
+| `conv.browser`   | `browser`   | CNV-88: browser execution kind (screenshot/recording, изолированный Chromium runtime). Transport/stream существуют, но **пока БЕЗ консьюмера** — ни один worker не зарегистрирован (CNV-82/90/91/113, отдельные карточки), и ни одна реальная пара `conversion_pairs.json` в него не маршрутизируется сегодня (генератор каталога пока не эмитит `executionKind=browser`) |
 
-**Routing key formula (PHP):** `key = isAi ? 'ai' : (executionKind ?? category)`.
-CNV-88: ряд каталога может нести необязательное поле `executionKind` (валидное значение `WorkerType`, напр. `browser`) — единственный override category-based роутинга в `ConversionRegistry::streamFor()`; `category` при этом остаётся источником quota/retention (screenshot/recording хранят `image`/`video`). Ни один worker-blob сегодня это поле не объявляет, поэтому `getSupportedFormatsFromBlobs()`/генератор `conversion_pairs.json` его не эмитит — механизм существует только на уровне схемы каталога, не данных.
+**Routing key formula (PHP, after request-scoped OCR/animated overrides):**
+`key = executionKind ?? (isAi ? 'ai' : category)`.
+`executionKind` — единственный override category/AI-based роутинга в
+`ConversionRegistry::streamFor()`; `category` при этом остаётся источником
+quota/retention. CNV-27 `worker-api` публикует `executionKind=api`, поэтому его
+`isAi=true` пара идёт в `conv.api`. CNV-88 `browser` использует тот же механизм,
+но пока не имеет ни worker registration, ни реальной пары каталога.
 В статическом каталоге `config/catalog/conversion_pairs.json` нет пар с `category=markup` (0 строк); live md/html/htm хранятся как `document`.
 Если пара когда-либо получит `markup`, `ConversionRegistry::streamFor()` сворачивает её в `'document'`.
 OCR override: when `$ocr=true`, `streamFor()` always returns `'image'`, regardless of category.
@@ -261,8 +267,10 @@ messages, and check container logs in Graylog / Portainer.
 
 `make test-drift` runs the drift test as part of CI. It verifies:
 
-1. **Stream coverage:** every routing-key (`document`, `image`, `audio`, `video`,
-   `data`, `ai`) has at least one worker declaring it in `CAPABILITIES["routing_keys"]`.
+1. **Stream coverage:** every active routing key (`document`, `image`, `audio`,
+   `video`, `data`, `ai`, `api`) has at least one worker declaring it in
+   `CAPABILITIES["routing_keys"]`. `browser` remains a configured transport/stream
+   without a consumer or live catalog pair and is excluded until its worker ships.
 2. **Matrix subset:** every `(from, to)` pair in a worker's `CAPABILITIES["matrix"]`
    is present in `ConversionRegistry` (worker matrix ⊆ registry).
 
@@ -330,7 +338,7 @@ coordinates to reach the gateway and Symfony.
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `WORKER_ID` | container hostname | Stable KeyDB-consumer name (§2); must never include a PID |
-| `WORKER_TYPE` | _(required)_ | `ai`\|`document`\|`image`\|`audio`\|`video`\|`data` |
+| `WORKER_TYPE` | _(required)_ | `ai`\|`api`\|`document`\|`image`\|`audio`\|`video`\|`data`\|`browser` |
 | `GATEWAY_WS_URL` | _(required)_ | Gateway WS endpoint, e.g. `wss://…/ws/worker/` |
 | `API_BASE_URL` | `http://localhost:8080` | Symfony base URL — input download / large-result upload; scheme+host only, no path |
 | `WORKER_API_TOKEN` | _(required)_ | Bearer for the WS-upgrade handshake and for direct HTTP calls to Symfony |

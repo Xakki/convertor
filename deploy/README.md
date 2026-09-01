@@ -51,7 +51,7 @@ curl -fsSL https://gist.githubusercontent.com/<OWNER>/<GIST_ID>/raw/install.sh |
 | `video` | worker-ffmpeg-video | `…/worker-ffmpeg:latest` |
 | `image` | worker-image | `…/worker-image:latest` |
 | `data` | worker-data | `…/worker-data:latest` |
-| `ai` | worker-ai | `…/worker-ai:latest-cpu` |
+| `ai` | worker-ai | `…/worker-ai-cpu:latest` |
 
 `ws-gateway` и `metrics-exporter` на remote **не** поднимаются — только на
 главном сервере. Воркеры — WS-клиенты к публичному `wss://…/ws/worker/`.
@@ -65,8 +65,8 @@ curl -fsSL https://gist.githubusercontent.com/<OWNER>/<GIST_ID>/raw/install.sh |
 
 ## Важно: без CUDA
 
-Публичный путь отдаёт **только** `worker-ai:latest-cpu`. Образ
-`worker-ai:latest-cuda` в Harbor не публикуется — GPU-хост собирает его
+Публичный путь отдаёт **только** `worker-ai-cpu:latest`. Образ
+`worker-ai-cuda` в Harbor не публикуется — GPU-хост собирает его
 локально (см. `docs/worker-ai-deploy.md`).
 
 ## Создание gist (один раз, вручную)

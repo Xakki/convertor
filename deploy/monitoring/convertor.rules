@@ -48,7 +48,7 @@ groups:
 
   # Zero registered consumers ≈ worker pool / gateway reader down for that stream.
   - alert: ConvertorNoConsumers
-    expr: convertor_stream_group_consumers{group="convertor"} == 0
+    expr: convertor_stream_group_consumers{group="convertor",stream!="conv.browser"} == 0
     for: 10m
     labels:
       severity: critical

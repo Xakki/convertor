@@ -415,15 +415,17 @@ services:
                 AI_BASE_IMAGE: ${AI_BASE_IMAGE:-harbor.xakki.ru/convertor/worker-ai-base:latest}
                 APP_UID: ${APP_UID:-1000}
                 APP_GID: ${APP_GID:-1000}
-        image: ${IMAGE_NS}/worker-ai:${IMAGE_TAG:-latest}-${AI_VARIANT:-cpu}
-        # Отдельный knob от WORKER_PULL_POLICY: worker-ai:cuda в Harbor НЕ публикуется
+        # AI_IMAGE обязателен для CUDA-хоста: worker-ai-cuda — локальный репозиторий,
+        # который никогда не публикуется в Harbor. CPU остаётся опубликованным.
+        image: ${AI_IMAGE:-${IMAGE_NS}/worker-ai-${AI_VARIANT:-cpu}:${IMAGE_TAG:-latest}}
+        # Отдельный knob от WORKER_PULL_POLICY: worker-ai-cuda в Harbor НЕ публикуется
         # (§1), поэтому если бы GPU-хост наследовал общий WORKER_PULL_POLICY=always,
-        # compose пытался бы пуллить несуществующий worker-ai:latest-cuda → та же
+        # compose пытался бы пуллить несуществующий тег worker-ai-cuda → та же
         # ошибка "pull access denied", которую чинит эта задача, просто в другом месте.
         # ВАЖНО: значение по умолчанию `missing` тут — фолбэк ТОЛЬКО для `up` (при
         # отсутствии локального образа missing запускает build:-секцию). Explicit
         # `docker compose pull`/`make pull` build-фолбэка не знает: с `missing` он
-        # всё равно пытается запросить worker-ai:latest-cuda и падает (exit 2,
+        # всё равно пытается запросить worker-ai-cuda и падает (exit 2,
         # "not found"). GPU-хост обязан явно ставить `AI_PULL_POLICY=build` в
         # .env.local (.env.local_worker_example) — тогда `docker compose pull`
         # помечает сервис Skipped, а `up`/`workers-recreate` по-прежнему собирают
@@ -579,6 +581,43 @@ services:
             retries: 3
             start_period: 10s
         # default: reaches gateway (public wss://) + Symfony API (http://nginx).
+        networks:
+            - default
+
+    worker-api:
+        build:
+            context: .
+            dockerfile: docker/workers/api.Dockerfile
+        image: ${IMAGE_NS}/worker-api:${IMAGE_TAG:-latest}
+        pull_policy: ${WORKER_PULL_POLICY:-missing}
+        profiles: ["api"]
+        container_name: "${COMPOSE_PROJECT_NAME}-worker-api"
+        restart: unless-stopped
+        init: true
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+        volumes:
+            - ./worker-api.yaml:/app/worker-api.yaml:ro
+            - ./workers/api/schema:/app/workers/api/schema:ro
+        environment:
+            APP_ENV: ${APP_ENV}
+            TZ: ${TZ}
+            WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-api
+            WORKER_TYPE: api
+            WORKER_HOST: ${HOST_NAME}
+            GATEWAY_WS_URL: ${GATEWAY_WS_URL}
+            WORKER_API_TOKEN: ${WORKER_API_TOKEN}
+            API_BASE_URL: ${API_BASE_URL}
+            WORK_DIR: /tmp/worker
+            WORKER_API_CONFIG: /app/worker-api.yaml
+            G4F_API_KEY: ${G4F_API_KEY}
+            GONKA_API_KEY: ${GONKA_API_KEY}
+        healthcheck:
+            test: ["CMD", "python3", "-c", "from pathlib import Path; from workers.api.config import load_catalog; load_catalog(Path('/app/worker-api.yaml'))"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 20s
         networks:
             - default
 

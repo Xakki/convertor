@@ -1,0 +1,102 @@
+"""Behavioral checks for the profile-scoped worker image pull targets."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+
+
+def _run_make(tmp_path: Path, *make_args: str) -> subprocess.CompletedProcess[str]:
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+set -eu
+printf '%s|profiles=%s\\n' "$*" "${COMPOSE_PROFILES-}" >> "${FAKE_LOG}"
+if [ "$1" = compose ] && [ "$2" = config ] && [ "$3" = --services ]; then
+    case "${COMPOSE_PROFILES-}" in
+        ai) printf '%s\\n' worker-data worker-image worker-ai ;;
+        server,api) printf '%s\\n' php mariadb keydb worker-api ;;
+        *) printf '%s\\n' worker-data worker-image ;;
+    esac
+elif [ "$1" = compose ] && [ "$2" = config ] && [ "$3" = --images ]; then
+    case "${COMPOSE_PROFILES-}" in
+        ai) printf '%s\\n' harbor.test/convertor/worker-data:latest harbor.test/convertor/worker-image:latest harbor.test/convertor/worker-ai-cpu:latest ;;
+        server,api) printf '%s\\n' harbor.test/convertor/php:latest harbor.test/convertor/worker-api:latest ;;
+        *) printf '%s\\n' harbor.test/convertor/worker-data:latest harbor.test/convertor/worker-image:latest ;;
+    esac
+elif [ "$1" = compose ] && [ "$2" = pull ]; then
+    printf 'PULL:%s\\n' "$*" >> "${FAKE_LOG}"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    log = tmp_path / "compose.log"
+    env = os.environ | {
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "FAKE_LOG": str(log),
+        "IMAGE_NS": "harbor.test/convertor",
+        "IMAGE_TAG": "latest",
+        # This reproduces the shell value that must not leak into scoped pulls.
+        "COMPOSE_PROFILES": "server,backup,monitoring",
+    }
+    result = subprocess.run(
+        ["make", "--no-print-directory", "IMAGE_NS=harbor.test/convertor", "IMAGE_TAG=latest", *make_args],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    result.log = log.read_text(encoding="utf-8") if log.exists() else ""  # type: ignore[attr-defined]
+    return result
+
+
+def test_workers_pull_scopes_ai_and_ignores_env_profiles(tmp_path: Path) -> None:
+    result = _run_make(
+        tmp_path,
+        "workers-pull",
+        "WORKER_RECREATE_PROFILE=remote",
+        "WORKER_RECREATE_SERVICES=worker-data worker-ai",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "config --services|profiles=ai" in result.log  # type: ignore[attr-defined]
+    assert "config --images|profiles=ai" in result.log  # type: ignore[attr-defined]
+    assert "compose pull worker-ai worker-data|profiles=ai" in result.log  # type: ignore[attr-defined]
+    assert "db-dump-cron" not in result.log  # type: ignore[attr-defined]
+    assert "server,backup,monitoring" not in result.log  # type: ignore[attr-defined]
+
+
+def test_workers_pull_rejects_unknown_profile(tmp_path: Path) -> None:
+    result = _run_make(tmp_path, "workers-pull", "WORKER_RECREATE_PROFILE=server")
+
+    assert result.returncode == 2
+    assert "unknown profile 'server'" in result.stdout
+    assert "compose" not in result.log  # type: ignore[attr-defined]
+
+
+def test_workers_pull_rejects_disallowed_service_before_compose(tmp_path: Path) -> None:
+    result = _run_make(
+        tmp_path,
+        "workers-pull",
+        "WORKER_RECREATE_PROFILE=saVpn",
+        "WORKER_RECREATE_SERVICES=worker-api",
+    )
+
+    assert result.returncode == 2
+    assert "not allowed by profile saVpn" in result.stdout
+    assert "compose" not in result.log  # type: ignore[attr-defined]
+
+
+def test_worker_api_pull_is_separate_and_scoped(tmp_path: Path) -> None:
+    result = _run_make(tmp_path, "worker-api-pull")
+
+    assert result.returncode == 0, result.stderr
+    assert "config --services|profiles=server,api" in result.log  # type: ignore[attr-defined]
+    assert "compose pull worker-api|profiles=server,api" in result.log  # type: ignore[attr-defined]
+    assert "db-dump-cron" not in result.log  # type: ignore[attr-defined]

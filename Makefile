@@ -65,7 +65,7 @@ init: build up migrate ## First-time setup: build + up + migrate (планы с�
 	@echo -e "$(GREEN)Project initialised!$(RESET)"
 
 .PHONY: up
-up: ## Start stack и дождаться healthy — ГЛАВНЫЙ СЕРВЕР (remote-хосты: workers-recreate)
+up: validate-ai-image ## Start stack и дождаться healthy — ГЛАВНЫЙ СЕРВЕР (remote-хосты: workers-recreate)
 	$(DC) up -d --wait
 
 .PHONY: down
@@ -81,15 +81,15 @@ down-v: ## Stop & remove containers ВМЕСТЕ С ТОМАМИ (стирает
 restart: down up ## Restart all services
 
 .PHONY: build
-build: ## Build all images
+build: validate-ai-image ## Build all images
 	$(DC) build
 
 .PHONY: rebuild
-rebuild: ## Build all images without cache
+rebuild: validate-ai-image ## Build all images without cache
 	$(DC) build --no-cache
 
 .PHONY: pull
-pull: ## Подтянуть образы: внешние (php/mariadb/nginx/keydb) + воркеры из Harbor
+pull: validate-ai-image ## Подтянуть образы: внешние (php/mariadb/nginx/keydb) + воркеры из Harbor
 	$(DC) pull
 
 .PHONY: ps
@@ -97,12 +97,21 @@ ps: ## Show running containers
 	$(DC) ps
 
 .PHONY: docker-check
-docker-check: ## Проверить compose-конфиг обоих стендов (dev + test)
+docker-check: validate-ai-image ## Проверить compose-конфиг обоих стендов (dev + test)
 	@$(DC) config -q && echo "dev: ok"
 	@$(MAKE_TEST) config-check && echo "test: ok"
 
+.PHONY: validate-ai-image
+# This guard protects targets that operate on the main application
+# docker-compose.yml. Fluent sidecar targets use DC_FLUENT and stay independent.
+validate-ai-image:
+	@if [ "$(AI_VARIANT)" = "cuda" ] && [ -z "$(strip $(AI_IMAGE))" ]; then \
+		echo "✋ AI_IMAGE is required when AI_VARIANT=cuda (CUDA images are local-only)"; \
+		exit 1; \
+	fi
+
 .PHONY: config-check
-config-check:
+config-check: validate-ai-image
 	@$(DC) config -q
 
 .PHONY: harbor-login

@@ -36,9 +36,9 @@ use Symfony\Component\Messenger\MessageBusInterface;
  * CNV-71-03: гибридная проверка "воркер существует" в
  * {@see ConversionManager} — ни одной строки в `worker_capabilities` для
  * нужного workerType (пары from→to) → немедленный
- * {@see WorkerUnavailableException} ДО любых size/quota/S3-эффектов; строка
- * ЕСТЬ (даже offline/disconnected — {@see WorkerCapabilityRepository::existsForWorkerType()}
- * не смотрит статус, только сам факт) → задача принимается штатно.
+ * {@see WorkerUnavailableException} before size/quota/S3 effects. Normal worker
+ * types use durable row existence, including offline/stale rows; API uses fresh
+ * alive registrations with a validated model contract.
  *
  * Reachable end-to-end since CNV-71-04 (seed rows removed) — see
  * {@see \App\Tests\Functional\Service\Conversion\ConversionManagerWorkerAvailabilityFunctionalTest}
@@ -77,11 +77,8 @@ final class ConversionManagerWorkerAvailabilityTest extends TestCase
         $manager->createConversion(new ConversionRequestDTO(new User(), $this->makeJpgUpload(), 'png', false, true));
     }
 
-    public function testWorkerRowPresentEvenOfflineAllowsSingleHopToProceed(): void
+    public function testRegisteredWorkerTypeAllowsSingleHopToProceed(): void
     {
-        // existsForWorkerType() отвечает по самому факту строки, не по её
-        // liveness-статусу — с точки зрения этого гейта "offline" неотличим
-        // от "alive": обе ветки — просто true.
         $workerCapabilities = $this->createMock(WorkerCapabilityRepository::class);
         $workerCapabilities->expects($this->once())
             ->method('existsForWorkerType')

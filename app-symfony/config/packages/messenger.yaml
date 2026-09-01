@@ -7,7 +7,7 @@ framework:
         # workers (the ONLY consumers) can parse the job payload.
         #
         # Custom transport (Option D — clean single-JSON wire contract). The
-        # `conv+redis://` DSN scheme binds these 6 transports to
+        # `conv+redis://` DSN scheme binds these 8 transports to
         # `App\Messenger\Transport\CleanRedisTransportFactory` instead of the stock
         # `redis-messenger` factory (which matches bare `redis://`, so `failed`
         # below still uses the stock transport). CleanRedisTransport::send() does
@@ -66,6 +66,13 @@ framework:
                 serializer: messenger.transport.symfony_serializer
                 options:
                     stream: conv.ai
+                    group: convertor
+
+            conv_api:
+                dsn: 'conv+%env(REDIS_DSN)%'
+                serializer: messenger.transport.symfony_serializer
+                options:
+                    stream: conv.api
                     group: convertor
 
             # CNV-88: browser execution kind (screenshot/recording через

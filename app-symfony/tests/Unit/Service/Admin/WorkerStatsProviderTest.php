@@ -116,6 +116,40 @@ final class WorkerStatsProviderTest extends TestCase
         self::assertNull($row['version']);
     }
 
+    public function testProvenanceIsExposedAndLegacyPayloadDefaultsSafely(): void
+    {
+        $cap = $this->stubCap('image', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive, [
+            'provenance' => [
+                'appVersion' => '1.2.3',
+                'build' => '42',
+                'revision' => 'abcdef',
+                'sourceState' => 'clean',
+                'imageRepository' => 'harbor.example/worker-image',
+            ],
+        ]);
+
+        $row = $this->provider([$cap])->collect()['workers'][0];
+
+        self::assertSame([
+            'appVersion' => '1.2.3',
+            'build' => '42',
+            'revision' => 'abcdef',
+            'sourceState' => 'clean',
+            'imageRepository' => 'harbor.example/worker-image',
+        ], $row['provenance']);
+
+        $legacyRow = $this->provider([
+            $this->stubCap('image', 'legacy:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive),
+        ])->collect()['workers'][0];
+        self::assertSame([
+            'appVersion' => null,
+            'build' => null,
+            'revision' => null,
+            'sourceState' => null,
+            'imageRepository' => null,
+        ], $legacyRow['provenance']);
+    }
+
     public function testIsAiStreamsRoutingKeysAndMatrixCategoriesAreExposed(): void
     {
         $cap = $this->stubCap('ai', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive, [
@@ -131,6 +165,25 @@ final class WorkerStatsProviderTest extends TestCase
         self::assertSame(['ai'], $row['streams']);
         self::assertSame(['ai'], $row['routingKeys']);
         self::assertSame(['mp3' => 'audio', 'wav' => 'audio'], $row['matrix_categories']);
+    }
+
+    public function testExecutionKindAndPublicSettingsAreExposed(): void
+    {
+        $settings = [
+            'model' => [
+                'default' => 'fast',
+                'choices' => [['value' => 'fast', 'label' => 'Fast']],
+            ],
+        ];
+        $cap = $this->stubCap('api', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive, [
+            'executionKind' => 'api',
+            'settings'      => $settings,
+        ]);
+
+        $row = $this->provider([$cap])->collect()['workers'][0];
+
+        self::assertSame('api', $row['executionKind']);
+        self::assertSame($settings, $row['settings']);
     }
 
     public function testMissingIsAiStreamsRoutingKeysAndMatrixCategoriesDefaultToEmpty(): void

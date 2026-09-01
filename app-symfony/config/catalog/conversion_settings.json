@@ -55,7 +55,7 @@
         "расходом CPU/памяти (разрешение и fps видео, длительность, browser-рендеринг, AI-конвертации).",
         "`default` (если не null) материализуется в опции задачи даже когда клиент поле не прислал."
     ],
-    "version": "2026-08-24.7",
+    "version": "2026-08-26.1",
     "profiles": {
         "image.raster": {
             "label": "Изображение",
@@ -383,6 +383,18 @@
                 }
             ]
         },
+        "api.chat": {
+            "label": "Chat API",
+            "fields": [
+                {
+                    "key": "model",
+                    "type": "select",
+                    "label": "Модель",
+                    "minPlan": "free",
+                    "dynamic": true
+                }
+            ]
+        },
         "media.video": {
             "label": "Видео",
             "fields": [
@@ -487,6 +499,14 @@
             "animated": false,
             "from": ["txt"],
             "to": ["md"]
+        },
+        {
+            "profile": "api.chat",
+            "category": "document",
+            "ocr": false,
+            "animated": false,
+            "from": ["txt"],
+            "to": ["json_ai", "txt_ai"]
         },
         {
             "profile": "media.video",

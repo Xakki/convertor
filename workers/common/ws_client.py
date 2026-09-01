@@ -74,6 +74,23 @@ _DOWNLOAD_BACKOFF_FACTOR = 2.0
 _DOWNLOAD_BACKOFF_JITTER_S = 0.1
 
 
+def _runtime_provenance() -> dict[str, str | None]:
+    """Собрать provenance отдельно от публичного release-тега."""
+    app_version = os.getenv("APP_VER", "0").strip() or "0"
+    build = ""
+    with suppress(OSError):
+        counter = Path(__file__).resolve().parents[2] / ".i"
+        if counter.is_file():
+            build = counter.read_text(encoding="utf-8").strip()
+    return {
+        "appVersion": app_version,
+        "build": build or None,
+        "revision": os.getenv("GIT_REVISION", "").strip() or None,
+        "sourceState": os.getenv("SOURCE_STATE", "").strip() or None,
+        "imageRepository": os.getenv("IMAGE_REPOSITORY", "").strip() or None,
+    }
+
+
 def _compose_version() -> str:
     """Полная версия воркера = APP_VER (+ build-счётчик из gitignored `.i`, если есть).
 
@@ -276,7 +293,7 @@ def _safe_dir_name(job_id: str) -> str:
 # PHP/БД недоступны, поэтому вывести список из enum'а в рантайме нельзя.
 # Синхронизацию с `WorkerType.php` держит drift-guard
 # `workers/tests/test_worker_type_drift.py` (`make test-drift` из корня репо).
-ALLOWED_WORKER_TYPES = ("ai", "document", "image", "audio", "video", "data", "browser")
+ALLOWED_WORKER_TYPES = ("ai", "api", "document", "image", "audio", "video", "data", "browser")
 
 # Контракт `instanceId` (registry-02): непустая строка, ≤128 символов, только
 # `[A-Za-z0-9._:-]`. Сервер (PHP) 400-ит при нарушении формы — клиент обязан
@@ -294,7 +311,7 @@ def _sanitize_instance_id(raw: str) -> str:
 @dataclass(frozen=True)
 class WsClientConfig:
     worker_id: str            # WORKER_ID — стабильно, дословно = имя KeyDB-consumer'а, без PID
-    worker_type: str          # WORKER_TYPE — ai|document|image|audio|video|data
+    worker_type: str          # WORKER_TYPE — ai|api|document|image|audio|video|data|browser
     gateway_ws_url: str       # GATEWAY_WS_URL — wss://…/ws/worker/
     api_base_url: str         # API_BASE_URL — Symfony (GET input / POST large result)
     worker_api_token: str     # WORKER_API_TOKEN — Bearer для WS-upgrade (a) + прямого HTTP (b)
@@ -699,8 +716,8 @@ class WsClient:
         это заметил — reader/pinger/send). Фолбэк на `exc.rcvd` — на случай, если `ws`-объект
         по какой-то причине их ещё не выставил, а само исключение уже несёт close-фрейм.
         """
-        code = ws.close_code
-        reason = ws.close_reason or ""
+        code = getattr(ws, "close_code", None)
+        reason = getattr(ws, "close_reason", None) or ""
         if code is None and exc is not None and exc.rcvd is not None:
             code = exc.rcvd.code
             reason = exc.rcvd.reason or reason
@@ -771,7 +788,7 @@ class WsClient:
         # (ConversionRegistry::buildMatrixFromCapabilities) для AI-воркеров, чтобы
         # выбрать FileCategory; без него AI-пары молча дропаются.
         matrix_categories: dict = dict(caps.get("matrix_categories", {}))
-        return {
+        body = {
             "workerType": self._cfg.worker_type,
             "instanceId": self._instance_id(),
             # isAi — из явного CAPABILITIES["isAi"] воркера (registry-02: раньше выводился
@@ -784,10 +801,16 @@ class WsClient:
             "matrix_categories": matrix_categories,
             "image": None,
             "version": self._cfg.version,
+            "provenance": _runtime_provenance(),
             # host (registry-08): явный host/node-идентификатор, ТА ЖЕ функция, что
             # даёт host-часть instanceId (см. _instance_id()) — не отдельная деривация.
             "host": _worker_host(),
         }
+        if caps.get("executionKind") is not None:
+            body["executionKind"] = caps["executionKind"]
+        if caps.get("settings") is not None:
+            body["settings"] = caps["settings"]
+        return body
 
     async def _register(self) -> None:
         """Best-effort self-register on connect — bounded retry with backoff (worker-register-no-retry).
@@ -856,6 +879,7 @@ class WsClient:
             "instanceId": self._instance_id(),
             "slots": self._cfg.slots,
             "version": self._cfg.version,
+            "provenance": _runtime_provenance(),
             "cpu": cpu,
             "mem": mem,
             "load": load,
@@ -905,6 +929,7 @@ class WsClient:
                         extra={
                             "workerId": self._cfg.worker_id,
                             "workerType": self._cfg.worker_type,
+                            "provenance": _runtime_provenance(),
                         },
                     )
                 self._ready_ok = True

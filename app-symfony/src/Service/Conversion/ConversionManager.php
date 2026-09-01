@@ -12,6 +12,7 @@ use App\Entity\User;
 use App\Enum\BillingMode;
 use App\Enum\ConversionStatus;
 use App\Enum\FileCategory;
+use App\Enum\WorkerType;
 use App\EventListener\ConversionChainListener;
 use App\Exception\AuthRequiredException;
 use App\Exception\ConversionDisabledException;
@@ -21,6 +22,7 @@ use App\Exception\WorkerUnavailableException;
 use App\Message\ConversionMessage;
 use App\Repository\ConversionRepository;
 use App\Repository\WorkerCapabilityRepository;
+use App\Service\Conversion\Settings\ApiModelAvailability;
 use App\Service\Conversion\Settings\ConversionOptionsValidator;
 use App\Service\Conversion\Settings\SettingsAccessLevel;
 use App\Service\Queue\ConversionStatusReader;
@@ -58,10 +60,8 @@ class ConversionManager
         // Allowlist финальных пар для chaining (CNV-5). null в unit-тестах =
         // пустой allowlist (цепочки выключены), как дефолт CHAIN_ENABLED_PAIRS.
         private readonly ?ChainEnablement $chainEnablement = null,
-        // CNV-71-03: гейт "воркер существует" (worker_capabilities). Опционален,
-        // как toggleService выше — в проде autowiring инжектит реальный
-        // репозиторий; unit-тесты без БД получают null → гейт пропускается
-        // (поведение по умолчанию = воркер доступен).
+        // Durable worker-type admission. Short liveness changes do not globally
+        // stop normal queues; API model admission is narrowed below.
         private readonly ?WorkerCapabilityRepository $workerCapabilities = null,
         // CNV-85 repair round: re-validates STORED options on retry against the
         // retrying user's CURRENT plan (see retryConversion()). Опционален, как
@@ -70,6 +70,8 @@ class ConversionManager
         // пропускается (поведение по умолчанию до этой карточки = опции retry
         // не проверялись вовсе).
         private readonly ?ConversionOptionsValidator $optionsValidator = null,
+        // API jobs дополнительно требуют доступную модель из свежей регистрации.
+        private readonly ?ApiModelAvailability $apiModels = null,
     ) {
     }
 
@@ -185,14 +187,10 @@ class ConversionManager
             throw new ConversionDisabledException('Конвертация временно отключена');
         }
 
-        // Гейт "воркер существует" (CNV-71-03): ни одной строки в
-        // worker_capabilities для нужного workerType → отказ, тем же порядком
-        // причин, что и toggle-гейт выше (дёшево, до любых side-эффектов).
-        // Строка ЕСТЬ (даже offline/disconnected) → задача принимается —
-        // протухание никем не взятой задачи закрывает отдельный gateway-эндпоинт
-        // (POST /api/v1/internal/worker/expire, WORKER_CLAIM_TIMEOUT_MINUTES).
+        // Normal queues require durable type registration. API jobs instead
+        // require a fresh alive registration with a validated model contract.
         $workerType = $this->registry->streamFor($fromFormat, $toFormat, $ocr);
-        if ($this->workerCapabilities !== null && ! $this->workerCapabilities->existsForWorkerType($workerType)) {
+        if (! $this->isWorkerTypeAdmitted($workerType)) {
             throw new WorkerUnavailableException('Конвертация временно недоступна');
         }
 
@@ -280,10 +278,10 @@ class ConversionManager
             if ($this->toggleService !== null && ! $this->toggleService->isEnabled($hop['from'], $hop['to'])) {
                 throw new ConversionDisabledException('Конвертация временно отключена');
             }
-            // Тот же гейт "воркер существует", что и в createSingleHop() —
-            // per-hop, chain никогда не OCR (см. докблок класса выше).
+            // The same durable per-hop gate as createSingleHop(); an API hop is
+            // the narrow live-model exception.
             $hopWorkerType = $this->registry->streamFor($hop['from'], $hop['to'], false);
-            if ($this->workerCapabilities !== null && ! $this->workerCapabilities->existsForWorkerType($hopWorkerType)) {
+            if (! $this->isWorkerTypeAdmitted($hopWorkerType)) {
                 throw new WorkerUnavailableException('Конвертация временно недоступна');
             }
             if (! $privileged && ($hop['isAi'] || $hop['category'] === FileCategory::Video)) {
@@ -386,6 +384,16 @@ class ConversionManager
         return $hop1;
     }
 
+    private function isWorkerTypeAdmitted(string $workerType): bool
+    {
+        if ($workerType === WorkerType::Api->value) {
+            return $this->apiModels?->current() !== null;
+        }
+
+        return $this->workerCapabilities === null
+            || $this->workerCapabilities->existsForWorkerType($workerType);
+    }
+
     private function newChainId(): string
     {
         $bytes    = random_bytes(16);
@@ -407,7 +415,7 @@ class ConversionManager
      * @throws \RuntimeException     чужая / несуществующая (контроллер → 404)
      * @throws GoneHttpException     исходник истёк / вычищен (→ 410)
      * @throws ConversionDisabledException пара отключена админом (→ 409)
-     * @throws WorkerUnavailableException  ни одной строки в worker_capabilities (→ 503)
+     * @throws WorkerUnavailableException  workerType не зарегистрирован; для API нет fresh alive model (→ 503)
      * @throws InvalidConversionOptionException сохранённая опция недоступна на ТЕКУЩЕМ
      *                                          плане пользователя (→ 422, см. re-validation ниже)
      */
@@ -455,11 +463,10 @@ class ConversionManager
             throw new ConversionDisabledException('Конвертация временно отключена');
         }
 
-        // Тот же гейт "воркер существует", что и в createSingleHop()/createChain()
-        // (CNV-71-03) — retry раньше его не имел и мог поставить в очередь пару,
-        // на которую никогда не зарегистрировался воркер, вместо немедленного 503.
+        // Same durable admission as createSingleHop()/createChain(); API retry
+        // remains the live-model exception.
         $workerType = $this->registry->streamFor($fromFormat, $toFormat, $ocr);
-        if ($this->workerCapabilities !== null && ! $this->workerCapabilities->existsForWorkerType($workerType)) {
+        if (! $this->isWorkerTypeAdmitted($workerType)) {
             throw new WorkerUnavailableException('Конвертация временно недоступна');
         }
 

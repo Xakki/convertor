@@ -6,6 +6,7 @@ namespace App\Controller\Api;
 
 use App\Enum\WorkerType;
 use App\Repository\WorkerCapabilityRepository;
+use App\Service\Conversion\Settings\ApiCapabilityContract;
 use App\Service\Queue\ConversionResultPersister;
 use App\Service\Storage\S3Storage;
 use App\Service\Worker\ResultKeyBuilder;
@@ -55,6 +56,7 @@ final class WorkerController extends AbstractController
         private readonly ResultKeyBuilder $keyBuilder,
         private readonly LoggerInterface $logger,
         private readonly WorkerCapabilityRepository $workerCapabilityRepository,
+        private readonly ApiCapabilityContract $apiCapabilityContract,
     ) {
     }
 
@@ -126,6 +128,12 @@ final class WorkerController extends AbstractController
         }
         if (! isset($data['matrix']) || ! is_array($data['matrix'])) {
             return 'matrix must be an object';
+        }
+        if ($data['workerType'] === WorkerType::Api->value) {
+            $error = $this->apiCapabilityContract->validationError($data);
+            if ($error !== null) {
+                return $error;
+            }
         }
         // host (registry-08) — OPTIONAL (old worker builds don't send it): absent/null
         // is fine, but if present it must be a string within a sane length.

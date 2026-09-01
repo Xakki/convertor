@@ -28,6 +28,7 @@ class ConversionOptionsValidator
     public function __construct(
         private readonly ConversionSettingsCatalog $catalog,
         private readonly ConversionRegistry $registry,
+        private readonly ApiModelAvailability $apiModels,
     ) {
     }
 
@@ -79,6 +80,26 @@ class ConversionOptionsValidator
             return [];
         }
 
+        $liveModels = null;
+        if ($profile->id === 'api.chat') {
+            $modelField = $profile->field('model');
+            $liveModels = $modelField?->dynamic === true ? $this->apiModels->current() : null;
+            if ($liveModels === null) {
+                throw new InvalidConversionOptionException(
+                    InvalidConversionOptionException::CODE_NOT_SUPPORTED,
+                    'Chat conversion has no live validated API model',
+                );
+            }
+            if (array_key_exists('model', $raw)
+                && (! is_string($raw['model'])
+                    || ! in_array($raw['model'], array_column($liveModels['choices'], 'value'), true))) {
+                throw new InvalidConversionOptionException(
+                    InvalidConversionOptionException::CODE_INVALID_VALUE,
+                    'Selected chat model is not currently available',
+                );
+            }
+        }
+
         foreach (array_keys($raw) as $key) {
             if (! is_string($key) || $profile->field($key) === null) {
                 $printable = is_string($key) ? $key : (string) $key;
@@ -109,6 +130,11 @@ class ConversionOptionsValidator
                 );
             }
 
+            if ($liveModels !== null && $field->key === 'model') {
+                $normalized[$field->key] = $raw[$field->key];
+                continue;
+            }
+
             $value = $field->normalizeValue($raw[$field->key]);
 
             if ($field->type === SettingsFieldType::Select) {
@@ -122,6 +148,10 @@ class ConversionOptionsValidator
             }
 
             $normalized[$field->key] = $value;
+        }
+
+        if ($liveModels !== null && ! array_key_exists('model', $normalized)) {
+            $normalized['model'] = $liveModels['default'];
         }
 
         return $normalized;

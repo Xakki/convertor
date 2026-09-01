@@ -300,7 +300,7 @@ final class ConversionSettingsCatalogTest extends TestCase
      * encoding), JSON-target — `data.json` (pretty/indent), а YAML/TOML/XML
      * как target ОСТАЮТСЯ без профиля этой карточки (карточка запрещает им
      * профиль и приём settings). Побочно проверяет отсутствие cross-category
-     * утечки: `txt→json` (category=document, isAi=true, AI-экстракция
+     * утечки: `txt→json_ai` (category=document, isAi=true, AI-экстракция
      * структурированных данных) делит `to=json` с `data.json`, но НЕ
      * `category` — правило `data.json` ЯВНО скоуплено `"category": "data"`,
      * поэтому document-пара сюда не попадает (см.
@@ -368,10 +368,9 @@ final class ConversionSettingsCatalogTest extends TestCase
     }
 
     /**
-     * Явные читаемые примеры, включая ГЛАВНЫЙ риск карточки: `txt→json`
-     * (category=document, isAi=true — AI-извлечение структурированных данных
-     * из текста) делит `to=json` с `data.json`, но обязан остаться БЕЗ
-     * профиля этой карточки — правило `data.json` скоуплено `category: data`.
+     * Явные читаемые примеры, включая `txt→json_ai`: category=document не
+     * подпадает под `data.json`, но CNV-27 назначает паре отдельный динамический
+     * профиль `api.chat`.
      *
      * @param list<string> $expectedFields
      */
@@ -410,9 +409,8 @@ final class ConversionSettingsCatalogTest extends TestCase
         yield 'csv to yaml stays without a profile' => ['csv', 'yaml', 'data', null, []];
         yield 'csv to toml stays without a profile' => ['csv', 'toml', 'data', null, []];
         yield 'json to xml stays without a profile' => ['json', 'xml', 'data', null, []];
-        // Главный риск карточки: document AI-экстракция делит `to=json`, но НЕ
-        // `category` — остаётся без data-профиля.
-        yield 'document AI extraction pair (txt to json) stays without a data profile' => ['txt', 'json', 'document', null, []];
+        // CNV-27 owns this document pair through api.chat, not data.json.
+        yield 'document AI extraction pair uses only the API chat profile' => ['txt', 'json_ai', 'document', 'api.chat', ['model']];
     }
 
     // -----------------------------------------------------------------------

@@ -25,7 +25,7 @@ use PHPUnit\Framework\TestCase;
  * the routing matrix ({@see ConversionRegistry::isSupported()}/`getCategory()`/
  * `streamFor()`) no longer reads `worker_capabilities` at all, so
  * `new ConversionRegistry()` with its default catalog path already gives the
- * exact same full 394-pair matrix production serves, no DB/seed required to
+ * exact same full 402-pair matrix production serves, no DB/seed required to
  * exercise it. `ConversionPairsCatalogDriftTest` guards a DIFFERENT thing —
  * that `conversion_pairs.json` matches a fresh reduction of
  * `worker_capabilities.json` — and never calls `streamFor()`; THIS test is

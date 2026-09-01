@@ -28,3 +28,5 @@ __pycache__/
 # временные файлы Claude Code
 .claude/settings.local.json
 .claude/settings.local.json.tmp.*
+
+/worker-api.yaml

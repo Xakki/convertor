@@ -67,7 +67,7 @@ CONV_STREAMS = tuple(stream_for(t) for t in WORKER_TYPES) + (DLQ_STREAM,)
 # Отдельный conversionId на каждый тип — доказывает, что задача попала в «свой»
 # stream (image-воркер обязан увидеть ИМЕННО 130, никогда чужой).
 CONV_ID = {
-    "ai": 110, "document": 120, "image": 130,
+    "ai": 110, "api": 115, "document": 120, "image": 130,
     "audio": 140, "video": 150, "data": 160,
 }
 

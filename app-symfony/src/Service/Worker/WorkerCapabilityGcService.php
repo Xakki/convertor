@@ -12,18 +12,10 @@ use Psr\Log\LoggerInterface;
  * Long-TTL GC воркер-capability строк (registry-06). Удаляет ряды
  * `worker_capabilities`, чей `last_seen` старше настраиваемого TTL.
  *
- * Liveness (registry-06 push-эндпоинт) НЕ гейтит роутинг (эпик, Decisions:
- * «Eviction = long-TTL GC, NOT short liveness gating») — GC чистит только
- * явно мёртвые записи (не обновлялись дольше TTL), живые/недавно виденные
- * инстансы не трогает независимо от их liveness-статуса.
- *
- * CNV-71-02: `/formats`/`/convert/{a}-to-{b}`/submit БОЛЬШЕ НЕ зависят от того,
- * что этот GC удаляет — {@see \App\Service\Conversion\ConversionRegistry}
- * строит роутинг-матрицу из статического каталога `config/catalog/
- * conversion_pairs.json`, не из `worker_capabilities`. GC по-прежнему нужен —
- * это чистка мусорных/устаревших рядов для admin-диагностики
- * ({@see \App\Service\Admin\WorkerStatsProvider}, {@see \App\Service\Conversion\ConversionRegistry::getCapabilityWarnings()}) —
- * но она больше НИКАК не влияет на то, какие форматы/пары видит сайт.
+ * Normal worker admission is durable: short liveness status and silence do not
+ * affect submit; only this long-TTL deletion eventually removes admission.
+ * API model publication, validation, and admission deliberately use fresh alive
+ * rows through `ApiModelAvailability`, independently of this GC policy.
  */
 final class WorkerCapabilityGcService
 {

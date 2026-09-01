@@ -18,7 +18,7 @@ namespace App\Service\Examples;
  */
 final class PreviewableFormat
 {
-    private const FORMATS = ['md', 'txt', 'json', 'csv', 'html'];
+    private const FORMATS = ['md', 'txt', 'json', 'json_ai', 'txt_ai', 'csv', 'html'];
     private const MIMES   = ['application/json', 'text/csv', 'text/markdown', 'text/html', 'text/plain'];
 
     public static function isPreviewable(string $mime, string $format): bool

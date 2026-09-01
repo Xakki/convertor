@@ -290,6 +290,8 @@ services:
     # Kernel/DI, см. его докблок), но остаётся полезной для консистентности CLI-тулинга.
     App\Repository\WorkerCapabilityRepository:
         public: true
+        arguments:
+            $silenceSeconds: '%env(int:WORKER_LIVENESS_SILENCE_SECONDS)%'
 
     # Long-TTL GC worker_capabilities по расписанию (Scheduler) — registry-06.
     App\Service\Worker\WorkerCapabilityGcService:

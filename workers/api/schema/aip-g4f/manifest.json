@@ -1,0 +1,9 @@
+{
+  "provider": "aip-g4f",
+  "source": "https://aip.xakki.ru/openapi.json",
+  "serviceVersion": "0.5",
+  "openapi": "3.1.0",
+  "snapshot": "v0.5/openapi.json",
+  "sha256": "dbc8edb6c12087f85e02c7794a5b28954494313817a01b2313a0012e3f15a96f",
+  "bytes": 45223
+}

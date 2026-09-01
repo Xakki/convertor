@@ -2227,6 +2227,14 @@
   },
   {
     "from": "txt",
+    "to": "json_ai",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false,
+    "executionKind": "api"
+  },
+  {
+    "from": "txt",
     "to": "md",
     "category": "document",
     "isAi": false,
@@ -2266,6 +2274,14 @@
     "category": "document",
     "isAi": false,
     "ocrCapable": false
+  },
+  {
+    "from": "txt",
+    "to": "txt_ai",
+    "category": "document",
+    "isAi": true,
+    "ocrCapable": false,
+    "executionKind": "api"
   },
   {
     "from": "txt",

@@ -50,6 +50,8 @@ class ConversionRequestDTO
      * `$sourceFormat` уже должен быть провалидирован вызывающей стороной
      * (контроллер: непустой + поддерживаемый текстовый источник реестра) —
      * здесь никакой доменной валидации нет, только материализация.
+     *
+     * @param array<string, mixed> $options
      */
     public static function fromText(
         User $user,
@@ -57,6 +59,7 @@ class ConversionRequestDTO
         string $sourceFormat,
         string $toFormat,
         bool $privileged = true,
+        array $options = [],
     ): self {
         $tmpPath = tempnam(sys_get_temp_dir(), 'conv_text_');
         if ($tmpPath === false) {
@@ -77,7 +80,7 @@ class ConversionRequestDTO
 
         $file = new UploadedFile($path, 'text.' . $sourceFormat, null, null, true);
 
-        return new self($user, $file, $toFormat, false, $privileged, [], $path);
+        return new self($user, $file, $toFormat, false, $privileged, $options, $path);
     }
 
     /**

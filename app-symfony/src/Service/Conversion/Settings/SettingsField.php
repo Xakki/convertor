@@ -25,7 +25,7 @@ final class SettingsField
 {
     /** Разрешённые ключи описания поля — всё прочее в каталоге = ошибка загрузки. */
     private const KNOWN_KEYS = [
-        'key', 'type', 'label', 'minPlan', 'ai', 'default',
+        'key', 'type', 'label', 'minPlan', 'ai', 'dynamic', 'default',
         'min', 'max', 'step', 'unit',
         'options',
         'minLength', 'maxLength', 'pattern',
@@ -41,6 +41,8 @@ final class SettingsField
         public readonly SettingsAccessLevel $minPlan,
         /** Поле относится к AI-настройкам: в CNV-85 недоступно НИКОМУ (карточка: «basic/pro — все НЕ-AI поля»). */
         public readonly bool $ai,
+        /** Select options/default come from a validated live capability, not this static catalog. */
+        public readonly bool $dynamic,
         public readonly bool|int|string|null $default,
         public readonly ?int $min,
         public readonly ?int $max,
@@ -108,8 +110,19 @@ final class SettingsField
             throw new \RuntimeException("Settings catalog: {$where} — `ai` must be a boolean");
         }
 
+        $dynamic = $raw['dynamic'] ?? false;
+        if (! is_bool($dynamic)) {
+            throw new \RuntimeException("Settings catalog: {$where} — `dynamic` must be a boolean");
+        }
+        if ($dynamic && $type !== SettingsFieldType::Select) {
+            throw new \RuntimeException("Settings catalog: {$where} — `dynamic` is only valid for select fields");
+        }
+        if ($dynamic && array_key_exists('default', $raw)) {
+            throw new \RuntimeException("Settings catalog: {$where} — dynamic select default must come from its live capability");
+        }
+
         [$min, $max, $step, $unit] = self::parseNumeric($raw, $type, $where);
-        $options                   = self::parseOptions($raw, $type, $where);
+        $options                   = self::parseOptions($raw, $type, $where, $dynamic);
         self::assertOptionsRespectFieldMinPlan($options, $minPlan, $where);
         [$minLength, $maxLength, $pattern] = self::parseText($raw, $type, $where);
 
@@ -119,6 +132,7 @@ final class SettingsField
             $label,
             $minPlan,
             $ai,
+            $dynamic,
             null,
             $min,
             $max,
@@ -150,6 +164,7 @@ final class SettingsField
             $label,
             $minPlan,
             $ai,
+            $dynamic,
             $normalizedDefault,
             $min,
             $max,
@@ -303,11 +318,19 @@ final class SettingsField
      *
      * @return list<SettingsSelectOption>
      */
-    private static function parseOptions(array $raw, SettingsFieldType $type, string $where): array
+    private static function parseOptions(array $raw, SettingsFieldType $type, string $where, bool $dynamic): array
     {
         if ($type !== SettingsFieldType::Select) {
             if (array_key_exists('options', $raw)) {
                 throw new \RuntimeException("Settings catalog: {$where} — `options` is only valid for select fields");
+            }
+
+            return [];
+        }
+
+        if ($dynamic) {
+            if (array_key_exists('options', $raw)) {
+                throw new \RuntimeException("Settings catalog: {$where} — dynamic select options must come from its live capability");
             }
 
             return [];

@@ -59,12 +59,12 @@ swagger полон; unit зелёные; интеграционные с зам�
 **Цель:** воркеры запускаются по одной команде и обрабатывают задачи; AI работает на видеокарте.
 
 - [x] **P1 — [[validate-ai-worker]]** — AI-контейнер на GPU: runtime-wiring, egress модели (Whisper), STT/TTS,
-  AI-тесты. Гибрид: внешние API/g4f default + local fallback.
-- [ ] **P1 — [[distributed-workers]]** — запуск воркеров отдельными контейнерами на любом хосте (только Redis
-  Streams через TLS SNI + S3; без app-стека и `/shared-files`).
+  AI-тесты. Локальный `worker-ai`; external API/g4f выполняет отдельный `worker-api` без cross-worker fallback.
+- [ ] **P1 — [[distributed-workers]]** — запуск воркеров отдельными контейнерами на любом хосте через публичный
+  `wss://` WS-Gateway + Symfony API, без прямого доступа к KeyDB/S3, app-стека и `/shared-files`.
 - [x] **P2 — [[stream-subscription-distribution]]** — механика Streams: документация, лаг-метрики (XPENDING) в
   Prometheus/Grafana, drift-тест «routing-key без consumer».
-- [ ] **P2 — [[CNV-27-openai-00-integration]]** — g4f-бэкенд (MarkItDown, STT/TTS, text→image) поверх aip.xakki.ru.
+- [ ] **P2 — [[CNV-27-openai-00-integration]]** — MVP `worker-api`: g4f chat/completions поверх aip.xakki.ru; MarkItDown, STT/TTS и text→image — отдельные следующие этапы.
 
 **Registry (динамическая матрица форматов из БД):**
 - [x] **[[registry-01-worker-register]]** — Phase 1: воркеры само-регистрируют capabilities → DB-матрица.
@@ -188,7 +188,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 > **CNV-71-02**: точный список пар (from/to/category/isAi) — ТОЛЬКО в коммиченном
 > каталоге [`app-symfony/config/catalog/conversion_pairs.json`](app-symfony/config/catalog/conversion_pairs.json)
-> (394 пары на момент правки; регенерируется `make formats-catalog`, защищён
+> (402 пары на момент правки; регенерируется `make formats-catalog`, защищён
 > drift-тестами `ConversionPairsCatalogDriftTest`/`ConversionRegistryGoldenTest`
 > от расхождения с воркерами). Таблица ниже больше НЕ перечисляет точные
 > списки форматов по категориям — это и было источником дрейфа (rst/latex/tex/
@@ -230,10 +230,10 @@ swagger полон; unit зелёные; интеграционные с зам�
 - **T1 Light**: document, data (CPU-дёшево). Enum `markup` / `archive` в `FileCategory` зарезервированы для routing fold и Stage 7 — в статическом каталоге `config/catalog/conversion_pairs.json` **0 live-пар** с этими категориями.
 - **T2 Medium**: image (**вкл. OCR** — локальный Tesseract, image-воркер), audio.
 - **T3 Heavy**: video (тяжёлый транскод).
-- **T4 AI**: только STT/TTS (`isAi`, remote GPU, внешняя стоимость).
+- **T4 AI**: все пары `isAi`, включая STT/TTS и API-backed `txt→json`; вычисления могут выполняться на remote GPU или у внешнего провайдера.
 
-> OCR — **НЕ AI**: это Medium (image, локальный Tesseract). AI-тир = только
-> речь↔текст (STT/TTS).
+> OCR — **НЕ AI**: это Medium (image, локальный Tesseract). AI-тир определяется
+> `isAi=true`, включая речь↔текст (STT/TTS) и API-backed конвертации.
 
 **Прайс (ячейка = сутки / месяц; −1 = ∞):**
 
@@ -242,7 +242,7 @@ swagger полон; unit зелёные; интеграционные с зам�
 | T1 Light           | 3 / 30     | 100 / 1500          | −1 / −1            |
 | T2 Medium          | 2 / 15     | 50 / 800            | 300 / 6000         |
 | T3 Heavy (видео)   | 0 / 0 🔒   | 10 / 120            | 60 / 800           |
-| T4 AI (STT/TTS)    | 0 / 0 🔒   | 20 / 200            | 80 / 1200          |
+| T4 AI              | 0 / 0 🔒   | 20 / 200            | 80 / 1200          |
 | Макс. файл         | 50 MB      | 200 MB              | 500 MB             |
 
 - Месячное окно = скользящие 30 дней; дневной и месячный лимит — оба жёсткие

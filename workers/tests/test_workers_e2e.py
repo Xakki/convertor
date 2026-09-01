@@ -7,7 +7,8 @@
   RUN:   ws-gateway → WS worker → Symfony relay → S3 result
   CHECK: processing → terminal (DEL conv:status) → DB completed → S3 body
 
-Категории: document, image, audio, video, data, ai.
+Локальные категории: document, image, audio, video, data, ai. Provider-backed
+api намеренно не входит в этот e2e: тест не вызывает live provider.
 Markup свёрнут в document (docx→pdf). AI — hard-require (txt→wav TTS / espeak).
 
 Требует поднятого тест-стенда (`make TEST=1 smoke` / `make smoke`) и живого S3.

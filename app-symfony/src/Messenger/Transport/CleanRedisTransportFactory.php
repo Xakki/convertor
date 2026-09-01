@@ -17,7 +17,7 @@ use Symfony\Component\Messenger\Transport\TransportInterface;
  * (в `messenger.yaml`: `dsn: 'conv+%env(REDIS_DSN)%'`). Схема с префиксом
  * `conv+` не пересекается с `supports()` стокового `RedisTransportFactory`
  * (`redis:`/`rediss:`/`valkey:`), поэтому `failed` (`redis://…`) по-прежнему
- * едет на сток, а только 6 `conv_*` — на наш транспорт.
+ * едет на сток, а только 8 `conv_*` — на наш транспорт.
  *
  * Автоконфигурится тегом `messenger.transport_factory` (FrameworkBundle тегает
  * все {@see TransportFactoryInterface}). Соединение берём из общего

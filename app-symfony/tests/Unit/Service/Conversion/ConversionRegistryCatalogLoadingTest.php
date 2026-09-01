@@ -225,24 +225,15 @@ final class ConversionRegistryCatalogLoadingTest extends TestCase
         $registry->getSupportedFormats();
     }
 
-    /**
-     * CNV-106 Task A: `streamFor()` checks `isAi()` BEFORE `executionKind`
-     * (class docblock), so a row carrying BOTH `isAi: true` AND a non-null
-     * `executionKind` would load with no exception and silently route to
-     * 'ai', discarding the executionKind override. Rejected loudly at
-     * catalog-load time — the can-fail proof for this card's Task A.
-     */
-    public function testAiRowWithExecutionKindThrows(): void
+    public function testExecutionKindTakesPrecedenceOverAiQuotaFlag(): void
     {
         $path = $this->writeCatalog(json_encode([
-            ['from' => 'mp3', 'to' => 'txt', 'category' => 'audio', 'isAi' => true, 'ocrCapable' => false, 'executionKind' => 'browser'],
+            ['from' => 'txt', 'to' => 'json_ai', 'category' => 'document', 'isAi' => true, 'ocrCapable' => false, 'executionKind' => 'api'],
         ], JSON_THROW_ON_ERROR));
         $registry = new ConversionRegistry(catalogPath: $path);
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessageMatches('/isAi=true и executionKind/u');
-
-        $registry->getSupportedFormats();
+        self::assertTrue($registry->isAi('txt', 'json_ai'), 'isAi remains the quota flag');
+        self::assertSame('api', $registry->streamFor('txt', 'json_ai'));
     }
 
     public function testMatrixIsMemoizedPerInstanceNotReReadFromDisk(): void

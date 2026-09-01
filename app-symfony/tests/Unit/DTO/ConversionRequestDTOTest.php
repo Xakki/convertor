@@ -30,6 +30,21 @@ final class ConversionRequestDTOTest extends TestCase
         $dto->cleanupTempFile();
     }
 
+    public function testFromTextPreservesValidatedOptions(): void
+    {
+        $dto = ConversionRequestDTO::fromText(
+            new User(),
+            'prompt',
+            'txt',
+            'json',
+            true,
+            ['model' => 'fast'],
+        );
+
+        self::assertSame(['model' => 'fast'], $dto->options);
+        $dto->cleanupTempFile();
+    }
+
     public function testFromTextByteSizeMatchesFileGetSize(): void
     {
         // UTF-8 multibyte text: getSize() must reflect BYTE length (what the

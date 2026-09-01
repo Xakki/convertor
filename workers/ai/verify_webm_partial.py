@@ -33,7 +33,7 @@ SUBPROCESS with a timeout, classifying by the child's exit status:
 
 Run inside the worker-ai image (has PyAV, faster_whisper, ffmpeg):
   docker run --rm -v /home/xakki/convertor:/app -w /app \
-    --entrypoint python "${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-ai:latest-cpu" \
+    --entrypoint python "${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-ai-cpu:latest" \
     workers/ai/verify_webm_partial.py
 """
 

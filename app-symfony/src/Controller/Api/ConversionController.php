@@ -46,7 +46,7 @@ class ConversionController extends AbstractController
     private const PREVIEW_MAX_BYTES = 65536;
 
     /** Целевые форматы, чей результат отдаётся текстовым превью. */
-    private const PREVIEWABLE_FORMATS = ['md', 'txt', 'json', 'csv', 'html'];
+    private const PREVIEWABLE_FORMATS = ['md', 'txt', 'json', 'json_ai', 'txt_ai', 'csv', 'html'];
 
     /** MIME результата, пригодные для текстового превью (сверх любого `text/*`). */
     private const PREVIEWABLE_MIMES = ['application/json', 'text/csv', 'text/markdown', 'text/html', 'text/plain'];
@@ -74,7 +74,10 @@ class ConversionController extends AbstractController
             . 'либо `text` + `source_format` (вставленный текст без файла — сервер материализует его во '
             . 'временный файл с расширением `source_format` и дальше ведёт по тому же пайплайну). '
             . 'Оба сразу или ни одного — 400. Для text-входа `source_format` обязателен и должен быть '
-            . 'поддерживаемым текстовым источником реестра (не бинарный формат) — иначе 422.',
+            . 'поддерживаемым текстовым источником реестра (не бинарный формат) — иначе 422. '
+            . 'Опции передаются полями вида `options[ключ]`; например, модель API-конвертации — '
+            . '`options[model]`. Доступные для пары поля и живые значения модели сначала получите из '
+            . '`GET /api/v1/formats`: `formats[].settingsProfile` указывает на запись в `settings.profiles`.',
     )]
     #[OA\RequestBody(
         required: true,
@@ -88,8 +91,20 @@ class ConversionController extends AbstractController
                     new OA\Property(property: 'source_format', type: 'string', example: 'md', description: 'Формат исходного текста (обязателен вместе с `text`; текстовый источник реестра)'),
                     new OA\Property(property: 'to_format', type: 'string', example: 'pdf', description: 'Целевой формат'),
                     new OA\Property(property: 'ocr', type: 'boolean', default: false, description: 'Использовать OCR (только для file-входа; для неоднозначных пар, напр. pdf→txt)'),
+                    new OA\Property(
+                        property: 'options[model]',
+                        type: 'string',
+                        example: 'fast',
+                        description: 'Публичный ключ модели для API-конвертации. Передавайте буквально multipart-полем '
+                            . '`options[model]` (PHP form encoding собирает его в `options.model`). Актуальные варианты '
+                            . 'не фиксированы в OpenAPI: получите пару из `GET /api/v1/formats`, возьмите её '
+                            . '`settingsProfile`, затем поле `model` из `settings.profiles[settingsProfile].fields`.',
+                    ),
                 ],
             ),
+            encoding: [
+                new OA\Encoding(property: 'options[model]', style: 'form', explode: true),
+            ],
         ),
     )]
     #[OA\Response(
@@ -105,9 +120,39 @@ class ConversionController extends AbstractController
     #[OA\Response(response: 409, description: 'Конвертация отключена админом')]
     #[OA\Response(response: 413, description: 'Файл/текст превышает лимит размера')]
     #[OA\Response(response: 415, description: 'Неподдерживаемый тип содержимого')]
-    #[OA\Response(response: 422, description: 'Неподдерживаемая конвертация (в т.ч. бинарный source_format в text-режиме)')]
+    #[OA\Response(
+        response: 422,
+        description: 'Неподдерживаемая конвертация или невалидная опция. Для опций `error` — один из '
+            . '`settings_not_supported`, `unknown_option`, `invalid_option_type`, `option_out_of_range`, '
+            . '`invalid_option_value`, `option_plan_required`; `message` присутствует для ошибок валидатора опций.',
+        content: new OA\JsonContent(
+            required: ['error'],
+            properties: [
+                new OA\Property(
+                    property: 'error',
+                    type: 'string',
+                    description: 'Для ошибок опций: `settings_not_supported`, `unknown_option`, '
+                        . '`invalid_option_type`, `option_out_of_range`, `invalid_option_value` или '
+                        . '`option_plan_required`. Для прочих 422 контроллер возвращает описание '
+                        . 'неподдерживаемой конвертации в этом же поле.',
+                    example: 'invalid_option_value',
+                ),
+                new OA\Property(
+                    property: 'message',
+                    type: 'string',
+                    example: 'Selected chat model is not currently available',
+                ),
+            ],
+        ),
+    )]
     #[OA\Response(response: 429, description: 'Превышена квота / слишком много запросов')]
-    #[OA\Response(response: 503, description: 'Воркер такого типа никогда не регистрировался (конвертация временно недоступна)')]
+    #[OA\Response(
+        response: 503,
+        description: 'Требуемая возможность воркера временно недоступна. Для API-задач нужны свежие активные '
+            . 'регистрации: каждая должна соответствовать `ApiCapabilityContract`, а общее множество валидированных '
+            . 'моделей должно быть непустым. Для остальных типов действует сохранённая регистрация возможности '
+            . 'независимо от кратковременной потери активности.',
+    )]
     public function convert(Request $request, #[CurrentUser] ?User $user): JsonResponse
     {
         if ($user === null) {
@@ -201,7 +246,7 @@ class ConversionController extends AbstractController
         // ТОЙ ЖЕ цепочке ConversionManager, что и файл — temp-файл подчищаем
         // в finally независимо от исхода (см. ConversionRequestDTO::cleanupTempFile()).
         if ($hasText) {
-            $conversionRequest = ConversionRequestDTO::fromText($user, (string) $text, (string) $sourceFormatLower, $toFormatLower, $privileged);
+            $conversionRequest = ConversionRequestDTO::fromText($user, (string) $text, (string) $sourceFormatLower, $toFormatLower, $privileged, $options);
         } elseif ($file !== null) {
             $conversionRequest = new ConversionRequestDTO($user, $file, $toFormatLower, $ocr, $privileged, $options);
         } else {
@@ -233,9 +278,9 @@ class ConversionController extends AbstractController
                 Response::HTTP_CONFLICT,
             );
         } catch (WorkerUnavailableException $e) {
-            // CNV-71-03: воркер такого типа никогда не регистрировался (нет
-            // строки в worker_capabilities) → временная недоступность сервиса,
-            // не ошибка клиента.
+            // Для API нужны свежие активные регистрации с валидным capability-
+            // контрактом и непустым общим набором моделей. Для остальных типов
+            // достаточно сохранённой регистрации возможности без liveness-гейта.
             return $this->json(
                 ['error' => 'worker_unavailable', 'message' => $e->getMessage()],
                 Response::HTTP_SERVICE_UNAVAILABLE,
@@ -595,7 +640,13 @@ class ConversionController extends AbstractController
     #[OA\Response(response: 410, description: 'Исходник истёк в S3')]
     #[OA\Response(response: 422, description: 'Сохранённая опция недоступна на текущем плане (CNV-85 repair)')]
     #[OA\Response(response: 429, description: 'Превышена квота')]
-    #[OA\Response(response: 503, description: 'Воркер такого типа никогда не регистрировался')]
+    #[OA\Response(
+        response: 503,
+        description: 'Требуемая возможность воркера временно недоступна. Для API-задач нужны свежие активные '
+            . 'регистрации: каждая должна соответствовать `ApiCapabilityContract`, а общее множество валидированных '
+            . 'моделей должно быть непустым. Для остальных типов действует сохранённая регистрация возможности '
+            . 'независимо от кратковременной потери активности.',
+    )]
     public function retry(int $id, #[CurrentUser] ?User $user): JsonResponse
     {
         if ($user === null) {
@@ -624,8 +675,8 @@ class ConversionController extends AbstractController
                 Response::HTTP_CONFLICT,
             );
         } catch (WorkerUnavailableException $e) {
-            // CNV-71-03: тот же гейт "воркер существует", что и в /convert (см.
-            // catch выше в convert()) — теперь и у retry.
+            // Тот же capability-гейт, что и в convert(): fresh-alive для API,
+            // durable registration без liveness-требования для остальных типов.
             return $this->json(
                 ['error' => 'worker_unavailable', 'message' => $e->getMessage()],
                 Response::HTTP_SERVICE_UNAVAILABLE,
