@@ -125,7 +125,7 @@ verbatim. Семантика `txt→md` (включая существующее
   режимов. Карточка остаётся в `grooming/`, не перемещается в `todo/`.
 - CNV-98 (repair-раунд, 2026-08-24) выбрал НЕ чинить это в своём скоупе —
   вместо этого каталог перестал рекламировать `markdownDialect` для
-  `pdf→md` (см. `.claude/kanban/progress/CNV-98-document-worker-settings-application.md`,
+  `pdf→md` (см. `.claude/kanban/done/CNV-98-document-worker-settings-application.md`,
   раздел Execution Log "Нужен ack team-lead" — там же зафиксирован сам
   gap и решение завести под него отдельную карточку).
 
