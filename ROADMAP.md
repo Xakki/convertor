@@ -5,13 +5,31 @@
 > удалённого `docs/plan.md`); статус реализации — kanban + git; детальные задачи — `.claude/kanban/`.
 > Здесь — приоритеты и связки.
 >
+> **Актуальный порядок Todo (2026-09-01):**
+> 1. **CNV-137** — host-resource telemetry для `/admin/workers`.
+> 2. **CNV-124** — профили каждого worker в корневом `docker-compose.yml`.
+> 3. **Conversion settings:** `CNV-92 → CNV-93 → CNV-94`, затем доменные UI-карточки
+>    `CNV-99`, `CNV-102`, `CNV-105`, `CNV-107` (backend-часть EPIC-004 уже в `done/`).
+> 4. **Public API:** `CNV-87 → CNV-83 → CNV-84 → CNV-86 → CNV-109 → CNV-112`;
+>    связанные dashboard/docs-карточки выполняются после своих контрактов.
+> 5. **Worker options:** EPIC-009 (document), EPIC-010 (FFmpeg), EPIC-011 (data)
+>    с их текущими дочерними карточками.
+> 6. **Browser foundation:** сначала операционные и security-блокеры
+>    `EPIC-012` / `CNV-113` / `CNV-114` / `CNV-89`, затем runtime и frontend
+>    `EPIC-013` / `EPIC-014`; `CNV-130` остаётся в `grooming/` до разрешения
+>    оставшихся эксплуатационных вопросов.
+>
+> Этот список отражает текущий порядок `todo/`, а не разрешение начинать
+> следующие карточки автоматически: каждая задача берётся отдельно и ждёт
+> явного одобрения перед переходом к следующей.
+>
 > Легенда карточек: `[[slug]]` → `.claude/kanban/**/<slug>.md`.
 > «(карточки нет — завести)» = работа запланирована, но kanban-карточки ещё нет.
 >
 > **Чекбоксы:** `[x]` — сделано (карточка в `kanban/done/`), `[ ]` — в работе/в очереди.
 > **Приоритеты внутри стадии:** **P0** — блокер/критично, **P1** — высокий, **P2** — обычный.
 > ❄️ — заморожено (`kanban/freeze/`, ждёт разморозки).
-> Статус актуализирован: **2026-07-12**.
+> **Статус актуализирован:** **2026-09-01**.
 
 ---
 
@@ -60,11 +78,15 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 - [x] **P1 — [[validate-ai-worker]]** — AI-контейнер на GPU: runtime-wiring, egress модели (Whisper), STT/TTS,
   AI-тесты. Локальный `worker-ai`; external API/g4f выполняет отдельный `worker-api` без cross-worker fallback.
-- [ ] **P1 — [[distributed-workers]]** — запуск воркеров отдельными контейнерами на любом хосте через публичный
-  `wss://` WS-Gateway + Symfony API, без прямого доступа к KeyDB/S3, app-стека и `/shared-files`.
+- **P1 — [[CNV-133-distributed-workers-stage2]]** — **Ready**: CPU-only pilot для `saVpn` и `uBook`
+  завершён; подтверждены remote WS rollout, coexistence в собственных `conv.<type>` streams,
+  provenance-регистрации и rollback/reclaim evidence. Это готовая к ревью передача, не открытый
+  execution item; AI/GPU/CUDA остаются отдельным будущим scope.
 - [x] **P2 — [[stream-subscription-distribution]]** — механика Streams: документация, лаг-метрики (XPENDING) в
   Prometheus/Grafana, drift-тест «routing-key без consumer».
-- [ ] **P2 — [[CNV-27-openai-00-integration]]** — MVP `worker-api`: g4f chat/completions поверх aip.xakki.ru; MarkItDown, STT/TTS и text→image — отдельные следующие этапы.
+- **P1 — [[CNV-27-openai-00-integration]]** — **Ready**: `worker-api` реализован и проверен;
+  production runtime получил healthy worker, `conv.api`, validated capabilities и fail-closed
+  поведение для недоступного upstream. Это готовая к ревью передача, не открытый execution item.
 
 **Registry (динамическая матрица форматов из БД):**
 - [x] **[[registry-01-worker-register]]** — Phase 1: воркеры само-регистрируют capabilities → DB-матрица.
@@ -80,7 +102,13 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 - [x] **P1 — [[admin-panel]]** — админ-пользователь + панель (stats, user-management, очереди, логи).
   Все 6 подзадач в `done/`: admin-panel-auth / -stats / -users / -queues / -logs / -conv-toggle.
-- [ ] **P1 — Работа API через токены** — выпуск/проверка API-токенов поверх текущего JWT. *(карточки нет — завести)*
+- **P1 — Публичный API, последовательная цепочка:**
+  `[[CNV-87-public-api-ip]] → [[CNV-83-dashboard-api-api]] → [[CNV-84-conversion-history-web-api]]
+  → [[CNV-86-openapi-public-user-admin]] → [[CNV-109-api-request-audit-backend-storage]]
+  → [[CNV-112-anonymous-api-identity-privacy]]`.
+  Все карточки существуют в `todo/`; отсутствие карточек больше не заявляется.
+  CNV-87 задаёт anonymous identity, CNV-83 — personal tokens, CNV-84 — audit contract,
+  CNV-86 — runtime OpenAPI areas, CNV-109 — audit storage/history, CNV-112 — privacy regression.
 
 **Exit:** админ заходит в панель; API-запросы авторизуются по токену.
 
@@ -102,8 +130,11 @@ swagger полон; unit зелёные; интеграционные с зам�
 
 - [x] **P1 — [[upload-conversion-ui]]** — страница загрузки/конвертации (drag&drop, выбор формата из реестра,
   OCR-тоггл, статус через HTMX, ссылка на скачивание).
-- [ ] **P1 — Лендинг** (публичная страница над формой загрузки). *(карточки нет — завести)*
-- [ ] **P2 — История конвертаций** со ссылками на файлы (S3 presign). *(карточки нет — завести)*
+- [ ] **P1 — Лендинг** (публичная страница над формой загрузки). *(карточка не заведена)*
+- [ ] **P2 — [[CNV-110-api-request-history-frontend-tabs]]** — вкладки истории Web-конверсий
+  и API-запросов; использует существующие conversion-history и audit-history contracts.
+  Backend API-аудит следует цепочке Стадии 3 (`CNV-84`/`CNV-109`), поэтому здесь остаётся
+  frontend-работа, а не новая карточка «история конвертаций».
 - [x] **P2 — [[backlog-auth-providers]]** — Google / GitHub / Yandex / VK OAuth — реализовано эпиком
   `oauth-00-epic` (`.claude/kanban/progress/oauth-00-epic.md`); Yandex и VK добавлены сверх исходного
   scope карточки (Google+GitHub). Разморозка/перенос карточки бэклога — при закрытии эпика (тимлид).
