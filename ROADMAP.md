@@ -79,9 +79,10 @@ swagger полон; unit зелёные; интеграционные с зам�
 - [x] **P1 — [[validate-ai-worker]]** — AI-контейнер на GPU: runtime-wiring, egress модели (Whisper), STT/TTS,
   AI-тесты. Локальный `worker-ai`; external API/g4f выполняет отдельный `worker-api` без cross-worker fallback.
 - **P1 — [[CNV-133-distributed-workers-stage2]]** — **Ready**: CPU-only pilot для `saVpn` и `uBook`
-  завершён; подтверждены remote WS rollout, coexistence в собственных `conv.<type>` streams,
-  provenance-регистрации и rollback/reclaim evidence. Это готовая к ревью передача, не открытый
-  execution item; AI/GPU/CUDA остаются отдельным будущим scope.
+  завершён; подтверждены remote WS rollout, coexistence в собственных `conv.<type>` streams и
+  provenance-регистрации. Rollback/reclaim checks остаются обязательными acceptance requirements
+  перед будущими production scale-up и handoff и не заявляются как завершённые. Это готовая к
+  ревью передача, не открытый execution item; AI/GPU/CUDA остаются отдельным будущим scope.
 - [x] **P2 — [[stream-subscription-distribution]]** — механика Streams: документация, лаг-метрики (XPENDING) в
   Prometheus/Grafana, drift-тест «routing-key без consumer».
 - **P1 — [[CNV-27-openai-00-integration]]** — **Ready**: `worker-api` реализован и проверен;
