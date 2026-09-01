@@ -1,4 +1,4 @@
-### uBook/shared Fluent Bit: потери доставки GELF и владение сборщиком
+### uBook/project-owned Fluent Bit sidecar: потери доставки GELF и границы ответственности
 
 **Criticality:** High
 
@@ -11,18 +11,21 @@
 - ubook
 
 **Description:**
-Разобрать и устранить потери доставки логов из uBook через общий host-level
-Fluent Bit в Graylog GELF. После rollout зафиксированы активные retries `2512`,
+Разобрать и устранить потери доставки логов из uBook через project-owned Fluent Bit
+sidecar в Graylog GELF. После rollout зафиксированы активные retries `2512`,
 failed `163`, dropped `2595` на POST `/gelf` к `log.variantgood.com:443`.
 DNS, TLS и TCP connect до приёмника в проверке здоровы; симптом похож на медленное
 подтверждение POST и обратное давление downstream. Источник сигнала — runtime
-метрики и логи активного host-level collector; это не project-specific Make target.
+метрики и логи активного uBook sidecar; точная идентичность unit/container и
+метрик пока не верифицирована. Proxy и Graylog ingress — downstream scope,
+а не владелец uBook collector.
 
 **Problem:**
 - Приёмник или стоящий перед ним proxy не даёт достаточно быстрого ACK, а текущая
   доставка теряет сообщения после исчерпания retry.
-- Не зафиксировано, кому принадлежат host-level Fluent Bit, его конфигурация,
-  restart policy, метрики и алерты для всех подключённых проектов, включая uBook.
+- Не зафиксировано, кому принадлежат uBook sidecar, его конфигурация, restart
+  policy, метрики и алерты; shared proxy/Graylog ingress остаются отдельной
+  downstream зоной владельцев observability.
 - Нет проверенного bounded filesystem buffer: при временной недоступности
   Graylog нужно сохранять сообщения на диске, но не разрешать неограниченный рост
   и не создавать риск заполнения диска.
@@ -36,18 +39,19 @@ runtime, конфигурации или политики инфраструкт
 карточка фиксирует требование на согласованную ops-работу.
 
 **Recommendation:**
-Владельцу host-level collector совместно с владельцем proxy/Graylog провести
+Владельцу uBook project-owned sidecar совместно с владельцами proxy/Graylog провести
 сквозную диагностику `/gelf`: latency до ACK, HTTP-коды, request/response timeout,
 лимиты и очереди на proxy и Graylog, а также корреляцию входных/выходных счётчиков
-Fluent Bit по host/project. Затем выбрать и внедрить подтверждённую политику
+Fluent Bit sidecar по проекту. Затем выбрать и внедрить подтверждённую политику
 bounded filesystem buffering (явные лимиты объёма и диска, поведение при полном
 буфере, recovery и метрики), не скрывая drops. Оформить owner/runbook/alerting
-для shared collector; uBook не должен чинить общую инфраструктуру локальным
-обходом.
+для uBook sidecar; uBook не должен подменять диагностику или менять shared
+proxy/Graylog ingress локальным обходом.
 
 **Acceptance Criteria:**
-- Документирован source-of-truth для host-level Fluent Bit: хост, unit/container,
-  конфигурация, владелец, restart/update path, scope проектов и канал эскалации.
+- Документирован source-of-truth для uBook project-owned Fluent Bit sidecar:
+  хост, unit/container, конфигурация, владелец, restart/update path и канал
+  эскалации; proxy/Graylog ingress указаны как downstream dependencies.
 - Для тестового окна есть корреляция Fluent Bit → proxy → Graylog GELF с
   измеренными ACK latency, HTTP-кодами, timeout/retry/failed/dropped и причиной
   backpressure; отдельно подтверждено, что DNS/TLS/connect не являются причиной.
@@ -93,3 +97,13 @@ bounded filesystem buffering (явные лимиты объёма и диска
   `fluent-logging-setup`; новая карточка не расширяет их завершённый scope.
 - 2026-09-01: ID CNV-138 выделен через `kanban-new.sh --prefix CNV`; изменены
   только Kanban metadata/card paths. Runtime/config/source не трогались.
+- 2026-09-01 evidence metadata (currently observed/unverified, not a reproducible
+  claim): reported counters were retries `2512`, failed `163`, dropped `2595`.
+  Observation timestamp/TZ: date recorded, exact time and timezone not captured.
+  Collector identity: uBook project-owned Fluent Bit sidecar; exact unit/container
+  identity is unverified. Metric names/query endpoint: labels `retries`, `failed`,
+  and `dropped` were reported, but exact metric names and query endpoint are
+  unverified. Bounded observation window: not recorded. Correlation method for
+  follow-up: compare sidecar counters/logs with proxy and Graylog `/gelf` ingress
+  status, ACK latency, timeout, and queue metrics over one shared bounded window;
+  that correlation has not yet been verified.

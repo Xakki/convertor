@@ -123,12 +123,6 @@ AI/GPU/CUDA в неё не входят и оформляются отдельн
   и согласованный live smoke на remote-хосте; недоступные внешние проверки
   отмечены как блокирующие, а не объявлены зелёными.
 
-**Open questions:**
-- Какой Harbor tag/promotion policy считается допустимым для remote rollout:
-  pinned release tag или `latest`, и кто подтверждает публикацию/откат образов?
-- Кто является владельцем runtime-секретов и внешних проверок `wss`, Symfony и
-  Graylog; где выполняется smoke без записи секретов в репозиторий?
-
 **Decisions:**
 - 2026-08-31: создана отдельная grooming-карточка CNV-133 после проверки активных
   и архивных карточек. Дубликат `distributed-workers` не найден.
@@ -185,3 +179,6 @@ AI/GPU/CUDA в неё не входят и оформляются отдельн
   недоступен, поэтому его повторный запуск для этого изменения не выполнен.
 - Reviewer: не запускался; требуется отдельный read-only review перед реализацией.
 - Prompt evidence: делегация `distributed-workers grooming`, model `standard`; token usage availability: unavailable; sanitized prompt summary: record owner-approved `saVpn` target host only, preserve CPU worker/coexistence/access/capacity gates.
+- 2026-09-01 completed CPU pilot evidence (sanitized rollout report): main merged and pushed at `6532b923`; Harbor release tags `0.1.2` published and used instead of `latest`. Local all-CPU workers and `worker-api` were healthy. `saVpn` updated only for `worker-data` and `worker-image`; existing capabilities were preserved, VPN remained alive, and fresh provenance registrations were observed. `uBook` had all six CPU workers healthy with fresh provenance registrations; Fluent Bit was intentionally left unchanged. No secrets, token values, endpoint overrides, or image digests recorded.
+- 2026-09-01 acceptance reconciliation: the first-wave topology is `saVpn` plus `uBook` CPU workers, with coexistence limited to each worker's own `conv.<type>` stream; AI/GPU/CUDA remain out of scope. Harbor promotion is represented by the published release tag `0.1.2`; runtime credentials and external-check ownership remain outside Git. The observed G4F balanced backend `HTTP 500` is an expected upstream fail-closed limitation, not a pilot rollout failure.
+- 2026-09-01 lifecycle boundary: rollout evidence is recorded for handoff to `ready`; no source, runtime, deployment, secret, or push action was performed in this metadata finalization. Current repository validation: targeted and full `kanban-lint.sh` both report 0 errors and 0 warnings; no unresolved grooming questions remain.
