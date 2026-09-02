@@ -132,9 +132,15 @@ For every A/B/C fixture, audit assertions must compare the persisted tuple
 `(pdfMode, pipeline, markdownDialect, positionalLayout)` with the executed
 inputs; a replay must not infer a pipeline from a missing or legacy field.
 For all pipelines, use redaction-safe audit logs, prohibit network access,
-isolate temporary artifacts and clean up after errors. Fidelity-пороги,
-метрики, допустимое расхождение таблиц/колонок и окончательный выбор
-pipeline для production не выдумываются и остаются Open questions.
+isolate temporary artifacts and clean up after errors. A/B/C visual-test runs
+use the existing outer LibreOffice worker ceiling as a temporary benchmark gate:
+2 CPU, 768 MiB peak RSS, 180 s wall time, and `WS_SLOTS=1`. This is a benchmark
+ceiling only and is not a production adequacy claim. Every run records redacted
+input/complexity, wall time, peak RSS, CPU, temporary-space high-water,
+subprocess outcome, and selected mode/layout. After the user's separate visual
+review, an owner decision selects supported production modes, hard
+limits/failure semantics, and whether any caps change; that is a deferred
+post-implementation gate, not an unresolved implementation scope.
 
 Evidence-first visual fidelity gate: implementation must exercise the complete
 form-choice set (`verbatim`, `plain`, `normalized`, and `positional` with both
@@ -176,6 +182,12 @@ is invented before the benchmark.
   без `markdownDialect` отклоняются fail-closed до постановки задачи.
 - `txt→md` сохраняет текущую семантику `markdownDialect` и не получает
   побочных изменений от разделения PDF-режимов.
+- Separate resource/security/cleanup checks exist for each pipeline, and every
+  A/B/C visual-test run executes under the temporary existing outer LibreOffice
+  worker ceiling of 2 CPU / 768 MiB peak RSS / 180 s wall time / `WS_SLOTS=1`.
+  This ceiling is benchmark-only and is not a production adequacy claim. Each
+  run records redacted input/complexity, wall time, peak RSS, CPU, temporary-space
+  high-water, subprocess outcome, and selected mode/layout.
 - Deterministic real-fixture matrix and bounded visual tests exercise the full
   form-choice set: `verbatim`, A/`plain`, B/`normalized`, and C/`positional`
   with both explicit `bbox` and `bbox-layout` inputs, covering ordinary text,
@@ -189,20 +201,6 @@ is invented before the benchmark.
   decides the supported set and thresholds.
 - После реализации профильные tests/QA green: `make TEST=1
   test-python-libreoffice`, `make TEST=1 test-php`, `make phpstan`.
-
-**Open questions:**
-- Какие из Pipeline A/B/C выбрать для production default/поддержки после
-  проверки real fixtures и bounded visual tests? До этого все три остаются
-  явно документированными form choices; `verbatim` остаётся default.
-- Каковы fidelity-метрики и пороги отдельно для verbatim, A, B и C, включая
-  допустимое расхождение таблиц и колонок? Пороги не выбраны до benchmark.
-- Какой точный ресурсный бюджет и fixture corpus нужны для каждого pipeline?
-  Границы CPU/памяти/wall time/временного пространства должны быть измерены,
-  а не придуманы в этой карточке.
-- Какие supported-set и threshold decision примет owner после benchmark и
-  раздельного рассмотрения redacted metrics и пользовательских visual verdicts?
-  До этого `verbatim` остаётся явным default, а A/B/C остаются form choices без
-  promotion в production.
 
 **Decisions:**
 - 2026-09-02: решение `options[pdfMode]=verbatim|dialect` superseded по
@@ -236,9 +234,16 @@ is invented before the benchmark.
   Replay/audit не выводит pipeline из `pdfMode`; сериализация неприменимых полей
   не нормируется.
 - 2026-09-02: для A/B/C обязательны отдельные resource, security, fixture,
-  visual-test и cleanup gates; thresholds и final production selection остаются
-  открытыми до измерений. Карточка остаётся в `grooming/` и не перемещается.
-- 2026-09-02: утверждён evidence-first visual fidelity gate: реализовать весь
+  visual-test и cleanup gates. Реализация visual-test scope полностью
+  специфицирована: A/B/C выполняются под временным benchmark ceiling
+  существующего внешнего LibreOffice worker — 2 CPU / 768 MiB peak RSS /
+  180 s / `WS_SLOTS=1`; каждый run сохраняет redacted input/complexity, wall
+  time, peak RSS, CPU, tmp high-water, subprocess outcome и selected
+  mode/layout. Это временный benchmark ceiling, не production adequacy claim.
+  После пользовательского visual review owner отдельно выбирает supported
+  production modes, hard limits/failure semantics и изменение caps, если оно
+  потребуется. Это deferred post-implementation owner gate, не active unresolved
+  scope и не блокер реализации.
   набор form choices и детерминированную fixture matrix, сохранять сопоставимые
   artifacts, redacted metrics и positional inputs для A/B/C, а пользовательский
   visual verdict записывать отдельно. До benchmark не выдумывать numeric
@@ -270,3 +275,11 @@ is invented before the benchmark.
   deterministic fixture matrix, linked comparable artifacts/redacted metrics,
   separate user visual verdict, and explicit no-promotion condition pending
   owner supported-set/threshold decision.
+- 2026-09-02 staged hybrid resource gate: A/B/C visual-test runs are bounded by
+  the existing outer LibreOffice ceiling (2 CPU / 768 MiB / 180 s /
+  `WS_SLOTS=1`) for temporary benchmark evidence only; per-run redacted
+  resource/subprocess/mode-layout metrics are required. Post-visual production
+  selection is explicitly deferred to the owner and does not block implementation.
+- 2026-09-02 lifecycle reconciliation: all pre-implementation choices resolved;
+  removed `Open questions` and moved the card `grooming → todo` with the
+  canonical `kanban-move.sh` helper. No source/runtime/config/deploy changes.
