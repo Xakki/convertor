@@ -82,28 +82,32 @@ Markdown/strict) для конвертации PDF→MD, либо не увид�
 `markdownDialect` и `positionalLayout` (`bbox` или `bbox-layout`). API и UI
 передают те же имена полей; новый alias для `positionalLayout` не вводится.
 Queue сохраняет канонически нормализованные options. Для каждого job audit /
-provenance хранит:
+provenance хранит effective `pdfMode`, сохранённый `pipeline` и переданные
+значения `markdownDialect`/`positionalLayout` по их применимости:
 
 ```json
 {
   "pdfMode": "verbatim|plain|normalized|positional",
   "pipeline": "verbatim|plain|normalized|positional",
-  "markdownDialect": "gfm|commonmark|markdown|markdown_strict|null",
-  "positionalLayout": "bbox|bbox-layout|null"
+  "markdownDialect": "gfm|commonmark|markdown|markdown_strict",
+  "positionalLayout": "bbox|bbox-layout"
 }
 ```
 
 `pdfMode` присутствует всегда: отсутствие входного значения нормализуется в
-`verbatim`. `markdownDialect` отсутствует или равен `null` для `verbatim`, а для
-каждого non-verbatim режима записывается выбранное значение. `positionalLayout`
-отсутствует или равен `null` вне `positional`, а в `positional` записывается
-ровно выбранное значение. `pipeline` — сохранённое effective значение, а не
-поле, которое replay/audit вычисляет из `pdfMode` или старого job payload.
-Replay использует сохранённые `pipeline` и `positionalLayout` и останавливается
-при их отсутствии/несогласованности; неизвестные значения, режимы не для
-`pdf→md`, `markdownDialect` с `verbatim`/отсутствующим `pdfMode`,
-`positionalLayout` вне `positional`, неизвестный layout и отсутствие dialect или
-layout в требующем режиме отклоняются fail-closed до постановки в queue.
+`verbatim`. Для каждого non-verbatim режима требуется `markdownDialect`, а для
+`positional` требуется ровно одно из `bbox` и `bbox-layout` в
+`positionalLayout`; вне `positional` layout не используется. `pipeline` —
+сохранённое effective значение, а не поле, которое replay/audit вычисляет из
+`pdfMode` или старого job payload. Replay требует сохранённый `pipeline` для
+каждого persisted job; `positionalLayout` требуется только при
+`pdfMode=positional` и не требуется для `verbatim`, `plain` или `normalized`.
+Replay останавливается при отсутствии или несогласованности требуемых полей;
+неизвестные значения, режимы не для `pdf→md`, `markdownDialect` с `verbatim`/
+отсутствующим `pdfMode`, `positionalLayout` вне `positional`, неизвестный layout
+и отсутствие dialect в non-verbatim режиме отклоняются fail-closed до постановки
+queue. Способ сериализации неприменимых полей этим контрактом не
+предписывается.
 
 Требования к реализации должны быть отдельными для каждого pipeline:
 
@@ -124,7 +128,7 @@ layout в требующем режиме отклоняются fail-closed д�
   prove that both `positionalLayout` and the selected pipeline survive replay.
   Parser and writer must be deterministic.
 
-For every A/B/C fixture, audit assertions must compare the canonical tuple
+For every A/B/C fixture, audit assertions must compare the persisted tuple
 `(pdfMode, pipeline, markdownDialect, positionalLayout)` with the executed
 inputs; a replay must not infer a pipeline from a missing or legacy field.
 For all pipelines, use redaction-safe audit logs, prohibit network access,
@@ -148,11 +152,11 @@ pipeline для production не выдумываются и остаются Ope
   предлагают ровно `bbox`/`bbox-layout`; неизвестный или отсутствующий layout
   в Pipeline C отклоняется.
 - Канонический audit/provenance для каждого job всегда содержит effective
-  `pdfMode` (missing → `verbatim`), сохранённый `pipeline`, а также
-  `markdownDialect` (null/absent для verbatim, value для non-verbatim) и
-  `positionalLayout` (null/absent вне positional, value для positional).
-  Replay/audit не выводит pipeline из mode или legacy payload и fail-closed при
-  неполном или несогласованном audit tuple.
+  `pdfMode` (missing → `verbatim`) и сохранённый `pipeline`. Для non-verbatim
+  требуется `markdownDialect`; для `positional` требуется `positionalLayout` со
+  значением `bbox` или `bbox-layout`. Replay/audit не выводит pipeline из mode
+  или legacy payload и fail-closed при отсутствии/несогласованности требуемых
+  полей. Сериализация неприменимых полей не нормируется.
 - Неизвестный `pdfMode`, `pdfMode` вне `pdf→md`, dialect с verbatim или
   отсутствующим mode, `positionalLayout` с любым mode кроме `positional`,
   неизвестный layout, отсутствие layout в `positional`, а также non-verbatim
@@ -188,8 +192,9 @@ pipeline для production не выдумываются и остаются Ope
   для visual testing и требуют `markdownDialect`.
 - 2026-09-02: утверждены pipeline choices: A = `plain`, `pdftotext` без
   `-layout` → Pandoc; B = `normalized`, `-layout` → project normalization →
-  Pandoc; C = `positional`, `-bbox`/`bbox-layout` → project structural parser
-  → dialect writer. Их production fidelity и ресурсные пороги не выбраны.
+  Pandoc; C = `positional` с явным отображением `bbox` → `pdftotext -bbox` →
+  bbox parser и `bbox-layout` → `pdftotext -bbox-layout` → layout parser →
+  dialect writer. Их production fidelity и ресурсные пороги не выбраны.
 - 2026-09-02: контракт действует только для `pdf→md`; `txt→md` сохраняет
   существующий Pandoc-путь `markdownDialect`. `/formats`, API и UI показывают
   четыре варианта и передают `pdfMode` плюс существующий
@@ -203,9 +208,10 @@ pipeline для production не выдумываются и остаются Ope
   layout parser. Option обязательна при `pdfMode=positional`, запрещена во всех
   остальных режимах; implicit detection/fallback запрещены.
 - 2026-09-02: canonical audit schema обязана явно хранить `pdfMode` для каждого
-  job (missing → `verbatim`), сохранённый `pipeline`, dialect null/absent для
-  verbatim и value для non-verbatim, а также layout null/absent вне positional.
-  Replay/audit не выводит pipeline из `pdfMode`.
+  job (missing → `verbatim`) и сохранённый `pipeline`; non-verbatim jobs
+  сохраняют dialect, а positional jobs — выбранный `positionalLayout`.
+  Replay/audit не выводит pipeline из `pdfMode`; сериализация неприменимых полей
+  не нормируется.
 - 2026-09-02: для A/B/C обязательны отдельные resource, security, fixture,
   visual-test и cleanup gates; thresholds и final production selection остаются
   открытыми до измерений. Карточка остаётся в `grooming/` и не перемещается.
