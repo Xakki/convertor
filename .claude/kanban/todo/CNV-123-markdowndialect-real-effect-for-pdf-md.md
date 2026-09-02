@@ -133,11 +133,12 @@ For every A/B/C fixture, audit assertions must compare the persisted tuple
 inputs; a replay must not infer a pipeline from a missing or legacy field.
 For all pipelines, use redaction-safe audit logs, prohibit network access,
 isolate temporary artifacts and clean up after errors. A/B/C visual-test runs
-use the existing outer LibreOffice worker ceiling as a temporary benchmark gate:
-2 CPU, 768 MiB peak RSS, 180 s wall time, and `WS_SLOTS=1`. This is a benchmark
-ceiling only and is not a production adequacy claim. Every run records redacted
-input/complexity, wall time, peak RSS, CPU, temporary-space high-water,
-subprocess outcome, and selected mode/layout. After the user's separate visual
+use the existing outer LibreOffice worker limits as a temporary benchmark gate:
+2 CPU, a 768 MiB container memory limit, 180 s wall time, and `WS_SLOTS=1`.
+These are benchmark limits only and are not a production adequacy claim. Every
+run separately records redacted input/complexity, wall time, measured peak RSS,
+CPU, temporary-space high-water, subprocess outcome, and selected mode/layout.
+After the user's separate visual
 review, an owner decision selects supported production modes, hard
 limits/failure semantics, and whether any caps change; that is a deferred
 post-implementation gate, not an unresolved implementation scope.
@@ -184,10 +185,11 @@ is invented before the benchmark.
   побочных изменений от разделения PDF-режимов.
 - Separate resource/security/cleanup checks exist for each pipeline, and every
   A/B/C visual-test run executes under the temporary existing outer LibreOffice
-  worker ceiling of 2 CPU / 768 MiB peak RSS / 180 s wall time / `WS_SLOTS=1`.
-  This ceiling is benchmark-only and is not a production adequacy claim. Each
-  run records redacted input/complexity, wall time, peak RSS, CPU, temporary-space
-  high-water, subprocess outcome, and selected mode/layout.
+  worker limits of 2 CPU / 768 MiB container memory limit / 180 s wall time /
+  `WS_SLOTS=1`. These are benchmark limits only and are not a production
+  adequacy claim. Each run separately records redacted input/complexity, wall
+  time, measured peak RSS, CPU, temporary-space high-water, subprocess outcome,
+  and selected mode/layout.
 - Deterministic real-fixture matrix and bounded visual tests exercise the full
   form-choice set: `verbatim`, A/`plain`, B/`normalized`, and C/`positional`
   with both explicit `bbox` and `bbox-layout` inputs, covering ordinary text,
@@ -235,11 +237,12 @@ is invented before the benchmark.
   не нормируется.
 - 2026-09-02: для A/B/C обязательны отдельные resource, security, fixture,
   visual-test и cleanup gates. Реализация visual-test scope полностью
-  специфицирована: A/B/C выполняются под временным benchmark ceiling
-  существующего внешнего LibreOffice worker — 2 CPU / 768 MiB peak RSS /
-  180 s / `WS_SLOTS=1`; каждый run сохраняет redacted input/complexity, wall
-  time, peak RSS, CPU, tmp high-water, subprocess outcome и selected
-  mode/layout. Это временный benchmark ceiling, не production adequacy claim.
+  специфицирована: A/B/C выполняются под временными benchmark limits
+  существующего внешнего LibreOffice worker — 2 CPU / 768 MiB container memory
+  limit / 180 s / `WS_SLOTS=1`; каждый run отдельно сохраняет redacted
+  input/complexity, wall time, measured peak RSS, CPU, tmp high-water,
+  subprocess outcome и selected mode/layout. Это временные benchmark limits,
+  не production adequacy claim.
   После пользовательского visual review owner отдельно выбирает supported
   production modes, hard limits/failure semantics и изменение caps, если оно
   потребуется. Это deferred post-implementation owner gate, не active unresolved
@@ -276,10 +279,11 @@ is invented before the benchmark.
   separate user visual verdict, and explicit no-promotion condition pending
   owner supported-set/threshold decision.
 - 2026-09-02 staged hybrid resource gate: A/B/C visual-test runs are bounded by
-  the existing outer LibreOffice ceiling (2 CPU / 768 MiB / 180 s /
-  `WS_SLOTS=1`) for temporary benchmark evidence only; per-run redacted
-  resource/subprocess/mode-layout metrics are required. Post-visual production
-  selection is explicitly deferred to the owner and does not block implementation.
+  the existing outer LibreOffice limits (2 CPU / 768 MiB container memory limit /
+  180 s / `WS_SLOTS=1`) for temporary benchmark evidence only; each run records
+  per-run redacted measured peak RSS and other resource/subprocess/mode-layout
+  metrics. Post-visual production selection is explicitly deferred to the owner
+  and does not block implementation.
 - 2026-09-02 lifecycle reconciliation: all pre-implementation choices resolved;
   removed `Open questions` and moved the card `grooming → todo` with the
   canonical `kanban-move.sh` helper. No source/runtime/config/deploy changes.
