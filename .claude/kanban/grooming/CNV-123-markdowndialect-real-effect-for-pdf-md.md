@@ -60,24 +60,50 @@ Markdown/strict) для конвертации PDF→MD, либо не увид�
   `markdownDialect`.
 - `normalized` — **Pipeline B**: `pdftotext -layout` → проектная нормализация
   → Pandoc с выбранным `markdownDialect`.
-- `positional` — **Pipeline C**: `pdftotext -bbox`/`bbox-layout` → проектный
-  структурный parser → writer выбранного `markdownDialect`.
+- `positional` — **Pipeline C**: explicit
+  `options[positionalLayout]=bbox|bbox-layout` selects the Poppler input,
+  then the project structural parser → writer выбранного `markdownDialect`.
+  `bbox` means the `pdftotext -bbox` XML input; `bbox-layout` means the
+  `pdftotext -bbox-layout` XML input. There is no implicit default or fallback
+  between these two inputs. `positionalLayout` is valid only with
+  `pdfMode=positional` and is required for that mode.
 
 `plain`, `normalized` и `positional` — только явные form choices для visual
 тестирования; каждый такой режим принимает и требует `markdownDialect`.
+`positional` additionally accepts exactly one explicit `positionalLayout` value;
+`verbatim` and `plain`/`normalized` reject that option.
 `verbatim` не принимает `markdownDialect`. Контракт действует только для
 `pdf→md`; семантика `txt→md`, включая существующее применение
 `markdownDialect` через Pandoc, сохраняется без изменений.
 
 `/formats` должен рекламировать для `pdf→md` четыре варианта и поведение формы:
-`verbatim` — default без поля диалекта, три остальных — explicit choices с
-обязательным полем `markdownDialect`. API и UI передают тот же `pdfMode`, без
-новых имён полей. Queue сохраняет нормализованные `pdfMode` и
-`markdownDialect` в существующих normalized options; audit/provenance должны
-сохранять эффективный режим, pipeline и диалект так, чтобы повтор задачи был
-воспроизводим. Неизвестные значения, режимы не для `pdf→md`,
-`markdownDialect` с `verbatim`/отсутствующим `pdfMode` и отсутствие диалекта в
-non-verbatim должны отклоняться fail-closed до постановки в queue.
+`verbatim` — default без поля диалекта, `plain` и `normalized` — explicit choices
+с обязательным `markdownDialect`, а `positional` — explicit choice с обязательными
+`markdownDialect` и `positionalLayout` (`bbox` или `bbox-layout`). API и UI
+передают те же имена полей; новый alias для `positionalLayout` не вводится.
+Queue сохраняет канонически нормализованные options. Для каждого job audit /
+provenance хранит:
+
+```json
+{
+  "pdfMode": "verbatim|plain|normalized|positional",
+  "pipeline": "verbatim|plain|normalized|positional",
+  "markdownDialect": "gfm|commonmark|markdown|markdown_strict|null",
+  "positionalLayout": "bbox|bbox-layout|null"
+}
+```
+
+`pdfMode` присутствует всегда: отсутствие входного значения нормализуется в
+`verbatim`. `markdownDialect` отсутствует или равен `null` для `verbatim`, а для
+каждого non-verbatim режима записывается выбранное значение. `positionalLayout`
+отсутствует или равен `null` вне `positional`, а в `positional` записывается
+ровно выбранное значение. `pipeline` — сохранённое effective значение, а не
+поле, которое replay/audit вычисляет из `pdfMode` или старого job payload.
+Replay использует сохранённые `pipeline` и `positionalLayout` и останавливается
+при их отсутствии/несогласованности; неизвестные значения, режимы не для
+`pdf→md`, `markdownDialect` с `verbatim`/отсутствующим `pdfMode`,
+`positionalLayout` вне `positional`, неизвестный layout и отсутствие dialect или
+layout в требующем режиме отклоняются fail-closed до постановки в queue.
 
 Требования к реализации должны быть отдельными для каждого pipeline:
 
@@ -87,13 +113,22 @@ non-verbatim должны отклоняться fail-closed до постано
 - **B / normalized:** те же resource/security gates плюс bounded проектная
   нормализация, детерминированный нормализатор и fixture, отделяющие ложные
   отступы колонок от настоящей структуры и проверяющие таблицы.
-- **C / positional:** те же базовые gates плюс bounded объём bbox-данных,
-  parser-память/время и защита от pathological PDF; parser и writer должны
-  быть детерминированными, а fixture должны покрывать координаты, колонки,
-  таблицы, заголовки и отсутствие текста.
+- **C / positional:** the form must pass the explicit `positionalLayout` through
+  unchanged. `bbox` invokes Poppler `pdftotext -bbox` and the parser accepts its
+  bbox XML; `bbox-layout` invokes `pdftotext -bbox-layout` and the parser accepts
+  its layout XML. The parser must reject a mismatched/ambiguous input rather
+  than detect or switch formats. Apply the same resource/security gates plus
+  bounded bbox-data, parser-memory/time and pathological-PDF protections.
+  Separate fixtures are required for both Poppler XML variants, each covering
+  coordinates, columns, tables, headings and empty text; audit fixtures must
+  prove that both `positionalLayout` and the selected pipeline survive replay.
+  Parser and writer must be deterministic.
 
-Для всех pipeline нужны redaction-safe audit logs, запрет сетевого доступа,
-изоляция временных артефактов и cleanup после ошибки. Fidelity-пороги,
+For every A/B/C fixture, audit assertions must compare the canonical tuple
+`(pdfMode, pipeline, markdownDialect, positionalLayout)` with the executed
+inputs; a replay must not infer a pipeline from a missing or legacy field.
+For all pipelines, use redaction-safe audit logs, prohibit network access,
+isolate temporary artifacts and clean up after errors. Fidelity-пороги,
 метрики, допустимое расхождение таблиц/колонок и окончательный выбор
 pipeline для production не выдумываются и остаются Open questions.
 
@@ -105,18 +140,23 @@ pipeline для production не выдумываются и остаются Ope
   `markdownDialect`; прежний результат не меняется silently.
 - `plain` реализует Pipeline A (`pdftotext` без `-layout` → Pandoc),
   `normalized` — Pipeline B (`-layout` → project normalization → Pandoc),
-  `positional` — Pipeline C (`-bbox`/`bbox-layout` → project structural parser
-  → dialect writer); все три требуют явный `markdownDialect`.
-- `/formats` возвращает четыре варианта `pdf→md`, а форма показывает default
-  verbatim без dialect-поля и показывает/требует `markdownDialect` для A/B/C;
-  API/UI используют только согласованный `pdfMode` и существующее имя
-  `markdownDialect`.
-- Queue сохраняет effective `pdfMode`, pipeline и `markdownDialect` в
-  normalized options; audit/provenance содержит те же значения для
-  воспроизводимой повторной обработки.
+  `positional` — Pipeline C: `positionalLayout=bbox` вызывает `pdftotext -bbox`
+  и bbox parser, `positionalLayout=bbox-layout` вызывает `pdftotext -bbox-layout`
+  и layout parser; выбор обязателен, явен и не переключается неявно. Все три
+  требуют явный `markdownDialect`.
+- `/formats` и форма описывают `positionalLayout` только для `positional` и
+  предлагают ровно `bbox`/`bbox-layout`; неизвестный или отсутствующий layout
+  в Pipeline C отклоняется.
+- Канонический audit/provenance для каждого job всегда содержит effective
+  `pdfMode` (missing → `verbatim`), сохранённый `pipeline`, а также
+  `markdownDialect` (null/absent для verbatim, value для non-verbatim) и
+  `positionalLayout` (null/absent вне positional, value для positional).
+  Replay/audit не выводит pipeline из mode или legacy payload и fail-closed при
+  неполном или несогласованном audit tuple.
 - Неизвестный `pdfMode`, `pdfMode` вне `pdf→md`, dialect с verbatim или
-  отсутствующим mode, а также non-verbatim без `markdownDialect` отклоняются
-  fail-closed до постановки задачи.
+  отсутствующим mode, `positionalLayout` с любым mode кроме `positional`,
+  неизвестный layout, отсутствие layout в `positional`, а также non-verbatim
+  без `markdownDialect` отклоняются fail-closed до постановки задачи.
 - `txt→md` сохраняет текущую семантику `markdownDialect` и не получает
   побочных изменений от разделения PDF-режимов.
 - Real fixtures и bounded visual tests покрывают для A/B/C обычный текст,
@@ -157,6 +197,15 @@ pipeline для production не выдумываются и остаются Ope
 - 2026-09-02: normalized options queue и audit/provenance обязаны сохранять
   effective `pdfMode`, pipeline и dialect для воспроизводимости. Неизвестные
   режимы и несовместимые/неполные комбинации отклоняются fail-closed.
+- 2026-09-02: для Pipeline C утверждён только явный
+  `options[positionalLayout]=bbox|bbox-layout`: `bbox` означает Poppler
+  `pdftotext -bbox` + bbox parser, `bbox-layout` — `pdftotext -bbox-layout` +
+  layout parser. Option обязательна при `pdfMode=positional`, запрещена во всех
+  остальных режимах; implicit detection/fallback запрещены.
+- 2026-09-02: canonical audit schema обязана явно хранить `pdfMode` для каждого
+  job (missing → `verbatim`), сохранённый `pipeline`, dialect null/absent для
+  verbatim и value для non-verbatim, а также layout null/absent вне positional.
+  Replay/audit не выводит pipeline из `pdfMode`.
 - 2026-09-02: для A/B/C обязательны отдельные resource, security, fixture,
   visual-test и cleanup gates; thresholds и final production selection остаются
   открытыми до измерений. Карточка остаётся в `grooming/` и не перемещается.
@@ -176,3 +225,8 @@ pipeline для production не выдумываются и остаются Ope
   Commit: `d8a3651`.
 - Prompt evidence (optional): sanitized task hand-off; full prompts/secrets не
   записываются.
+- 2026-09-02 repair review: recorded dual Poppler input contract via
+  `options[positionalLayout]`, per-input parser/fixture/audit requirements,
+  canonical audit normalization, and fail-closed invalid combinations. No
+  `docs/roadmap-current-priorities` file exists in this checkout; no roadmap
+  file was created or changed.
