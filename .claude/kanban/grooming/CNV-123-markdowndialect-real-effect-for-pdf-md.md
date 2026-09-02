@@ -11,17 +11,17 @@
 CNV-97 назначает профиль `document.markdown` обеим парам markdown-триангля —
 `pdf→md` и `txt→md` — одним и тем же правилом `assignments`. Реализация CNV-98
 показала, что у воркера (`workers/libreoffice/worker.py`) это два разных
-исполнения: `txt→md` реально прогоняет диалект через pandoc writer, а
-`pdf→md` — нет. Эта карточка фиксирует одобренный контракт для дальнейшей
-доработки `pdf→md`: явный `options[pdfMode]=verbatim|dialect`, два отдельных
-плоских профиля и сохранение выбора в уже существующих normalized options.
+исполнения: `txt→md` реально прогоняет диалект через pandoc writer, а `pdf→md`
+— нет. Эта карточка фиксирует утверждённый публичный контракт четырёх режимов
+`pdf→md` и три согласованных extraction/dialect pipeline для дальнейшей
+реализации.
 
 **Problem:**
-`pdf→md` в воркере оборачивает СЫРОЙ вывод `pdftotext -layout` как `.md`
-без прогона через pandoc — `markdownDialect` там физически не читается.
+`pdf→md` в воркере оборачивает вывод `pdftotext -layout` как `.md` без прогона
+через pandoc — `markdownDialect` там физически не читается.
 
-Код (`workers/libreoffice/worker.py`, функция `_convert()`, PDF-source
-ветка, ~строки 391-402):
+Код (`workers/libreoffice/worker.py`, функция `_convert()`, PDF-source ветка,
+~строки 391-402):
 ```python
 with tempfile.TemporaryDirectory(prefix="pdf-tmp-") as tmp:
     txt_path = Path(tmp) / f"{stem}.txt"
@@ -36,99 +36,143 @@ with tempfile.TemporaryDirectory(prefix="pdf-tmp-") as tmp:
         out.write_bytes(txt_path.read_bytes())
         return out, _MIME[target], target
 ```
-Для сравнения — блок `target == "md"` (~строки 417-431), который РЕАЛЬНО
+Для сравнения — блок `target == "md"` (~строки 417-431), который реально
 читает `options.get("markdownDialect")` и прогоняет через
 `run_pandoc(..., dialect)`, отрабатывает только для источников из
-`_PANDOC_READER` (md/html/docx/odt/epub/rst/latex/wiki) либо для `txt`
-через промежуточный `soffice(txt→docx)→pandoc`; `pdf` в эту ветку не
-попадает вовсе — return происходит раньше, в PDF-source-ветке выше.
+`_PANDOC_READER` либо для `txt` через промежуточный
+`soffice(txt→docx)→pandoc`; `pdf` в эту ветку не попадает вовсе — return
+происходит раньше, в PDF-source-ветке выше.
 
 **Impact:**
 Пользователь, ожидающий выбрать Markdown-диалект (GFM/CommonMark/Pandoc
-Markdown/strict) для конвертации PDF→MD, либо не увидит поле в UI (после
-CNV-98 catalog-фикса — `document.markdown.verbatim` не декларирует
-`markdownDialect`), либо (если кто-то восстановит поле не разобравшись)
-получит опцию, не имеющую эффекта на результат — недостоверный UX.
+Markdown/strict) для конвертации PDF→MD, либо не увидит поле в UI, либо
+получит опцию без эффекта на результат. Неявное добавление обработки также
+может изменить текущий verbatim-результат и нарушить воспроизводимость задач.
 
 **Recommendation:**
-Реализовать два явно различимых режима `pdf→md` через согласованный
-`options[pdfMode]=verbatim|dialect`, не меняя молча текущий результат:
-- **verbatim** — если `pdfMode` отсутствует, нормализовать его как `verbatim`;
-  сохранять `pdftotext -layout` и текущую семантику;
-- **dialect** — выбирать отдельный плоский профиль только при явном
-  `pdfMode=dialect` и применять `markdownDialect` в выбранном pipeline.
+Реализовать для `pdf→md` один явный enum-контракт:
+`options[pdfMode]=verbatim|plain|normalized|positional`.
 
-`markdownDialect` разрешён только вместе с `pdfMode=dialect`; в verbatim,
-при отсутствии `pdfMode` и для любой пары, кроме `pdf→md`, он должен быть
-отклонён. Queue должна сохранить выбранный `pdfMode` в существующих
-normalized options. Каталог `/formats` обязан рекламировать вариантность
-режима, а связанные API и UI должны передавать и отображать тот же выбор;
-новые имена полей этой карточкой не вводятся.
+- Если `pdfMode` отсутствует, он нормализуется как `verbatim`.
+- `verbatim` — сохранённый legacy-путь: `pdftotext -layout`, результат без
+  Pandoc; `markdownDialect` запрещён.
+- `plain` — **Pipeline A**: `pdftotext` без `-layout` → Pandoc с выбранным
+  `markdownDialect`.
+- `normalized` — **Pipeline B**: `pdftotext -layout` → проектная нормализация
+  → Pandoc с выбранным `markdownDialect`.
+- `positional` — **Pipeline C**: `pdftotext -bbox`/`bbox-layout` → проектный
+  структурный parser → writer выбранного `markdownDialect`.
 
-Нельзя просто прогонять текущий `pdftotext -layout` через pandoc: пробелы
-колонок могут стать ложными code block. Extraction pipeline для dialect нужно
-выбрать эмпирически по многоколоночным и табличным fixture. Fidelity-пороги
-и метрики должны быть измерены отдельно для обоих режимов до acceptance
-реализации. Семантика `txt→md`, включая существующее применение
-`markdownDialect` через pandoc, сохраняется без изменений.
+`plain`, `normalized` и `positional` — только явные form choices для visual
+тестирования; каждый такой режим принимает и требует `markdownDialect`.
+`verbatim` не принимает `markdownDialect`. Контракт действует только для
+`pdf→md`; семантика `txt→md`, включая существующее применение
+`markdownDialect` через Pandoc, сохраняется без изменений.
+
+`/formats` должен рекламировать для `pdf→md` четыре варианта и поведение формы:
+`verbatim` — default без поля диалекта, три остальных — explicit choices с
+обязательным полем `markdownDialect`. API и UI передают тот же `pdfMode`, без
+новых имён полей. Queue сохраняет нормализованные `pdfMode` и
+`markdownDialect` в существующих normalized options; audit/provenance должны
+сохранять эффективный режим, pipeline и диалект так, чтобы повтор задачи был
+воспроизводим. Неизвестные значения, режимы не для `pdf→md`,
+`markdownDialect` с `verbatim`/отсутствующим `pdfMode` и отсутствие диалекта в
+non-verbatim должны отклоняться fail-closed до постановки в queue.
+
+Требования к реализации должны быть отдельными для каждого pipeline:
+
+- **A / plain:** bounded CPU, память, временное пространство и wall time для
+  `pdftotext` и Pandoc; sandbox subprocess, безопасные имена временных файлов,
+  отсутствие shell-инъекций и fixture для обычного текста, колонок и таблиц.
+- **B / normalized:** те же resource/security gates плюс bounded проектная
+  нормализация, детерминированный нормализатор и fixture, отделяющие ложные
+  отступы колонок от настоящей структуры и проверяющие таблицы.
+- **C / positional:** те же базовые gates плюс bounded объём bbox-данных,
+  parser-память/время и защита от pathological PDF; parser и writer должны
+  быть детерминированными, а fixture должны покрывать координаты, колонки,
+  таблицы, заголовки и отсутствие текста.
+
+Для всех pipeline нужны redaction-safe audit logs, запрет сетевого доступа,
+изоляция временных артефактов и cleanup после ошибки. Fidelity-пороги,
+метрики, допустимое расхождение таблиц/колонок и окончательный выбор
+pipeline для production не выдумываются и остаются Open questions.
 
 **Acceptance Criteria:**
-- Для `pdf→md` отсутствие `pdfMode` нормализуется как `pdfMode=verbatim`,
-  сохраняется `pdftotext -layout`, и прежний результат не меняется silently.
-- `options[pdfMode]` принимает только `verbatim` и `dialect`; `dialect` выбирает
-  отдельный плоский профиль, а queue сохраняет выбор в существующих normalized
-  options.
-- `markdownDialect` принимается только для `pdf→md` с `pdfMode=dialect`;
-  в verbatim, при отсутствии `pdfMode` и для иных пар запрос отклоняется.
-- `pdf→md` с `pdfMode=dialect` реально меняет результат хотя бы для одного
-  нетривиального диалекта после подтверждения extraction pipeline.
-- `/formats` рекламирует оба варианта `pdf→md`, а API и UI поддерживают выбор
-  через согласованный `pdfMode`; дополнительных имён полей не появляется.
+- Публичный контракт `options[pdfMode]` для `pdf→md` содержит ровно
+  `verbatim`, `plain`, `normalized`, `positional`; отсутствие значения даёт
+  effective `verbatim`.
+- `verbatim` использует `pdftotext -layout`, не вызывает Pandoc и отклоняет
+  `markdownDialect`; прежний результат не меняется silently.
+- `plain` реализует Pipeline A (`pdftotext` без `-layout` → Pandoc),
+  `normalized` — Pipeline B (`-layout` → project normalization → Pandoc),
+  `positional` — Pipeline C (`-bbox`/`bbox-layout` → project structural parser
+  → dialect writer); все три требуют явный `markdownDialect`.
+- `/formats` возвращает четыре варианта `pdf→md`, а форма показывает default
+  verbatim без dialect-поля и показывает/требует `markdownDialect` для A/B/C;
+  API/UI используют только согласованный `pdfMode` и существующее имя
+  `markdownDialect`.
+- Queue сохраняет effective `pdfMode`, pipeline и `markdownDialect` в
+  normalized options; audit/provenance содержит те же значения для
+  воспроизводимой повторной обработки.
+- Неизвестный `pdfMode`, `pdfMode` вне `pdf→md`, dialect с verbatim или
+  отсутствующим mode, а также non-verbatim без `markdownDialect` отклоняются
+  fail-closed до постановки задачи.
 - `txt→md` сохраняет текущую семантику `markdownDialect` и не получает
   побочных изменений от разделения PDF-режимов.
-- Real fixtures покрывают многоколоночный и табличный PDF в обоих режимах;
-  bounded benchmark отдельно измеряет fidelity и фиксирует согласованные
-  метрики/пороги до acceptance реализации.
+- Real fixtures и bounded visual tests покрывают для A/B/C обычный текст,
+  многоколоночный PDF, таблицы, заголовки и pathological/empty-text случай;
+  отдельные resource/security/cleanup проверки существуют для каждого
+  pipeline. Fidelity thresholds не считаются acceptance-гейтом до решения
+  Open questions.
 - После реализации профильные tests/QA green: `make TEST=1
   test-python-libreoffice`, `make TEST=1 test-php`, `make phpstan`.
 
 **Open questions:**
-- Какой extraction pipeline использовать для dialect-enabled режима: другой
-  режим `pdftotext`, отдельные table heuristics или сторонний PDF→Markdown
-  инструмент? Ответить по real fixtures и bounded benchmark.
-- Каковы fidelity-метрики и пороги отдельно для verbatim и dialect-enabled,
-  включая допустимое расхождение таблиц и колонок? Порог не выбран до
-  benchmark.
+- Какие из Pipeline A/B/C выбрать для production default/поддержки после
+  проверки real fixtures и bounded visual tests? До этого все три остаются
+  явно документированными form choices; `verbatim` остаётся default.
+- Каковы fidelity-метрики и пороги отдельно для verbatim, A, B и C, включая
+  допустимое расхождение таблиц и колонок? Пороги не выбраны до benchmark.
+- Какой точный ресурсный бюджет и fixture corpus нужны для каждого pipeline?
+  Границы CPU/памяти/wall time/временного пространства должны быть измерены,
+  а не придуманы в этой карточке.
 
 **Decisions:**
-- 2026-09-02: утверждён продуктовый контракт двух явных `pdf→md` режимов:
-  verbatim с `pdftotext -layout` по умолчанию и opt-in dialect-enabled режим.
-  Отсутствие явного user/API/profile выбора означает verbatim; silent default
-  behavior change запрещён.
-- 2026-09-02: выбран явный selector `options[pdfMode]=verbatim|dialect`.
-  Отсутствующий `pdfMode` нормализуется как `verbatim`; `dialect` выбирает
-  отдельный плоский профиль. `markdownDialect` разрешён только с `dialect`,
-  selector валиден только для `pdf→md`, а queue сохраняет выбор в существующих
-  normalized options.
-- 2026-09-02: `/formats` должен рекламировать variant selection для `pdf→md`,
-  а API и UI должны поддержать его через `pdfMode`; новые имена полей не
-  добавляются. Профили остаются отдельными и плоскими.
-- 2026-09-02: `txt→md` сохраняет текущую семантику — выбранный
-  `markdownDialect` применяется существующим pandoc-путём; PDF-режимы не
-  меняют этот контракт.
-- 2026-09-02: extraction pipeline, fidelity thresholds и окончательное
-  представление профилей не считаются решёнными; их нужно выбрать после
-  multi-column/table real fixtures и bounded benchmark отдельно для обоих
-  режимов. Карточка остаётся в `grooming/`, не перемещается в `todo/`.
+- 2026-09-02: решение `options[pdfMode]=verbatim|dialect` superseded по
+  утверждённому пользовательскому контракту. Публичный enum CNV123 теперь
+  ровно `verbatim|plain|normalized|positional`; `dialect` больше не является
+  допустимым значением.
+- 2026-09-02: отсутствие `pdfMode` означает effective `verbatim`;
+  `verbatim` использует `pdftotext -layout`, не применяет `markdownDialect` и
+  сохраняет legacy-результат. Все non-verbatim режимы — explicit form choices
+  для visual testing и требуют `markdownDialect`.
+- 2026-09-02: утверждены pipeline choices: A = `plain`, `pdftotext` без
+  `-layout` → Pandoc; B = `normalized`, `-layout` → project normalization →
+  Pandoc; C = `positional`, `-bbox`/`bbox-layout` → project structural parser
+  → dialect writer. Их production fidelity и ресурсные пороги не выбраны.
+- 2026-09-02: контракт действует только для `pdf→md`; `txt→md` сохраняет
+  существующий Pandoc-путь `markdownDialect`. `/formats`, API и UI показывают
+  четыре варианта и передают `pdfMode` плюс существующий
+  `markdownDialect`; новые имена полей не вводятся.
+- 2026-09-02: normalized options queue и audit/provenance обязаны сохранять
+  effective `pdfMode`, pipeline и dialect для воспроизводимости. Неизвестные
+  режимы и несовместимые/неполные комбинации отклоняются fail-closed.
+- 2026-09-02: для A/B/C обязательны отдельные resource, security, fixture,
+  visual-test и cleanup gates; thresholds и final production selection остаются
+  открытыми до измерений. Карточка остаётся в `grooming/` и не перемещается.
 - CNV-98 (repair-раунд, 2026-08-24) выбрал НЕ чинить это в своём скоупе —
-  вместо этого каталог перестал рекламировать `markdownDialect` для
-  `pdf→md` (см. `.claude/kanban/done/CNV-98-document-worker-settings-application.md`,
-  раздел Execution Log "Нужен ack team-lead" — там же зафиксирован сам
-  gap и решение завести под него отдельную карточку).
+  вместо этого каталог перестал рекламировать `markdownDialect` для `pdf→md`
+  (см. `.claude/kanban/done/CNV-98-document-worker-settings-application.md`,
+  раздел Execution Log "Нужен ack team-lead").
 
-**Execution Log:** *(add concise, secret-free evidence after work starts)*
-- Authorization: explicit user approval at hand-off or recorded EPIC-scoped upfront autonomous authorization
-- Agent/zone: <owner and zone>; Gate: `<command>` → <result>
-- Reviewer: <verdict>; Commit: <SHA>
-- Prompt evidence (optional): <sanitized artifact ID / session ID / digest / checksum>
-- Never record full prompts, credentials, tokens, or other secrets.
+**Execution Log:**
+- Authorization: explicit user approval in task hand-off; scope ограничен
+  изменением этой grooming-карточки, без source/runtime/config/deploy.
+- Agent/zone: convertor/docs-kanban; Gate: `git diff --check` → clean.
+- Gate: targeted/full `kanban-lint.sh` attempted → command unavailable in the
+  current PATH (exit 127); canonical lint result не заявляется.
+- Reviewer: self-review against requested enum, A/B/C pipelines, fail-closed,
+  queue/audit, resource/security/fixture gates and retained Open questions;
+  Commit: `c980d22`.
+- Prompt evidence (optional): sanitized task hand-off; full prompts/secrets не
+  записываются.
