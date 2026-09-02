@@ -136,6 +136,19 @@ isolate temporary artifacts and clean up after errors. Fidelity-пороги,
 метрики, допустимое расхождение таблиц/колонок и окончательный выбор
 pipeline для production не выдумываются и остаются Open questions.
 
+Evidence-first visual fidelity gate: implementation must exercise the complete
+form-choice set (`verbatim`, `plain`, `normalized`, and `positional` with both
+`bbox` and `bbox-layout`) against a deterministic fixture matrix. The matrix
+must include ordinary text, headings, multi-column layout, tables, empty text,
+and pathological input; each A/B/C run records its selected dialect and, for C,
+the positional input variant. For every comparable run, retain the rendered
+output, source/fixture identity, effective options, and redacted audit metrics
+as linked artifacts, with the artifact references bound to the corresponding
+audit/provenance record. Record the user's visual verdict separately from those
+machine-produced artifacts and metrics. This is an evidence collection gate,
+not a numeric pass/fail gate: no quality score, threshold, or resource budget
+is invented before the benchmark.
+
 **Acceptance Criteria:**
 - Публичный контракт `options[pdfMode]` для `pdf→md` содержит ровно
   `verbatim`, `plain`, `normalized`, `positional`; отсутствие значения даёт
@@ -163,11 +176,17 @@ pipeline для production не выдумываются и остаются Ope
   без `markdownDialect` отклоняются fail-closed до постановки задачи.
 - `txt→md` сохраняет текущую семантику `markdownDialect` и не получает
   побочных изменений от разделения PDF-режимов.
-- Real fixtures и bounded visual tests покрывают для A/B/C обычный текст,
-  многоколоночный PDF, таблицы, заголовки и pathological/empty-text случай;
-  отдельные resource/security/cleanup проверки существуют для каждого
-  pipeline. Fidelity thresholds не считаются acceptance-гейтом до решения
-  Open questions.
+- Deterministic real-fixture matrix and bounded visual tests exercise the full
+  form-choice set: `verbatim`, A/`plain`, B/`normalized`, and C/`positional`
+  with both explicit `bbox` and `bbox-layout` inputs, covering ordinary text,
+  multi-column PDF, tables, headings, and pathological/empty-text cases.
+  Comparable per-run artifacts include rendered output, fixture identity,
+  effective form tuple, and redacted audit metrics; artifact references are
+  linked to the corresponding audit/provenance record, and the user's visual
+  verdict is recorded separately. Separate resource/security/cleanup checks
+  exist for each pipeline. This evidence gate does not assign numeric quality pass/fail
+  before benchmark, and no pipeline is promoted for production until the owner
+  decides the supported set and thresholds.
 - После реализации профильные tests/QA green: `make TEST=1
   test-python-libreoffice`, `make TEST=1 test-php`, `make phpstan`.
 
@@ -180,6 +199,10 @@ pipeline для production не выдумываются и остаются Ope
 - Какой точный ресурсный бюджет и fixture corpus нужны для каждого pipeline?
   Границы CPU/памяти/wall time/временного пространства должны быть измерены,
   а не придуманы в этой карточке.
+- Какие supported-set и threshold decision примет owner после benchmark и
+  раздельного рассмотрения redacted metrics и пользовательских visual verdicts?
+  До этого `verbatim` остаётся явным default, а A/B/C остаются form choices без
+  promotion в production.
 
 **Decisions:**
 - 2026-09-02: решение `options[pdfMode]=verbatim|dialect` superseded по
@@ -215,6 +238,13 @@ pipeline для production не выдумываются и остаются Ope
 - 2026-09-02: для A/B/C обязательны отдельные resource, security, fixture,
   visual-test и cleanup gates; thresholds и final production selection остаются
   открытыми до измерений. Карточка остаётся в `grooming/` и не перемещается.
+- 2026-09-02: утверждён evidence-first visual fidelity gate: реализовать весь
+  набор form choices и детерминированную fixture matrix, сохранять сопоставимые
+  artifacts, redacted metrics и positional inputs для A/B/C, а пользовательский
+  visual verdict записывать отдельно. До benchmark не выдумывать numeric
+  quality pass/fail, thresholds или resource budgets; `verbatim` остаётся
+  explicit default, и ни один pipeline не продвигается в production до
+  финального owner decision по supported set и thresholds.
 - CNV-98 (repair-раунд, 2026-08-24) выбрал НЕ чинить это в своём скоупе —
   вместо этого каталог перестал рекламировать `markdownDialect` для `pdf→md`
   (см. `.claude/kanban/done/CNV-98-document-worker-settings-application.md`,
@@ -236,3 +266,7 @@ pipeline для production не выдумываются и остаются Ope
   canonical audit normalization, and fail-closed invalid combinations. No
   `docs/roadmap-current-priorities` file exists in this checkout; no roadmap
   file was created or changed.
+- 2026-09-02 visual fidelity gate: recorded complete form-choice coverage,
+  deterministic fixture matrix, linked comparable artifacts/redacted metrics,
+  separate user visual verdict, and explicit no-promotion condition pending
+  owner supported-set/threshold decision.
