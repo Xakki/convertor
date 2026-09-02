@@ -167,16 +167,20 @@ AI/GPU/CUDA в неё не входят и оформляются отдельн
   CNV-133 не повторяет bootstrap/install-скрипт.
 - CNV-117 не включается в текущий Stage 2 scope: dev-mode намеренно остаётся
   текущим рабочим режимом.
-- До ответов на все вопросы выше карточка остаётся в `grooming/`; в `todo/` её
-  не перемещать и политику rollout молча не выбирать.
+- Историческая запись от 2026-08-31 о статусе `grooming/` и запрете переноса в
+  `todo/` заменена acceptance/lifecycle-записью от 2026-09-01: после завершённого
+  CPU pilot карточка принята в `ready/`. Это не означает завершения production
+  scale-up: rollback/reclaim-проверка остаётся будущим критерием handoff.
 
 **Execution Log:**
 - Authorization: *** grooming по поручению team-lead; только документация/Kanban, без source/runtime/secrets/remote actions/push.
 - Agent/zone: convertor/docs-kanban; Gate: targeted `kanban-lint.sh --repo /home/xakki/convertor CNV-133-distributed-workers-stage2.md` → 0 ошибок, 0 предупреждений; `git diff --check` → чисто. Full-board lint отдельно выявил 8 pre-existing ошибок и 1 предупреждение в `.claude/kanban/grooming/TODO.md`; CNV-133 к ним не относится.
 - 2026-08-31 coexistence update: card-structure validation подтверждена для всех
-  обязательных секций, status остаётся `grooming`, `todo/`-копия отсутствует,
-  `git diff HEAD^ HEAD --check` чист; `kanban-lint.sh` в текущем PATH/репозитории
-  недоступен, поэтому его повторный запуск для этого изменения не выполнен.
+  обязательных секций; это исторический снимок до CPU pilot. Указанный в нём
+  status `grooming` и отсутствие `todo/`-копии superseded acceptance/lifecycle-
+  записью от 2026-09-01: текущий status — `ready/`; `git diff HEAD^ HEAD --check`
+  чист. `kanban-lint.sh` в текущем PATH/репозитории недоступен, поэтому его
+  повторный запуск для этого изменения не выполнен.
 - Reviewer: не запускался; требуется отдельный read-only review перед реализацией.
 - Prompt evidence: делегация `distributed-workers grooming`, model `standard`; token usage availability: unavailable; sanitized prompt summary: record owner-approved `saVpn` target host only, preserve CPU worker/coexistence/access/capacity gates.
 - 2026-09-01 completed CPU pilot evidence (sanitized rollout report): main merged and pushed at `6532b923`; Harbor release tags `0.1.2` published and used instead of `latest`. Local all-CPU workers and `worker-api` were healthy. `saVpn` updated only for `worker-data` and `worker-image`; existing capabilities were preserved, VPN remained alive, and fresh provenance registrations were observed. `uBook` had all six CPU workers healthy with fresh provenance registrations; Fluent Bit was intentionally left unchanged. No secrets, token values, endpoint overrides, or image digests recorded.
