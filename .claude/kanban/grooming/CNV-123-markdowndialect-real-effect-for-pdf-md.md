@@ -173,6 +173,6 @@ pipeline для production не выдумываются и остаются Ope
   current PATH (exit 127); canonical lint result не заявляется.
 - Reviewer: self-review against requested enum, A/B/C pipelines, fail-closed,
   queue/audit, resource/security/fixture gates and retained Open questions;
-  Commit: `c980d22`.
+  Commit: `d8a3651`.
 - Prompt evidence (optional): sanitized task hand-off; full prompts/secrets не
   записываются.
