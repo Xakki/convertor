@@ -79,7 +79,14 @@ host.
 - Worker gathers at most one host snapshot per 10-minute interval; snapshot
   includes logical CPU count, `memTotalBytes`, `memAvailableBytes`,
   `diskTotalBytes`, `diskUsedBytes` for `/`; backend stores the latest snapshot
-  per canonical host and no telemetry history.
+  per exact `HOST_NAME` key and no telemetry history. Latest-only uniqueness is
+  by exact key, with no alias-based deduplication.
+- Deployment must supply a nonempty lowercase DNS-label/FQDN `HOST_NAME`;
+  missing or invalid values are rejected/unknown at the validator boundary.
+  Collector and workers send the exact configured value; no automatic backend
+  alias normalization or fallback to the container hostname is allowed.
+  Deployment tests cover valid values, missing/invalid rejection, exact-value
+  propagation and distinct exact-key retention.
 - Liveness/admin API additively exposes the snapshot; unavailable source yields
   null/unknown, never zero, and an observation older than 20 minutes is visibly
   stale. Existing liveness frequency and routing behavior remain unchanged.
@@ -135,6 +142,16 @@ host.
   API payloads must not contain Docker metadata, environment variables or
   process names. The collector opens no inbound remote port. Any allowlist
   mapping update is coupled to the corresponding worker deploy/recreate.
+
+- 2026-09-03: approved canonical host identity policy — `HOST_NAME` is the
+  sole canonical host key. Deployment must provide a nonempty lowercase
+  DNS-label/FQDN; the validator rejects missing/invalid values or marks them
+  unknown. Collector and workers send the exact configured value. The backend
+  performs no automatic alias normalization; aliases change only through
+  explicit deployment configuration. Latest-only retention is unique by exact
+  key, and there is no fallback to the container hostname. Deployment tests
+  cover validation, exact-value propagation, alias non-normalization and
+  distinct exact-key retention.
 
 **Dependencies:**
 - Uses `[[CNV-35-registry-08-worker-observability]]` and
