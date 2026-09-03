@@ -43,6 +43,8 @@ import socket
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+
+from workers.host_telemetry import validate_host_name
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -237,24 +239,8 @@ def _load_snapshot(cpu_sampler: _CpuUsageSampler) -> tuple[float | None, float |
 
 
 def _worker_host() -> str:
-    """Явный host/node-идентификатор воркера, репортится в register-payload'е
-    (`host` ключ) — Phase 2 (registry-08): раньше не было ни одного явного поля
-    отличающего физический хост инстанса, только соглашение по именованию
-    WORKER_ID/COMPOSE_PROJECT_NAME (docs/workers-remote-deploy.md).
-
-    Приоритет: `WORKER_HOST` env → `NODE_NAME` env (алиас — некоторые оркестраторы
-    прокидывают его вместо WORKER_HOST) → hostname контейнера (тот же фолбэк, что
-    `_instance_id()` использует для своей host-части — см. там: ОБЕ точки идут через
-    эту функцию, чтобы значение никогда не разошлось между instanceId и явным полем
-    `host`)."""
-    host = os.getenv("WORKER_HOST", "").strip() or os.getenv("NODE_NAME", "").strip()
-    if host:
-        return host
-    with suppress(OSError):
-        h = socket.gethostname().strip()
-        if h:
-            return h
-    return "unknown"
+    """Return the exact deployment-provided canonical host name."""
+    return validate_host_name(os.getenv("WORKER_HOST", "")) or "unknown"
 
 
 def _default_worker_id() -> str:

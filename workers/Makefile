@@ -468,8 +468,12 @@ docker run --rm \
 	python3 -m pytest $(2) -m 'not e2e' -p no:cacheprovider -ra -v
 endef
 
+.PHONY: test-python-host-telemetry
+test-python-host-telemetry: ## Focused host telemetry collector tests (stdlib-only)
+	PYTHONPATH=. python3 -m pytest workers/tests/test_host_telemetry.py workers/tests/test_ws_client.py -p no:cacheprovider -q
+
 .PHONY: test-python
-test-python: test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai test-python-api ## 7 unit-сюит по воркерам ВНУТРИ образов (без e2e и drift; стенд не нужен)
+test-python: test-python-host-telemetry test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai test-python-api ## 8 unit-сюит по воркерам ВНУТРИ образов (без e2e и drift; стенд не нужен)
 
 .PHONY: test-python-api
 test-python-api: build-api-test ## Unit + schema-drift тесты worker-api в его контейнере

@@ -130,6 +130,17 @@ logs: ## Tail logs for all services
 logs-%: ## Tail logs for a specific service (make logs-php)
 	$(DC) logs -f $*
 
+.PHONY: host-telemetry-validate
+host-telemetry-validate: ## Validate canonical host identity and collector allowlist
+	@python3 -c 'import json,os,re; h=os.getenv("HOST_NAME", ""); assert re.fullmatch(r"(?=.{1,253}$$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*",h), "HOST_NAME must be lowercase DNS-label/FQDN"; a=json.load(open("deploy/allowlist.json")); assert a.get("version")==1 and isinstance(a.get("workers"),dict); [(_ for _ in ()).throw(AssertionError("unsafe cgroup path")) for p in a["workers"].values() if not isinstance(p,str) or not p or p.startswith("/") or ".." in p.split("/")]'
+
+.PHONY: host-telemetry-up
+host-telemetry-up: host-telemetry-validate
+	$(DC) up -d --force-recreate host-telemetry
+
+.PHONY: host-telemetry-recreate
+host-telemetry-recreate: host-telemetry-up
+
 ##@ Database
 
 .PHONY: db-dump

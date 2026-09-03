@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller\Admin\Api;
 
+use App\Repository\HostTelemetrySnapshotRepository;
 use App\Repository\WorkerCapabilityRepository;
 use App\Service\Admin\WorkerStatsProvider;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -28,6 +29,7 @@ class WorkerController extends AbstractController
     public function __construct(
         private readonly WorkerStatsProvider $stats,
         private readonly WorkerCapabilityRepository $workerCapabilities,
+        private readonly HostTelemetrySnapshotRepository $hostSnapshots,
     ) {
     }
 
@@ -79,6 +81,20 @@ class WorkerController extends AbstractController
     public function hosts(): JsonResponse
     {
         return $this->json($this->stats->collectHosts());
+    }
+
+    #[Route('/workers/telemetry', name: 'admin_api_workers_telemetry', methods: ['GET'])]
+    public function telemetry(): JsonResponse
+    {
+        $now  = new \DateTimeImmutable();
+        $rows = [];
+        foreach ($this->hostSnapshots->findAllSnapshots() as $snapshot) {
+            $data          = $snapshot->getData();
+            $data['stale'] = $snapshot->getObservedAt() < $now->modify('-20 minutes');
+            $rows[]        = $data;
+        }
+
+        return $this->json(['contractVersion' => 1, 'snapshots' => $rows]);
     }
 
     /**

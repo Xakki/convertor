@@ -99,6 +99,22 @@
          class="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
          role="alert" x-text="staleError"></div>
 
+    <div class="mt-4 grid gap-3 md:grid-cols-2" aria-label="Host resource telemetry">
+        <template x-for="snapshot in telemetry" :key="snapshot.host">
+            <article class="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-xs text-zinc-300"
+                     :class="snapshot.stale ? 'border-yellow-500/40' : ''">
+                <div class="flex justify-between"><strong class="font-mono text-white" x-text="snapshot.host"></strong><span x-show="snapshot.stale" class="text-yellow-400">устарело</span></div>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                    <span title="Logical host CPUs; host scope; observed timestamp"><b>CPU:</b> <span x-text="snapshot.cpuCount ?? '—'"></span></span>
+                    <span title="MemAvailable; bytes; host scope; observed timestamp"><b>Свободная память:</b> <span x-text="formatBytes(snapshot.memAvailableBytes)"></span></span>
+                    <span title="Root filesystem used bytes / total bytes; host scope; observed timestamp"><b>Диск /:</b> <span x-text="formatBytes(snapshot.diskUsedBytes) + ' / ' + formatBytes(snapshot.diskTotalBytes)"></span></span>
+                    <span title="1-minute load average; host scope; normalized by logical CPUs in UI"><b>Load 1m:</b> <span x-text="snapshot.load1 ?? '—'"></span></span>
+                </div>
+                <div class="mt-2 text-zinc-500" x-text="'Наблюдение: ' + fmtDate(snapshot.observedAt) + (snapshot.stale ? ' (данные старше 20 минут)' : '')"></div>
+            </article>
+        </template>
+    </div>
+
     <div class="mt-4 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900">
         <table class="min-w-full divide-y divide-zinc-800 text-sm">
             <thead>
@@ -363,6 +379,7 @@
             error: '',
             ttlHours: null,
             hosts: [],
+            telemetry: [],
             updatedAt: '',
             _timer: null,
             staleDeleting: false,
@@ -401,6 +418,10 @@
                     const data = await res.json();
                     this.ttlHours = data.ttlHours ?? null;
                     this.mergeHosts(data.hosts || []);
+                    const telemetryResponse = await window.admin.fetch('/api/v1/admin/workers/telemetry');
+                    if (telemetryResponse.ok) {
+                        this.telemetry = (await telemetryResponse.json()).snapshots || [];
+                    }
                     this.updatedAt = new Date().toLocaleTimeString('ru-RU');
                 } catch (e) {
                     this.error = 'Ошибка сети при загрузке хостов';
@@ -612,6 +633,11 @@
                     }
                 }
                 host.workersList = next;
+            },
+
+            formatBytes(value) {
+                if (value === null || value === undefined) return '—';
+                return (Number(value) / 1073741824).toFixed(2) + ' GB';
             },
 
             fmtDate(iso) {

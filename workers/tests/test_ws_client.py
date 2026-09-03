@@ -1664,19 +1664,17 @@ def test_worker_host_env_override(monkeypatch):
     assert ws_client_mod._worker_host() == "gpu-host-1"
 
 
-def test_worker_host_node_name_fallback(monkeypatch):
-    """NODE_NAME — алиас, применяется только когда WORKER_HOST не задан."""
+def test_worker_host_requires_deployment_value(monkeypatch):
+    """Missing aliases and container hostname are not canonical identity."""
     monkeypatch.delenv("WORKER_HOST", raising=False)
     monkeypatch.setenv("NODE_NAME", "k8s-node-3")
-    assert ws_client_mod._worker_host() == "k8s-node-3"
+    assert ws_client_mod._worker_host() == "unknown"
 
 
-def test_worker_host_falls_back_to_hostname(monkeypatch):
-    """Без обоих env — фолбэк на hostname контейнера (непустая строка)."""
+def test_worker_host_does_not_fall_back_to_hostname(monkeypatch):
     monkeypatch.delenv("WORKER_HOST", raising=False)
     monkeypatch.delenv("NODE_NAME", raising=False)
-    host = ws_client_mod._worker_host()
-    assert host and host != "unknown"
+    assert ws_client_mod._worker_host() == "unknown"
 
 
 def test_register_body_carries_host(tmp_path, monkeypatch):

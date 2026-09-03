@@ -345,13 +345,13 @@ final readonly class WorkerStatsProvider
             ? $blob['executionKind']
             : null;
         /** @var array<string, mixed>|null $settings */
-        $settings = is_array($blob['settings'] ?? null) ? $blob['settings'] : null;
+        $settings      = is_array($blob['settings'] ?? null) ? $blob['settings'] : null;
         $rawProvenance = is_array($blob['provenance'] ?? null) ? $blob['provenance'] : [];
-        $provenance = [
-            'appVersion' => isset($rawProvenance['appVersion']) && is_string($rawProvenance['appVersion']) ? $rawProvenance['appVersion'] : null,
-            'build' => isset($rawProvenance['build']) && is_string($rawProvenance['build']) ? $rawProvenance['build'] : null,
-            'revision' => isset($rawProvenance['revision']) && is_string($rawProvenance['revision']) ? $rawProvenance['revision'] : null,
-            'sourceState' => isset($rawProvenance['sourceState']) && is_string($rawProvenance['sourceState']) ? $rawProvenance['sourceState'] : null,
+        $provenance    = [
+            'appVersion'      => isset($rawProvenance['appVersion'])      && is_string($rawProvenance['appVersion']) ? $rawProvenance['appVersion'] : null,
+            'build'           => isset($rawProvenance['build'])           && is_string($rawProvenance['build']) ? $rawProvenance['build'] : null,
+            'revision'        => isset($rawProvenance['revision'])        && is_string($rawProvenance['revision']) ? $rawProvenance['revision'] : null,
+            'sourceState'     => isset($rawProvenance['sourceState'])     && is_string($rawProvenance['sourceState']) ? $rawProvenance['sourceState'] : null,
             'imageRepository' => isset($rawProvenance['imageRepository']) && is_string($rawProvenance['imageRepository']) ? $rawProvenance['imageRepository'] : null,
         ];
 

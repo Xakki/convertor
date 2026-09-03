@@ -56,6 +56,24 @@ x-app-base: &_app_base
             condition: service_healthy
 
 services:
+    host-telemetry:
+        build:
+            context: .
+            dockerfile: docker/workers/host-telemetry.Dockerfile
+        restart: unless-stopped
+        security_opt: ["no-new-privileges:true"]
+        read_only: true
+        cap_drop: [ALL]
+        environment:
+            HOST_NAME: ${HOST_NAME}
+            ALLOWLIST_PATH: /etc/convertor/allowlist.json
+            TELEMETRY_URL: ${API_BASE_URL}/api/v1/internal/host-telemetry
+            GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN}
+        volumes:
+            - /proc:/host/proc:ro
+            - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+            - ./deploy/allowlist.json:/etc/convertor/allowlist.json:ro
+
     # Профиль `server` (php/cron/mariadb/keydb/nginx/ws-gateway) — серверная часть.
     # Remote worker-хост его НЕ активирует: там `make up` поднимает только воркеров
     # (они без профиля) + fluent — см. .env.local_worker_example.

@@ -6,6 +6,7 @@ namespace App\Tests\Functional\Controller\Admin;
 
 use App\Entity\User;
 use App\Enum\WorkerLivenessStatus;
+use App\Repository\HostTelemetrySnapshotRepository;
 use App\Repository\WorkerCapabilityRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
@@ -63,6 +64,10 @@ final class WorkerControllerTest extends WebTestCase
         $em->getConnection()->executeStatement(
             'DELETE FROM worker_capabilities WHERE worker_type = :wt AND instance_id LIKE :prefix',
             ['wt' => self::TEST_WORKER_TYPE, 'prefix' => self::STALE_TEST_INSTANCE_PREFIX . '%'],
+        );
+        $em->getConnection()->executeStatement(
+            'DELETE FROM host_telemetry_snapshots WHERE host_name LIKE :prefix',
+            ['prefix' => 'cnv137-admin-%'],
         );
 
         parent::tearDown();
@@ -551,6 +556,56 @@ final class WorkerControllerTest extends WebTestCase
         self::assertSame('alive', $status, 'alive row must survive');
     }
 
+    public function testTelemetryReturnsSnapshotsForAdminAndMarksStale(): void
+    {
+        $client     = static::createClient();
+        $token      = $this->jwtFor($this->persistUser(true));
+        $repository = static::getContainer()->get(HostTelemetrySnapshotRepository::class);
+        $now        = new \DateTimeImmutable();
+
+        $repository->save(new \App\Entity\HostTelemetrySnapshot(
+            'cnv137-admin-fresh',
+            ['contractVersion' => 1, 'cpuCount' => 8],
+            $now,
+            $now,
+        ));
+        $repository->save(new \App\Entity\HostTelemetrySnapshot(
+            'cnv137-admin-stale',
+            ['contractVersion' => 1, 'cpuCount' => 2],
+            $now->modify('-21 minutes'),
+            $now,
+        ));
+
+        $client->request('GET', '/api/v1/admin/workers/telemetry', server: [
+            'HTTP_AUTHORIZATION' => "Bearer {$token}",
+        ]);
+
+        self::assertResponseIsSuccessful();
+        $data = json_decode((string) $client->getResponse()->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(1, $data['contractVersion']);
+        $stale = [];
+        foreach ($data['snapshots'] as $snapshot) {
+            $stale[$snapshot['host']] = $snapshot['stale'];
+        }
+        self::assertFalse($stale['cnv137-admin-fresh']);
+        self::assertTrue($stale['cnv137-admin-stale']);
+    }
+
+    public function testTelemetryIsForbiddenForRegularUser(): void
+    {
+        $client = static::createClient();
+        $token  = $this->jwtFor($this->persistUser(false));
+
+        $client->request('GET', '/api/v1/admin/workers/telemetry', server: [
+            'HTTP_AUTHORIZATION' => "Bearer {$token}",
+        ]);
+
+        self::assertSame(403, $client->getResponse()->getStatusCode());
+    }
+
+    /**
+     * Create a user fixture with the requested role.
+     */
     private function persistUser(bool $admin): User
     {
         $em   = static::getContainer()->get(EntityManagerInterface::class);

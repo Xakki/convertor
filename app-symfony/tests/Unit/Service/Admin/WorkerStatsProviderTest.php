@@ -120,10 +120,10 @@ final class WorkerStatsProviderTest extends TestCase
     {
         $cap = $this->stubCap('image', 'host-a:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive, [
             'provenance' => [
-                'appVersion' => '1.2.3',
-                'build' => '42',
-                'revision' => 'abcdef',
-                'sourceState' => 'clean',
+                'appVersion'      => '1.2.3',
+                'build'           => '42',
+                'revision'        => 'abcdef',
+                'sourceState'     => 'clean',
                 'imageRepository' => 'harbor.example/worker-image',
             ],
         ]);
@@ -131,10 +131,10 @@ final class WorkerStatsProviderTest extends TestCase
         $row = $this->provider([$cap])->collect()['workers'][0];
 
         self::assertSame([
-            'appVersion' => '1.2.3',
-            'build' => '42',
-            'revision' => 'abcdef',
-            'sourceState' => 'clean',
+            'appVersion'      => '1.2.3',
+            'build'           => '42',
+            'revision'        => 'abcdef',
+            'sourceState'     => 'clean',
             'imageRepository' => 'harbor.example/worker-image',
         ], $row['provenance']);
 
@@ -142,10 +142,10 @@ final class WorkerStatsProviderTest extends TestCase
             $this->stubCap('image', 'legacy:1', new \DateTimeImmutable(), WorkerLivenessStatus::Alive),
         ])->collect()['workers'][0];
         self::assertSame([
-            'appVersion' => null,
-            'build' => null,
-            'revision' => null,
-            'sourceState' => null,
+            'appVersion'      => null,
+            'build'           => null,
+            'revision'        => null,
+            'sourceState'     => null,
             'imageRepository' => null,
         ], $legacyRow['provenance']);
     }
