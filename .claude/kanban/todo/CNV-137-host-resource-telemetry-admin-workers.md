@@ -152,6 +152,16 @@ host.
   key, and there is no fallback to the container hostname. Deployment tests
   cover validation, exact-value propagation, alias non-normalization and
   distinct exact-key retention.
+- 2026-09-03: approved final collector allowlist deployment lifecycle —
+  deployment generates a versioned, read-only `allowlist.json`, atomically
+  refreshed with every worker pull/recreate; collector reload/recreate is
+  coupled to that change. Validation or recreate failure is fail-closed, and
+  the mapping rolls back with the deployment. The collector has no Docker
+  socket/API access; mappings use strict relative cgroup paths under the
+  collector mounted root. The manifest does not include container IDs/env/Docker
+  metadata. Validation runs before activation, activation uses atomic rename,
+  and health/provenance verification must confirm rollback coherence. No
+  low-level file path or schema is fixed by this decision.
 
 **Dependencies:**
 - Uses `[[CNV-35-registry-08-worker-observability]]` and
