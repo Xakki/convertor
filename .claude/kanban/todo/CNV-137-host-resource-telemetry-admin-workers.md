@@ -124,6 +124,17 @@ host.
 - 2026-09-01: audio/video image pairing and routing semantics are out of scope;
   this card preserves existing identity and stream behavior rather than
   restating explanatory media material.
+- 2026-09-03: approved container-collector architecture — deploy a dedicated
+  Compose container collector on each host. It uses read-only host mounts only,
+  has no Docker socket/API access, and relies on a statically configured
+  deployment allowlist mapping Convertor workers to cgroup paths/units. The
+  collector performs sanitized local aggregation and sends results outbound
+  through authenticated delivery.
+- 2026-09-03: strict collector acceptance boundary — run non-root, expose only
+  the minimum required read-only mounts, and prohibit arbitrary host file reads.
+  API payloads must not contain Docker metadata, environment variables or
+  process names. The collector opens no inbound remote port. Any allowlist
+  mapping update is coupled to the corresponding worker deploy/recreate.
 
 **Dependencies:**
 - Uses `[[CNV-35-registry-08-worker-observability]]` and
