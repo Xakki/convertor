@@ -51,12 +51,17 @@ final class HostTelemetryController extends AbstractController
         if ($observed === null || $observed < 0 || $observed > $now || $observed < $now - 1200) {
             return $this->json(['error' => 'snapshot is outside freshness window'], Response::HTTP_BAD_REQUEST);
         }
+        $normalizedMetrics = [];
         foreach (['cpuCount', 'memTotalBytes', 'memAvailableBytes', 'diskTotalBytes', 'diskUsedBytes'] as $field) {
-            if (($body[$field] ?? null) !== null && $this->integer($body[$field], 0, self::MAX_INTEGER) === null) {
+            $value                     = $body[$field] ?? null;
+            $normalizedMetrics[$field] = $value === null ? null : $this->integer($value, 0, self::MAX_INTEGER);
+            if ($value !== null && $normalizedMetrics[$field] === null) {
                 return $this->json(['error' => 'invalid telemetry value'], Response::HTTP_BAD_REQUEST);
             }
         }
-        if (($body['load1'] ?? null) !== null && ($this->number($body['load1']) === null || $this->number($body['load1']) < 0)) {
+        $load1                      = $body['load1'] ?? null;
+        $normalizedMetrics['load1'] = $load1 === null ? null : $this->number($load1);
+        if ($load1 !== null && ($normalizedMetrics['load1'] === null || $normalizedMetrics['load1'] < 0)) {
             return $this->json(['error' => 'invalid telemetry value'], Response::HTTP_BAD_REQUEST);
         }
         $workers = $body['workers'] ?? [];
@@ -75,6 +80,7 @@ final class HostTelemetryController extends AbstractController
             }
             $sanitizedWorkers[$worker] = ['cpuUsageUsec' => $cpu, 'memoryBytes' => $memory];
         }
+        $body            = array_merge($body, $normalizedMetrics);
         $body['workers'] = $sanitizedWorkers;
         $this->snapshots->save(new HostTelemetrySnapshot($host, $body, (new \DateTimeImmutable())->setTimestamp((int) $observed), new \DateTimeImmutable()));
 

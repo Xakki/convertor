@@ -66,6 +66,33 @@ final class HostTelemetryControllerTest extends WebTestCase
         self::assertSame(413, $client->getResponse()->getStatusCode());
     }
 
+    public function testValidPartialIngestStoresUnknownMetricsAsNull(): void
+    {
+        $client  = static::createClient();
+        $headers = [
+            'CONTENT_TYPE'       => 'application/json',
+            'HTTP_AUTHORIZATION' => 'Bearer test-internal-token',
+        ];
+
+        $client->request('POST', '/api/v1/internal/host-telemetry', server: $headers, content: json_encode([
+            'host'            => self::HOST,
+            'contractVersion' => 1,
+            'observedAt'      => time(),
+            'workers'         => [],
+        ], JSON_THROW_ON_ERROR));
+
+        self::assertSame(200, $client->getResponse()->getStatusCode());
+        $snapshot = static::getContainer()->get(HostTelemetrySnapshotRepository::class)->findByExactHost(self::HOST);
+        self::assertNotNull($snapshot);
+        $data = $snapshot->getData();
+        self::assertNull($data['cpuCount']);
+        self::assertNull($data['memTotalBytes']);
+        self::assertNull($data['memAvailableBytes']);
+        self::assertNull($data['diskTotalBytes']);
+        self::assertNull($data['diskUsedBytes']);
+        self::assertNull($data['load1']);
+    }
+
     public function testValidIngestStoresExactHostAndLatestSnapshot(): void
     {
         $client  = static::createClient();
