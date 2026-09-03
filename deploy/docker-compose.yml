@@ -12,6 +12,32 @@
 name: ${COMPOSE_PROJECT_NAME:-convertor-remote}
 
 services:
+    host-telemetry:
+        image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-host-telemetry:${IMAGE_TAG:-latest}
+        restart: unless-stopped
+        init: true
+        security_opt: ["no-new-privileges:true"]
+        read_only: true
+        cap_drop: [ALL]
+        tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+        environment:
+            HOST_NAME: ${HOST_NAME}
+            ALLOWLIST_PATH: /etc/convertor/allowlist.json
+            TELEMETRY_URL: ${API_BASE_URL}/api/v1/internal/host-telemetry
+            GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN}
+        volumes:
+            - /proc:/host/proc:ro
+            - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+            - /sys/devices/system/cpu:/host/sys/devices/system/cpu:ro
+            - /:/host/root:ro
+            - ./allowlist.json:/etc/convertor/allowlist.json:ro
+        healthcheck:
+            test: ["CMD", "python3", "-c", "import json; x=json.load(open('/etc/convertor/allowlist.json')); assert x.get('version') == 1 and x.get('provenance', {}).get('source') == 'deployment' and x.get('workers')"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 5s
+
     worker-libreoffice:
         profiles: ["document"]
         image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-libreoffice:${IMAGE_TAG:-latest}

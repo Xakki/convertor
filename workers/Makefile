@@ -470,7 +470,7 @@ endef
 
 .PHONY: test-python-host-telemetry
 test-python-host-telemetry: ## Focused host telemetry collector tests (stdlib-only)
-	PYTHONPATH=. python3 -m pytest workers/tests/test_host_telemetry.py workers/tests/test_ws_client.py -p no:cacheprovider -q
+	PYTHONPATH=.. python3 -m pytest tests/test_host_telemetry.py tests/test_allowlist_generator.py tests/test_ws_client.py -p no:cacheprovider -q
 
 .PHONY: test-python
 test-python: test-python-host-telemetry test-python-data test-python-ffmpeg test-python-image test-python-libreoffice test-python-metrics test-python-ai test-python-api ## 8 unit-сюит по воркерам ВНУТРИ образов (без e2e и drift; стенд не нужен)

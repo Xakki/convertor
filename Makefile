@@ -27,8 +27,9 @@ MAKE_TEST  = $(MAKE) --no-print-directory TEST=1
 DC_FLUENT  = COMPOSE_FILE=docker-compose.yml:docker/fluent-log/docker-fluent.yml:docker/fluent-logging.yml docker compose
 PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
-HOST_NAME ?= $(shell hostname)
-HOST_IP   := $(shell hostname -I 2>/dev/null | awk '{print $$1}' || echo unknown)
+HOST_NAME ?=
+HOST_IP   :=
+WORKER_SERVICES ?= worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
 MYSQL_SLOWLOG_PATH    := $(CURDIR)/docker/logs
 JSON_LOG_PATH         := $(CURDIR)/docker/logs
 FLUENT_BIT_CONF_DIR   := $(CURDIR)/docker/fluent-log/fluent-bit
@@ -65,7 +66,7 @@ init: build up migrate ## First-time setup: build + up + migrate (планы с�
 	@echo -e "$(GREEN)Project initialised!$(RESET)"
 
 .PHONY: up
-up: validate-ai-image ## Start stack и дождаться healthy — ГЛАВНЫЙ СЕРВЕР (remote-хосты: workers-recreate)
+up: host-telemetry-validate validate-ai-image ## Start stack и дождаться healthy — ГЛАВНЫЙ СЕРВЕР (remote-хосты: workers-recreate)
 	$(DC) up -d --wait
 
 .PHONY: down
@@ -131,8 +132,11 @@ logs-%: ## Tail logs for a specific service (make logs-php)
 	$(DC) logs -f $*
 
 .PHONY: host-telemetry-validate
-host-telemetry-validate: ## Validate canonical host identity and collector allowlist
-	@python3 -c 'import json,os,re; h=os.getenv("HOST_NAME", ""); assert re.fullmatch(r"(?=.{1,253}$$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*",h), "HOST_NAME must be lowercase DNS-label/FQDN"; a=json.load(open("deploy/allowlist.json")); assert a.get("version")==1 and isinstance(a.get("workers"),dict); [(_ for _ in ()).throw(AssertionError("unsafe cgroup path")) for p in a["workers"].values() if not isinstance(p,str) or not p or p.startswith("/") or ".." in p.split("/")]'
+host-telemetry-allowlist:
+	@python3 deploy/generate-allowlist.py --output deploy/allowlist.json $(foreach svc,$(WORKER_SERVICES),--worker $(svc))
+
+host-telemetry-validate: host-telemetry-allowlist ## Validate canonical host identity and collector allowlist
+	@python3 -c 'import json,os,re; h=os.getenv("HOST_NAME", ""); assert re.fullmatch(r"(?=.{1,253}$$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*",h), "HOST_NAME must be lowercase DNS-label/FQDN"; a=json.load(open("deploy/allowlist.json")); assert a.get("version")==1 and a.get("provenance",{}).get("source")=="deployment" and isinstance(a.get("workers"),dict)'
 
 .PHONY: host-telemetry-up
 host-telemetry-up: host-telemetry-validate

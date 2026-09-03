@@ -73,6 +73,7 @@ services:
             - /proc:/host/proc:ro
             - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
             - ./deploy/allowlist.json:/etc/convertor/allowlist.json:ro
+            - /:/host/root:ro
 
     # Профиль `server` (php/cron/mariadb/keydb/nginx/ws-gateway) — серверная часть.
     # Remote worker-хост его НЕ активирует: там `make up` поднимает только воркеров
@@ -297,10 +298,8 @@ services:
             WORKER_MODULE: workers.libreoffice.worker
             WORKER_ID: ${COMPOSE_PROJECT_NAME:-convertor}-worker-libreoffice
             WORKER_TYPE: document
-            # registry-08: явный host/node-идентификатор для admin-страницы воркеров —
-            # HOST_NAME уже вычисляется Makefile'ом (`hostname`, экспортируется в env
-            # docker compose) для fluent-bit-лейблов; переиспользуем тот же источник,
-            # не заводя отдельную переменную.
+            # Явный host/node-идентификатор для admin-страницы воркеров и
+            # fluent-bit-лейблов; задаётся оператором в HOST_NAME.
             WORKER_HOST: ${HOST_NAME}
             GATEWAY_WS_URL: ${GATEWAY_WS_URL}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}

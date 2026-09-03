@@ -30,3 +30,5 @@ __pycache__/
 .claude/settings.local.json.tmp.*
 
 /worker-api.yaml
+deploy/allowlist.json
+deploy/allowlist.json.previous

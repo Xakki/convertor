@@ -88,7 +88,7 @@ fetch_companions() {
   local base file
   base="$(gist_raw_base)" || die "нет локальных docker-compose.yml/.env.example и пусты GIST_ID/GIST_OWNER (DEPLOY_GIST_*) — неоткуда скачать companions"
   mkdir -p "$dest"
-  for file in docker-compose.yml .env.example install.sh; do
+  for file in docker-compose.yml .env.example install.sh generate-allowlist.py; do
     info "скачиваю $file ← $base/$file"
     curl -fsSL "$base/$file" -o "$dest/$file"
   done
@@ -164,11 +164,8 @@ prompt_token() {
 }
 
 prompt_project_name() {
-  local default host sug
-  host="$(hostname -s 2>/dev/null || hostname || echo host)"
-  # sanitize: только [a-zA-Z0-9_-]
-  sug="$(printf '%s' "$host" | tr -c 'A-Za-z0-9_-' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')"
-  default="convertor-remote-${sug:-host}"
+  local default
+  default="convertor-remote"
   if [[ ! -t 0 ]]; then
     PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$default}"
     return
@@ -227,7 +224,12 @@ prompt_profiles() {
 
 write_env() {
   local host profiles_str token_quoted
-  host="${HOST_NAME:-$(hostname -s 2>/dev/null || hostname || echo remote)}"
+  host="${HOST_NAME:-}"
+  python3 - "$host" <<'PY'
+import re, sys
+if re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$", sys.argv[1]) is None:
+    raise SystemExit("HOST_NAME must be a nonempty lowercase DNS-label/FQDN")
+PY
   profiles_str="${SELECTED_PROFILES[*]}"
   token_quoted="$(env_dq "$TOKEN")"
   cat >"$WORK_DIR/.env" <<EOF
@@ -277,12 +279,47 @@ compose() {
   docker compose -f "$WORK_DIR/docker-compose.yml" --env-file "$WORK_DIR/.env" "$@"
 }
 
+activate_allowlist() {
+  local profile
+  local -a workers=()
+  for profile in "${SELECTED_PROFILES[@]}"; do
+    case "$profile" in
+      document) workers+=(worker-libreoffice) ;;
+      audio) workers+=(worker-ffmpeg-audio) ;;
+      video) workers+=(worker-ffmpeg-video) ;;
+      image) workers+=(worker-image) ;;
+      data) workers+=(worker-data) ;;
+      ai) workers+=(worker-ai) ;;
+    esac
+  done
+  [[ ${#workers[@]} -gt 0 ]] || die "allowlist cannot be empty"
+  if [[ -f "$WORK_DIR/allowlist.json" ]]; then
+    cp -f "$WORK_DIR/allowlist.json" "$WORK_DIR/allowlist.json.previous"
+  fi
+  python3 "$WORK_DIR/generate-allowlist.py" --output "$WORK_DIR/allowlist.json" $(printf -- '--worker %q ' "${workers[@]}")
+}
+
+rollback_allowlist() {
+  if [[ -f "$WORK_DIR/allowlist.json.previous" ]]; then
+    mv -f "$WORK_DIR/allowlist.json.previous" "$WORK_DIR/allowlist.json"
+    compose up -d --force-recreate host-telemetry >/dev/null 2>&1 || true
+  fi
+}
+
 bring_up() {
   profile_args
   info "pull образов (${SELECTED_PROFILES[*]})…"
   compose "${PROFILE_ARGS[@]}" pull
   info "up -d --force-recreate…"
-  compose "${PROFILE_ARGS[@]}" up -d --force-recreate --remove-orphans
+  if ! compose "${PROFILE_ARGS[@]}" up -d --force-recreate --remove-orphans; then
+    rollback_allowlist
+    return 1
+  fi
+  info "recreate collector with active allowlist…"
+  if ! compose up -d --wait --force-recreate host-telemetry; then
+    rollback_allowlist
+    return 1
+  fi
   compose ps
 }
 
@@ -305,12 +342,18 @@ case "$MODE" in
     API_BASE_URL="${API_BASE_URL:-$DEFAULT_API_BASE_URL}"
     preflight
     write_env
+    activate_allowlist
     bring_up
     info "готово. Логи: docker compose -f $WORK_DIR/docker-compose.yml --env-file $WORK_DIR/.env logs -f"
     info "обновление: bash $WORK_DIR/install.sh update"
     ;;
   update)
     load_env
+    python3 - "${HOST_NAME:-}" <<'PY'
+import re, sys
+if re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$", sys.argv[1]) is None:
+    raise SystemExit("HOST_NAME must be a nonempty lowercase DNS-label/FQDN")
+PY
     preflight
     # обновить companions из gist, если ID известен (необязательно)
     if [[ -n "${DEPLOY_GIST_ID:-}" ]]; then GIST_ID="$DEPLOY_GIST_ID"; fi
@@ -320,6 +363,7 @@ case "$MODE" in
       fetch_companions "$WORK_DIR" || echo "warn: не удалось обновить companions, продолжаем со старыми" >&2
       # .env не трогаем — fetch_companions его не перезаписывает
     fi
+    activate_allowlist
     bring_up
     info "update завершён"
     ;;

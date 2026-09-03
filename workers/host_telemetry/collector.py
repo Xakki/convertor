@@ -20,7 +20,7 @@ def validate_host_name(value: str | None) -> str | None:
 
 
 class HostTelemetryCollector:
-    """Collect only the public host counters and allowlisted worker counters."""
+    """Collect only public host counters and allowlisted worker counters."""
 
     def __init__(self, host_name: str | None, allowlist_path: Path, root: Path = Path("/"), clock=time.time):
         self.host_name = validate_host_name(host_name)
@@ -36,10 +36,8 @@ class HostTelemetryCollector:
         allowlist = self._load_allowlist()
         self._last_collected = now
         mem = self._read_meminfo()
-        stat = self._read_stat()
         load = self._read_load()
         disk = self._read_disk()
-        workers = self._read_workers(allowlist)
         return {
             "contractVersion": HOST_TELEMETRY_VERSION,
             "host": self.host_name,
@@ -47,18 +45,18 @@ class HostTelemetryCollector:
             "freshUntil": now + 1200,
             "source": "host-collector",
             "scope": "host",
-            "cpuCount": os.cpu_count(),
+            "cpuCount": self._read_cpu_count(),
             "memTotalBytes": mem[0],
             "memAvailableBytes": mem[1],
             "diskTotalBytes": disk[0],
             "diskUsedBytes": disk[1],
             "load1": load,
-            "workers": workers,
+            "workers": self._read_workers(allowlist),
         }
 
     def _load_allowlist(self) -> dict[str, Any]:
         raw = json.loads(self.allowlist_path.read_text(encoding="utf-8"))
-        if raw.get("version") != 1 or not isinstance(raw.get("workers"), dict):
+        if raw.get("version") != 1 or raw.get("provenance", {}).get("source") != "deployment" or not isinstance(raw.get("workers"), dict) or not raw["workers"]:
             raise ValueError("invalid allowlist")
         for name, rel in raw["workers"].items():
             if not isinstance(name, str) or not isinstance(rel, str) or not rel or rel.startswith("/") or any(part in {"..", "."} for part in Path(rel).parts):
@@ -79,30 +77,40 @@ class HostTelemetryCollector:
             pass
         return vals.get("MemTotal"), vals.get("MemAvailable")
 
-    def _read_stat(self) -> str | None:
-        try:
-            return self._read("/proc/stat")
-        except OSError:
-            return None
-
     def _read_load(self) -> float | None:
         try:
             return float(self._read("/proc/loadavg").split()[0])
         except (OSError, ValueError, IndexError):
             return None
 
+    def _read_cpu_count(self) -> int | None:
+        try:
+            possible = self._read("/sys/devices/system/cpu/possible").strip()
+            count = 0
+            for part in possible.split(","):
+                bounds = [int(value) for value in part.split("-")]
+                count += bounds[-1] - bounds[0] + 1
+            return count if count > 0 else None
+        except (OSError, ValueError, IndexError):
+            pass
+        try:
+            count = sum(1 for line in self._read("/proc/stat").splitlines() if re.match(r"^cpu[0-9]+ ", line))
+            return count or None
+        except OSError:
+            return None
+
     def _read_disk(self) -> tuple[int | None, int | None]:
         try:
-            st = os.statvfs(self.root)
-            total = st.f_blocks * st.f_frsize
-            free = st.f_bavail * st.f_frsize
+            stat = os.statvfs(self.root / "root")
+            total = stat.f_blocks * stat.f_frsize
+            free = stat.f_bavail * stat.f_frsize
             return total, total - free
         except OSError:
             return None, None
 
     def _read_workers(self, allowlist: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        root = self.root.resolve()
+        root = (self.root / "sys/fs/cgroup").resolve()
         for worker, rel in allowlist.items():
             path = (root / rel).resolve()
             if root not in path.parents or not path.is_dir():
@@ -112,7 +120,8 @@ class HostTelemetryCollector:
                 cpu = None
                 for line in (path / "cpu.stat").read_text().splitlines():
                     if line.startswith("usage_usec "):
-                        cpu = int(line.split()[1]); break
+                        cpu = int(line.split()[1])
+                        break
                 memory = int((path / "memory.current").read_text().strip())
                 result[worker] = {"cpuUsageUsec": cpu, "memoryBytes": memory}
             except (OSError, ValueError, IndexError):

@@ -32,7 +32,7 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-cp "$DEPLOY/docker-compose.yml" "$DEPLOY/.env.example" "$DEPLOY/README.md" "$tmp/"
+cp "$DEPLOY/docker-compose.yml" "$DEPLOY/.env.example" "$DEPLOY/README.md" "$DEPLOY/generate-allowlist.py" "$tmp/"
 # В публикуемой копии подставляем дефолты GIST_ID/OWNER (env override сохраняется).
 sed \
   -e "s/^GIST_ID=\"\${DEPLOY_GIST_ID:-}\"/GIST_ID=\"\${DEPLOY_GIST_ID:-${DEPLOY_GIST_ID}}\"/" \
@@ -45,11 +45,13 @@ jq -n \
   --rawfile compose "$tmp/docker-compose.yml" \
   --rawfile envex "$tmp/.env.example" \
   --rawfile install "$tmp/install.sh" \
+  --rawfile allowlistgen "$tmp/generate-allowlist.py" \
   --rawfile readme "$tmp/README.md" \
   '{files:{
     "docker-compose.yml":{content:$compose},
     ".env.example":{content:$envex},
     "install.sh":{content:$install},
+    "generate-allowlist.py":{content:$allowlistgen},
     "README.md":{content:$readme}
   }}' | gh api -X PATCH "/gists/${DEPLOY_GIST_ID}" --input - >/dev/null
 

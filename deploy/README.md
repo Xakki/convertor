@@ -72,7 +72,8 @@ curl -fsSL https://gist.githubusercontent.com/<OWNER>/<GIST_ID>/raw/install.sh |
 ## Создание gist (один раз, вручную)
 
 1. Создать **публичный** gist с файлами из `deploy/`:
-   `docker-compose.yml`, `.env.example`, `install.sh`, `README.md`.
+   `docker-compose.yml`, `.env.example`, `install.sh`,
+   `generate-allowlist.py`, `README.md`.
 2. Прописать в корневом `.env.local` (в трекаемом `.env` плейсхолдеры пустые):
    ```bash
    DEPLOY_GIST_ID=<gist-id>

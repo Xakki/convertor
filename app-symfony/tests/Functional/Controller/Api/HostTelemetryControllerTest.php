@@ -51,6 +51,19 @@ final class HostTelemetryControllerTest extends WebTestCase
             'observedAt'      => time() - 1201,
         ], JSON_THROW_ON_ERROR));
         self::assertSame(400, $client->getResponse()->getStatusCode());
+
+        $client->request('POST', '/api/v1/internal/host-telemetry', server: $headers, content: json_encode([
+            'host' => self::HOST, 'contractVersion' => 1, 'observedAt' => -1,
+        ], JSON_THROW_ON_ERROR));
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+
+        $client->request('POST', '/api/v1/internal/host-telemetry', server: $headers, content: json_encode([
+            'host' => self::HOST, 'contractVersion' => 1, 'observedAt' => time() + 1,
+        ], JSON_THROW_ON_ERROR));
+        self::assertSame(400, $client->getResponse()->getStatusCode());
+
+        $client->request('POST', '/api/v1/internal/host-telemetry', server: $headers, content: str_repeat('x', 65537));
+        self::assertSame(413, $client->getResponse()->getStatusCode());
     }
 
     public function testValidIngestStoresExactHostAndLatestSnapshot(): void
