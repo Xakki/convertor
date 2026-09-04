@@ -106,18 +106,19 @@ host.
 - Tests cover malformed/partial payload, stale snapshot, unavailable source,
   mixed hosts, capacity/percentage formulas, rounding, admin authorization,
   latest-only retention, rate/freshness limits and unchanged routing matrix.
-- Collector delivery uses an outbound-only authenticated gateway telemetry
-  channel. The collector authenticates to the gateway with the existing worker
-  credential, `WORKER_API_TOKEN`; it never receives `GATEWAY_INTERNAL_TOKEN`.
-  The gateway must still validate strict `HOST_NAME` payload binding and
-  telemetry frame scope, rate, body and freshness limits before relaying
-  accepted telemetry to Symfony with its existing server-side internal
-  credential. The collector's reused worker credential cannot directly call
-  Symfony internal routes. The current shared token does not support per-host
-  credential revoke, rotate or quarantine; those per-host lifecycle claims are
-  superseded/deferred until worker credentials are separated. Do not claim
-  least privilege or one-host revocation. Preserve the remote outbound-only
-  and no-Docker-socket constraints.
+- Collector delivery uses an outbound-only gateway telemetry channel
+  authenticated with the existing shared worker credential, `WORKER_API_TOKEN`;
+  the collector never receives `GATEWAY_INTERNAL_TOKEN` and cannot directly call
+  Symfony internal routes. The gateway validates the telemetry frame scope,
+  `HOST_NAME` format, rate, body and freshness limits before relaying accepted
+  telemetry to Symfony with its existing server-side internal credential.
+  `HOST_NAME` is only a validated client assertion and payload/latest-only key,
+  not authenticated host identity: a compromised shared token can forge a
+  snapshot for another known host. Do not claim authenticated host binding,
+  least privilege, per-host revoke, rotate or quarantine for this temporary
+  remote path; those capabilities are deferred to
+  `[[CNV-139-per-host-worker-credentials-lifecycle]]`. Preserve the remote
+  outbound-only and no-Docker-socket constraints.
 
 **Decisions:**
 - 2026-09-01: duplicate implementation card не найдена. `CNV-35`/`CNV-69`
@@ -187,16 +188,19 @@ host.
   `GATEWAY_INTERNAL_TOKEN` or shared `WORKER_API_TOKEN`; installer and secret
   material is collector-scoped, not a public CLI, gist or general worker env.
   Credential issuance, storage and enrollment mechanics remain undecided.
-- 2026-09-04: user-approved superseding credential decision — the collector
-  reuses the existing worker credential, `WORKER_API_TOKEN`, only toward the
-  gateway telemetry channel; it never receives `GATEWAY_INTERNAL_TOKEN` and
-  cannot directly call Symfony internal routes. The gateway still validates
-  strict `HOST_NAME` payload binding plus telemetry frame scope, rate, body and
-  freshness limits. The current shared token does not provide per-host revoke,
-  rotate or quarantine, so those per-host lifecycle claims are
-  superseded/deferred until worker credentials are separated. This decision
-  makes no least-privilege or one-host-revocation claim and preserves the
-  remote outbound-only/no-Docker-socket constraints.
+- 2026-09-04: user-approved superseding clarification for the temporary remote
+  telemetry path — reuse the shared `WORKER_API_TOKEN` only toward the gateway
+  telemetry channel; it never receives `GATEWAY_INTERNAL_TOKEN` and cannot
+  directly call Symfony internal routes. The gateway validates `HOST_NAME`
+  syntax plus telemetry frame scope, rate, body and freshness limits, but does
+  not authenticate the asserted host identity. A compromised shared token can
+  forge snapshots for another known host. Exact `HOST_NAME` propagation and
+  exact-key latest-only retention remain data validation semantics, not proof of
+  host identity. Authenticated host binding and per-host credential
+  rotate/revoke/quarantine are deferred remediation owned by
+  `[[CNV-139-per-host-worker-credentials-lifecycle]]`; no least-privilege or
+  one-host-revocation claim is made. Remote outbound-only and no-Docker-socket
+  controls are preserved.
 
 **Dependencies:**
 - Uses `[[CNV-35-registry-08-worker-observability]]` and
