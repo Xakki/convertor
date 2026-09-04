@@ -160,10 +160,20 @@ happy path: `git pull && make workers-pull && make workers-recreate`) — `alway
 
 ## Получение образов
 
-**Happy path — образы уже в Harbor, собирать ничего не нужно:**
+**Happy path для remote/uBook — образы уже в Harbor, собирать ничего не нужно:**
 
 ```bash
 git pull && make workers-pull && make workers-recreate
+```
+
+На `saVpn` эти общие targets без явного профиля использовать нельзя: они
+выбирают полный набор профиля по умолчанию. Безопасная последовательность для
+`saVpn` всегда задаёт точный allowlist из двух сервисов:
+
+```bash
+git pull
+make workers-pull WORKER_RECREATE_PROFILE=saVpn WORKER_RECREATE_SERVICES="worker-data worker-image"
+make workers-recreate WORKER_RECREATE_PROFILE=saVpn WORKER_RECREATE_SERVICES="worker-data worker-image"
 ```
 
 `make workers-pull` использует те же параметры и allowlist, что и
@@ -235,9 +245,17 @@ Compose профиль `ai` и запускает CPU-вариант по умо
 только `ai`, если AI на этом хосте не запускается. Профили `server`, `api` и
 `monitoring` на таких хостах не нужны.
 
-Обновление (happy path — pull, без сборки):
+Обновление remote/uBook (happy path — pull, без сборки):
 ```bash
 git pull && make workers-pull && make workers-recreate
+```
+
+Обновление `saVpn` (только `worker-data` и `worker-image`, без других
+воркеров):
+```bash
+git pull
+make workers-pull WORKER_RECREATE_PROFILE=saVpn WORKER_RECREATE_SERVICES="worker-data worker-image"
+make workers-recreate WORKER_RECREATE_PROFILE=saVpn WORKER_RECREATE_SERVICES="worker-data worker-image"
 ```
 
 Обновление после локальной пересборки (фолбэк, см. «Получение образов»):

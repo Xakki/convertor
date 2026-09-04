@@ -67,3 +67,9 @@
 - Полный `make TEST=1 test-drift` выявил два предсуществующих CNV-137 version-contract failure (`APP_VER=0.1.2` ожидается тестами, текущий baseline — `0.2.0`); в CNV-124 не исправлялись.
 - `.env` и `.env.local_worker_example` содержат только non-secret profile configuration; secret values не изменялись и не раскрывались.
 - Передача ограничена независимым implementation review: merge, push, release/build и saVpn rollout не выполнялись.
+- 2026-09-05 repair: generic remote/uBook commands are now explicitly separated from
+  `saVpn`; documented `saVpn` pull/recreate commands pass the exact
+  `worker-data worker-image` allowlist. Regression test executes both documented
+  invocations and asserts no other worker is selected. Targeted test, config-check,
+  docker-check and card lint pass; full test-drift still has the two pre-existing
+  CNV-140 version-contract failures.

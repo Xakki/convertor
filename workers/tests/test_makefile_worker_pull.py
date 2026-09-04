@@ -103,6 +103,34 @@ def test_workers_pull_rejects_disallowed_service_before_compose(tmp_path: Path) 
     assert "compose" not in result.log  # type: ignore[attr-defined]
 
 
+def test_documented_savpn_pull_and_recreate_select_only_data_and_image(tmp_path: Path) -> None:
+    docs = (ROOT_DIR / "docs" / "workers-remote-deploy.md").read_text(encoding="utf-8")
+    documented_args = (
+        "WORKER_RECREATE_PROFILE=saVpn",
+        'WORKER_RECREATE_SERVICES="worker-data worker-image"',
+    )
+    make_args = (
+        "WORKER_RECREATE_PROFILE=saVpn",
+        "WORKER_RECREATE_SERVICES=worker-data worker-image",
+    )
+    assert "make workers-pull " + " ".join(documented_args) in docs
+    assert "make workers-recreate " + " ".join(documented_args) in docs
+
+    pull = _run_make(tmp_path, "workers-pull", *make_args)
+    assert pull.returncode == 0, pull.stderr
+    assert "PULL:compose pull worker-data worker-image" in pull.log  # type: ignore[attr-defined]
+    assert "worker-libreoffice" not in pull.log  # type: ignore[attr-defined]
+    assert "worker-ffmpeg" not in pull.log  # type: ignore[attr-defined]
+    assert "worker-ai" not in pull.log  # type: ignore[attr-defined]
+
+    recreate = _run_make(tmp_path, "workers-recreate", *make_args)
+    assert recreate.returncode == 0, recreate.stderr
+    assert "up -d --force-recreate --no-deps worker-data worker-image" in recreate.log  # type: ignore[attr-defined]
+    assert "worker-libreoffice" not in recreate.log  # type: ignore[attr-defined]
+    assert "worker-ffmpeg" not in recreate.log  # type: ignore[attr-defined]
+    assert "worker-ai" not in recreate.log  # type: ignore[attr-defined]
+
+
 def test_workers_recreate_service_selects_only_its_profile(tmp_path: Path) -> None:
     result = _run_make(tmp_path, "workers-recreate", "SERVICE=worker-data")
 
