@@ -203,7 +203,7 @@ workers-pull: validate-ai-image ## Pull только worker-образы: WORKER
 	images="$$(COMPOSE_PROFILES="$$compose_profiles" $(DC) config --images)"; \
 	for service in $$requested; do if ! printf '%s\n' "$$available" | grep -Fqx "$$service"; then echo "workers-pull: service '$$service' is not in the effective Compose service set"; exit 2; fi; done; \
 	case " $$requested " in *" worker-ai "*) printf '%s\n' "$$images" | grep -Fqx "$(IMG)/worker-ai-cpu:$(IMAGE_TAG)" || { echo "workers-pull: worker-ai must render $(IMG)/worker-ai-cpu:$(IMAGE_TAG)"; exit 2; } ;; esac; \
-	COMPOSE_PROFILES="$$compose_profiles" $(DC) pull $$requested
+	COMPOSE_PROFILES="$$compose_profiles" $(DC) pull $$requested; $(MAKE) WORKER_SERVICES="$$requested" host-telemetry-refresh
 
 .PHONY: workers-recreate
 workers-recreate: validate-ai-image ## Recreate только worker-образы: WORKER_RECREATE_PROFILE=remote|local|uBook|saVpn; опционально WORKER_RECREATE_SERVICES=<allowlist>
@@ -223,7 +223,7 @@ workers-recreate: validate-ai-image ## Recreate только worker-образы
 	echo "workers-recreate: profile=$(WORKER_RECREATE_PROFILE) effective services=$$effective compose_profiles=$${compose_profiles:-none}"; \
 	available="$$(COMPOSE_PROFILES="$$compose_profiles" $(DC) config --services)"; \
 	for service in $$effective; do if ! printf '%s\n' "$$available" | grep -Fqx "$$service"; then echo "workers-recreate: service '$$service' is not in the effective Compose service set"; exit 2; fi; done; \
-	COMPOSE_PROFILES="$$compose_profiles" $(DC) up -d --force-recreate --no-deps $$effective
+	COMPOSE_PROFILES="$$compose_profiles" $(DC) up -d --force-recreate --no-deps $$effective; $(MAKE) WORKER_SERVICES="$$effective" host-telemetry-refresh
 
 .PHONY: worker-api-pull
 worker-api-pull: validate-ai-image ## Pull только production worker-api image (server,api profiles)

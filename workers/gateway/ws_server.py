@@ -34,6 +34,7 @@ import logging
 import math
 import re
 import time
+from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -54,6 +55,46 @@ HOST_TELEMETRY_TYPE = "telemetry"
 _HOST_NAME_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$")
 _HOST_TELEMETRY_MAX_BODY = 65536
 _HOST_TELEMETRY_MAX_AGE = 1200
+_HOST_TELEMETRY_INTERVAL = 600
+_HOST_TELEMETRY_MAX_CONNECTIONS = 64
+_HOST_TELEMETRY_MAX_CONNECTIONS_PER_INTERVAL = 256
+_HOST_TELEMETRY_MAX_HOSTS = 1024
+
+
+class TelemetryIngressLimiter:
+    """Bound shared-token telemetry connections and asserted-host frames."""
+
+    def __init__(self, clock=time.time) -> None:
+        self.clock = clock
+        self.active_connections = 0
+        self.connection_times: deque[float] = deque()
+        self.host_times: dict[str, float] = {}
+
+    def allow_connection(self, now: float | None = None) -> bool:
+        now = float(self.clock() if now is None else now)
+        cutoff = now - _HOST_TELEMETRY_INTERVAL
+        while self.connection_times and self.connection_times[0] <= cutoff:
+            self.connection_times.popleft()
+        if self.active_connections >= _HOST_TELEMETRY_MAX_CONNECTIONS:
+            return False
+        if len(self.connection_times) >= _HOST_TELEMETRY_MAX_CONNECTIONS_PER_INTERVAL:
+            return False
+        self.active_connections += 1
+        self.connection_times.append(now)
+        return True
+
+    def release_connection(self) -> None:
+        self.active_connections = max(0, self.active_connections - 1)
+
+    def allow_frame(self, host: str, now: float | None = None) -> bool:
+        now = float(self.clock() if now is None else now)
+        previous = self.host_times.get(host)
+        if previous is None and len(self.host_times) >= _HOST_TELEMETRY_MAX_HOSTS:
+            return False
+        if previous is not None and now - previous < _HOST_TELEMETRY_INTERVAL:
+            return False
+        self.host_times[host] = now
+        return True
 
 
 def _validate_host_telemetry(snapshot: object) -> dict | None:
@@ -203,6 +244,7 @@ class WsGateway:
         keydb: KeyDbGateway,
         relay: RelayClient | None = None,
         liveness: LivenessAggregator | None = None,
+        telemetry_limiter: TelemetryIngressLimiter | None = None,
     ) -> None:
         self._cfg = cfg
         self._keydb = keydb
@@ -210,6 +252,7 @@ class WsGateway:
         # None → собственный агрегатор (registry-06); инжектируется в тестах,
         # чтобы assert'ить на нём напрямую без гонки с реальным push-циклом.
         self._liveness = liveness if liveness is not None else LivenessAggregator()
+        self._telemetry_limiter = telemetry_limiter or TelemetryIngressLimiter()
         # Per-type handoff-очереди для idle-reclaim (s1-06): reclaim-цикл кладёт
         # переклеймленные записи, _dispatch забирает их до reclaim_stale/read_new.
         # Без maxsize — очередь органически ограничена: каждый цикл XAUTOCLAIM
@@ -316,7 +359,13 @@ class WsGateway:
         if session is None:
             return
         if session.worker_type == HOST_TELEMETRY_TYPE:
-            await self._read_host_telemetry(ws)
+            if not self._telemetry_limiter.allow_connection():
+                await ws.close(CLOSE_POLICY_VIOLATION, "telemetry rate limit")
+                return
+            try:
+                await self._read_host_telemetry(ws)
+            finally:
+                self._telemetry_limiter.release_connection()
             return
 
         logger.info(
@@ -371,6 +420,9 @@ class WsGateway:
             snapshot = _validate_host_telemetry(snapshot)
             if snapshot is None:
                 await ws.close(CLOSE_POLICY_VIOLATION, "invalid host telemetry")
+                return
+            if not self._telemetry_limiter.allow_frame(snapshot["host"]):
+                await ws.close(CLOSE_POLICY_VIOLATION, "telemetry rate limit")
                 return
             if await self._get_relay().post_host_telemetry(snapshot):
                 await ws.send(json.dumps({"type": "host-telemetry-ack"}))

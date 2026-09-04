@@ -33,6 +33,7 @@ DEFAULT_GATEWAY_WS_URL="wss://convertor.xakki.pro/ws/worker/"
 DEFAULT_API_BASE_URL="https://convertor.xakki.pro"
 DEFAULT_IMAGE_NS="harbor.xakki.ru/convertor"
 DEFAULT_INSTALL_DIR="${HOME}/convertor-workers"
+DEFAULT_HOST_ROOT_PROBE_DIR="/var/lib/convertor/host-root-probe"
 
 MODE="${1:-install}"
 case "$MODE" in
@@ -238,6 +239,7 @@ WORKER_API_TOKEN=${token_quoted}
 COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 WORKER_PROFILES=${profiles_str}
 HOST_NAME=${host}
+HOST_ROOT_PROBE_DIR=${HOST_ROOT_PROBE_DIR:-$DEFAULT_HOST_ROOT_PROBE_DIR}
 GATEWAY_WS_URL=${GATEWAY_WS_URL:-$DEFAULT_GATEWAY_WS_URL}
 API_BASE_URL=${API_BASE_URL:-$DEFAULT_API_BASE_URL}
 IMAGE_NS=${IMAGE_NS:-$DEFAULT_IMAGE_NS}
@@ -250,6 +252,15 @@ TZ=${TZ:-UTC}
 EOF
   chmod 600 "$WORK_DIR/.env"
   info "записан $WORK_DIR/.env"
+}
+
+ensure_host_root_probe() {
+  HOST_ROOT_PROBE_DIR="${HOST_ROOT_PROBE_DIR:-$DEFAULT_HOST_ROOT_PROBE_DIR}"
+  mkdir -p "$HOST_ROOT_PROBE_DIR"
+  local root_device probe_device
+  root_device="$(df -P / | awk 'NR==2 {print $1}')"
+  probe_device="$(df -P "$HOST_ROOT_PROBE_DIR" | awk 'NR==2 {print $1}')"
+  [[ -n "$root_device" && "$root_device" = "$probe_device" ]] || die "HOST_ROOT_PROBE_DIR must be on the host root filesystem"
 }
 
 load_env() {
@@ -315,6 +326,11 @@ bring_up() {
     rollback_allowlist
     return 1
   fi
+  info "generate actual cgroup allowlist…"
+  if ! activate_allowlist; then
+    rollback_allowlist
+    return 1
+  fi
   info "recreate collector with active allowlist…"
   if ! compose up -d --wait --force-recreate host-telemetry; then
     rollback_allowlist
@@ -341,8 +357,8 @@ case "$MODE" in
     GATEWAY_WS_URL="${GATEWAY_WS_URL:-$DEFAULT_GATEWAY_WS_URL}"
     API_BASE_URL="${API_BASE_URL:-$DEFAULT_API_BASE_URL}"
     preflight
+    ensure_host_root_probe
     write_env
-    activate_allowlist
     bring_up
     info "готово. Логи: docker compose -f $WORK_DIR/docker-compose.yml --env-file $WORK_DIR/.env logs -f"
     info "обновление: bash $WORK_DIR/install.sh update"
@@ -355,6 +371,7 @@ if re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[
     raise SystemExit("HOST_NAME must be a nonempty lowercase DNS-label/FQDN")
 PY
     preflight
+    ensure_host_root_probe
     # обновить companions из gist, если ID известен (необязательно)
     if [[ -n "${DEPLOY_GIST_ID:-}" ]]; then GIST_ID="$DEPLOY_GIST_ID"; fi
     if [[ -n "${DEPLOY_GIST_OWNER:-}" ]]; then GIST_OWNER="$DEPLOY_GIST_OWNER"; fi

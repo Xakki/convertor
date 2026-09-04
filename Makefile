@@ -66,8 +66,9 @@ init: build up migrate ## First-time setup: build + up + migrate (планы с�
 	@echo -e "$(GREEN)Project initialised!$(RESET)"
 
 .PHONY: up
-up: host-telemetry-validate validate-ai-image ## Start stack и дождаться healthy — ГЛАВНЫЙ СЕРВЕР (remote-хосты: workers-recreate)
+up: host-root-probe validate-ai-image ## Start stack и дождаться healthy — ГЛАВНЫЙ СЕРВЕР (remote-хосты: workers-recreate)
 	$(DC) up -d --wait
+	$(MAKE) host-telemetry-refresh
 
 .PHONY: down
 down: ## Stop & remove containers — ГЛАВНЫЙ СЕРВЕР (remote-хосты гасят свои воркеры)
@@ -132,15 +133,27 @@ logs-%: ## Tail logs for a specific service (make logs-php)
 	$(DC) logs -f $*
 
 .PHONY: host-telemetry-validate
-host-telemetry-allowlist:
-	@python3 deploy/generate-allowlist.py --output deploy/allowlist.json $(foreach svc,$(WORKER_SERVICES),--worker $(svc))
+.PHONY: host-root-probe
+HOST_ROOT_PROBE_DIR ?= $(CURDIR)/.host-root-probe
+host-root-probe:
+	@mkdir -p "$(HOST_ROOT_PROBE_DIR)"
+	@test "$$(df -P / | awk 'NR==2 {print $$1}')" = "$$(df -P "$(HOST_ROOT_PROBE_DIR)" | awk 'NR==2 {print $$1}')" || { echo "host probe must be on root filesystem" >&2; exit 1; }
 
-host-telemetry-validate: host-telemetry-allowlist ## Validate canonical host identity and collector allowlist
-	@python3 -c 'import json,os,re; h=os.getenv("HOST_NAME", ""); assert re.fullmatch(r"(?=.{1,253}$$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*",h), "HOST_NAME must be lowercase DNS-label/FQDN"; a=json.load(open("deploy/allowlist.json")); assert a.get("version")==1 and a.get("provenance",{}).get("source")=="deployment" and isinstance(a.get("workers"),dict)'
+host-telemetry-allowlist: host-root-probe
+	@python3 deploy/generate-allowlist.py --output deploy/allowlist.json --docker-project "$(COMPOSE_PROJECT_NAME)" --cgroup-root /sys/fs/cgroup $(foreach svc,$(WORKER_SERVICES),--worker $(svc))
+
+host-telemetry-refresh: host-root-probe
+	@set -eu; backup=$$(mktemp); trap 'rm -f "$$backup"' EXIT; \
+	if [ -f deploy/allowlist.json ]; then cp deploy/allowlist.json "$$backup"; else : > "$$backup"; fi; \
+	if ! $(MAKE) host-telemetry-allowlist; then [ ! -s "$$backup" ] || cp "$$backup" deploy/allowlist.json; exit 1; fi; \
+	if ! $(DC) up -d --wait --force-recreate host-telemetry; then [ ! -s "$$backup" ] || cp "$$backup" deploy/allowlist.json; \
+	  [ ! -s "$$backup" ] || $(DC) up -d --force-recreate host-telemetry; exit 1; fi
+
+host-telemetry-validate: host-root-probe ## Validate canonical host identity and collector probe
+	@python3 -c 'import os,re; h=os.getenv("HOST_NAME", ""); assert re.fullmatch(r"(?=.{1,253}$$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*",h), "HOST_NAME must be lowercase DNS-label/FQDN"'
 
 .PHONY: host-telemetry-up
-host-telemetry-up: host-telemetry-validate
-	$(DC) up -d --force-recreate host-telemetry
+host-telemetry-up: host-telemetry-validate host-telemetry-refresh
 
 .PHONY: host-telemetry-recreate
 host-telemetry-recreate: host-telemetry-up

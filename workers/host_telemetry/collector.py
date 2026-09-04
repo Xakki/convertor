@@ -22,11 +22,12 @@ def validate_host_name(value: str | None) -> str | None:
 class HostTelemetryCollector:
     """Collect only public host counters and allowlisted worker counters."""
 
-    def __init__(self, host_name: str | None, allowlist_path: Path, root: Path = Path("/"), clock=time.time):
+    def __init__(self, host_name: str | None, allowlist_path: Path, root: Path = Path("/"), clock=time.time, disk_probe: str = "/root-probe"):
         self.host_name = validate_host_name(host_name)
         self.allowlist_path = allowlist_path
         self.root = root
         self.clock = clock
+        self.disk_probe = disk_probe
         self._last_collected: float | None = None
 
     def collect(self) -> dict[str, Any] | None:
@@ -101,7 +102,10 @@ class HostTelemetryCollector:
 
     def _read_disk(self) -> tuple[int | None, int | None]:
         try:
-            stat = os.statvfs(self.root / "root")
+            probe = Path(self.disk_probe)
+            if not probe.is_absolute() or any(part in {"..", "."} for part in probe.parts):
+                return None, None
+            stat = os.statvfs(self.root / probe.relative_to("/"))
             total = stat.f_blocks * stat.f_frsize
             free = stat.f_bavail * stat.f_frsize
             return total, total - free

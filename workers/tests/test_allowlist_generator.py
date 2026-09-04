@@ -12,28 +12,40 @@ spec.loader.exec_module(module)
 
 def test_allowlist_is_versioned_and_provenanced(tmp_path: Path):
     output = tmp_path / "allowlist.json"
-    data = module.build(["worker-data", "worker-image"])
-    module.validate(data)
+    cgroup_root = tmp_path / "cgroup"
+    (cgroup_root / "compose/data").mkdir(parents=True)
+    (cgroup_root / "compose/image").mkdir()
+    data = module.build(["worker-data", "worker-image"], {"worker-data": "compose/data", "worker-image": "compose/image"})
+    module.validate(data, cgroup_root)
     output.write_text(json.dumps(data))
     loaded = json.loads(output.read_text())
     assert loaded["version"] == 1
     assert loaded["provenance"]["source"] == "deployment"
     assert loaded["workers"] == {
-        "worker-data": "convertor-workers/worker-data",
-        "worker-image": "convertor-workers/worker-image",
+        "worker-data": "compose/data",
+        "worker-image": "compose/image",
     }
 
 
 def test_allowlist_rejects_empty_and_metadata_paths():
     try:
-        module.build([])
+        module.build([], {})
     except ValueError:
         pass
     else:
         raise AssertionError("empty allowlist accepted")
     try:
-        module.validate({"version": 1, "provenance": {"source": "deployment"}, "workers": {"x": "docker/containers/id"}})
+        module.validate({"version": 1, "provenance": {"source": "deployment"}, "workers": {"x": "../proc"}})
     except ValueError:
         pass
     else:
         raise AssertionError("metadata path accepted")
+
+
+def test_allowlist_requires_actual_mapping():
+    try:
+        module.build(["worker-data"])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("fictional mapping accepted")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -28,6 +29,10 @@ elif [ "$1" = compose ] && [ "$2" = config ] && [ "$3" = --images ]; then
         server,api) printf '%s\\n' harbor.test/convertor/php:latest harbor.test/convertor/worker-api:latest ;;
         *) printf '%s\\n' harbor.test/convertor/worker-data:latest harbor.test/convertor/worker-image:latest ;;
     esac
+elif [ "$1" = compose ] && [ "$2" = -p ] && [ "$4" = ps ] && [ "$5" = -q ]; then
+    printf 'fake-container\\n'
+elif [ "$1" = inspect ]; then
+    printf '1\\n'
 elif [ "$1" = compose ] && [ "$2" = pull ]; then
     printf 'PULL:%s\\n' "$*" >> "${FAKE_LOG}"
 fi
@@ -35,6 +40,7 @@ fi
         encoding="utf-8",
     )
     fake_docker.chmod(0o755)
+    probe_dir = Path(tempfile.mkdtemp(prefix="convertor-test-root-probe-", dir="/var/tmp"))
     log = tmp_path / "compose.log"
     env = os.environ | {
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
@@ -43,6 +49,8 @@ fi
         "IMAGE_TAG": "latest",
         # This reproduces the shell value that must not leak into scoped pulls.
         "COMPOSE_PROFILES": "server,backup,monitoring",
+        # Keep the harness probe on the same filesystem as /, not tmp_path (/tmp).
+        "HOST_ROOT_PROBE_DIR": str(probe_dir),
     }
     result = subprocess.run(
         ["make", "--no-print-directory", "IMAGE_NS=harbor.test/convertor", "IMAGE_TAG=latest", *make_args],

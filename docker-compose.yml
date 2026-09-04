@@ -66,6 +66,7 @@ services:
         cap_drop: [ALL]
         environment:
             HOST_NAME: ${HOST_NAME}
+            HOST_ROOT_PROBE_PATH: /root-probe
             ALLOWLIST_PATH: /etc/convertor/allowlist.json
             GATEWAY_WS_URL: ${GATEWAY_WS_URL:-wss://convertor.xakki.pro/ws/worker/}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
@@ -73,7 +74,7 @@ services:
             - /proc:/host/proc:ro
             - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
             - ./deploy/allowlist.json:/etc/convertor/allowlist.json:ro
-            - /:/host/root:ro
+            - ${HOST_ROOT_PROBE_DIR:-/var/lib/convertor/host-root-probe}:/host/root-probe:ro
 
     # Профиль `server` (php/cron/mariadb/keydb/nginx/ws-gateway) — серверная часть.
     # Remote worker-хост его НЕ активирует: там `make up` поднимает только воркеров

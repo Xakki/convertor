@@ -19,7 +19,7 @@ def test_snapshot_is_bounded_and_rate_limited(tmp_path: Path):
     (root / "proc/loadavg").write_text("2.0 1 1 1/1 1\n")
     (root / "sys/devices/system/cpu").mkdir(parents=True)
     (root / "sys/devices/system/cpu/possible").write_text("0-3\n")
-    (root / "root").mkdir()
+    (root / "root-probe").mkdir()
     allowlist = tmp_path / "allowlist.json"
     allowlist.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment"}, "workers": {"worker-data": "convertor-workers/worker-data"}}))
     clock = iter([1000.0, 1001.0, 1600.0]).__next__
@@ -74,3 +74,12 @@ def test_worker_symlink_cannot_escape_collector_root(tmp_path: Path):
     result = HostTelemetryCollector("host.example", allowlist, tmp_path).collect()
 
     assert result["workers"]["x"] == {"cpuUsageUsec": None, "memoryBytes": None}
+
+
+def test_gateway_telemetry_ingress_is_bounded_and_per_host():
+    limiter = ws_server.TelemetryIngressLimiter(clock=lambda: 1000.0)
+    assert limiter.allow_connection(1000.0)
+    assert limiter.allow_frame("host.example", 1000.0)
+    assert not limiter.allow_frame("host.example", 1001.0)
+    assert limiter.allow_frame("other.example", 1001.0)
+    limiter.release_connection()

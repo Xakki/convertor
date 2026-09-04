@@ -22,6 +22,7 @@ services:
         tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
         environment:
             HOST_NAME: ${HOST_NAME}
+            HOST_ROOT_PROBE_PATH: /root-probe
             ALLOWLIST_PATH: /etc/convertor/allowlist.json
             GATEWAY_WS_URL: ${GATEWAY_WS_URL:-wss://convertor.xakki.pro/ws/worker/}
             WORKER_API_TOKEN: ${WORKER_API_TOKEN}
@@ -29,7 +30,7 @@ services:
             - /proc:/host/proc:ro
             - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
             - /sys/devices/system/cpu:/host/sys/devices/system/cpu:ro
-            - /:/host/root:ro
+            - ${HOST_ROOT_PROBE_DIR:-/var/lib/convertor/host-root-probe}:/host/root-probe:ro
             - ./allowlist.json:/etc/convertor/allowlist.json:ro
         healthcheck:
             test: ["CMD", "python3", "-c", "import json; x=json.load(open('/etc/convertor/allowlist.json')); assert x.get('version') == 1 and x.get('provenance', {}).get('source') == 'deployment' and x.get('workers')"]

@@ -38,7 +38,12 @@ async def deliver_snapshot(snapshot: dict, gateway_url: str, token: str, host_na
 
 def main() -> None:
     host_name = os.getenv("HOST_NAME")
-    collector = HostTelemetryCollector(host_name, Path(os.getenv("ALLOWLIST_PATH", "/etc/convertor/allowlist.json")), Path("/host"))
+    collector = HostTelemetryCollector(
+        host_name,
+        Path(os.getenv("ALLOWLIST_PATH", "/etc/convertor/allowlist.json")),
+        Path("/host"),
+        disk_probe=os.getenv("HOST_ROOT_PROBE_PATH", "/root-probe"),
+    )
     gateway_url = os.environ["GATEWAY_WS_URL"]
     token = os.environ["WORKER_API_TOKEN"]
     while True:
