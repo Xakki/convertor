@@ -31,6 +31,9 @@ import binascii
 import hmac
 import json
 import logging
+import math
+import re
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -47,6 +50,36 @@ logger = logging.getLogger(__name__)
 
 # WS close code 1008 = policy violation (§6.4/§7): auth-fail / искажённый handshake.
 CLOSE_POLICY_VIOLATION = 1008
+HOST_TELEMETRY_TYPE = "telemetry"
+_HOST_NAME_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$")
+_HOST_TELEMETRY_MAX_BODY = 65536
+_HOST_TELEMETRY_MAX_AGE = 1200
+
+
+def _validate_host_telemetry(snapshot: object) -> dict | None:
+    """Validate transport limits; `host` remains an asserted value."""
+    if not isinstance(snapshot, dict) or len(json.dumps(snapshot, separators=(",", ":"))) > _HOST_TELEMETRY_MAX_BODY:
+        return None
+    host = snapshot.get("host")
+    observed = snapshot.get("observedAt")
+    if not isinstance(host, str) or _HOST_NAME_RE.fullmatch(host) is None:
+        return None
+    if snapshot.get("contractVersion") != 1:
+        return None
+    if not isinstance(observed, (int, float)) or isinstance(observed, bool) or not math.isfinite(observed):
+        return None
+    fresh_until = snapshot.get("freshUntil")
+    if not isinstance(fresh_until, (int, float)) or isinstance(fresh_until, bool) or not math.isfinite(fresh_until) or fresh_until < observed:
+        return None
+    now = time.time()
+    if observed < now - _HOST_TELEMETRY_MAX_AGE or observed > now or fresh_until < now:
+        return None
+    if snapshot.get("source") != "host-collector" or snapshot.get("scope") != "host":
+        return None
+    workers = snapshot.get("workers")
+    if not isinstance(workers, dict) or len(workers) > 32:
+        return None
+    return snapshot
 
 
 @dataclass(frozen=True)
@@ -282,6 +315,9 @@ class WsGateway:
         session = await self._handshake(ws)
         if session is None:
             return
+        if session.worker_type == HOST_TELEMETRY_TYPE:
+            await self._read_host_telemetry(ws)
+            return
 
         logger.info(
             "worker ready",
@@ -326,6 +362,23 @@ class WsGateway:
             # routing-матрицу, gateway её вообще не читает/не пишет).
             self._liveness.record_disconnect(session.worker_type, session.instance_id)
 
+    async def _read_host_telemetry(self, ws: ServerConnection) -> None:
+        """Accept one bounded snapshot and relay it with the gateway credential."""
+        try:
+            raw = await ws.recv()
+            frame = json.loads(raw)
+            snapshot = frame.get("snapshot") if isinstance(frame, dict) and frame.get("type") == "host-telemetry" else None
+            snapshot = _validate_host_telemetry(snapshot)
+            if snapshot is None:
+                await ws.close(CLOSE_POLICY_VIOLATION, "invalid host telemetry")
+                return
+            if await self._get_relay().post_host_telemetry(snapshot):
+                await ws.send(json.dumps({"type": "host-telemetry-ack"}))
+            else:
+                await ws.close(1011, "telemetry relay failed")
+        except (ConnectionClosed, json.JSONDecodeError, TypeError, ValueError):
+            return
+
     async def _handshake(self, ws: ServerConnection) -> WorkerSession | None:
         """Прочитать и провалидировать фрейм `ready`. Ошибка → close 1008 + None."""
         try:
@@ -348,7 +401,7 @@ class WsGateway:
         if not isinstance(worker_id, str) or not worker_id:
             await ws.close(CLOSE_POLICY_VIOLATION, "missing workerId")
             return None
-        if worker_type not in WORKER_TYPES:
+        if not isinstance(worker_type, str) or (worker_type not in WORKER_TYPES and worker_type != HOST_TELEMETRY_TYPE):
             await ws.close(CLOSE_POLICY_VIOLATION, "invalid workerType")
             return None
 
@@ -380,7 +433,8 @@ class WsGateway:
             "type": "ready-ack",
             "inlineMax": self._cfg.ws_result_inline_max,
         }))
-        return WorkerSession(worker_id, worker_type, slots, stream_for(worker_type), instance_id)
+        stream = "" if worker_type == HOST_TELEMETRY_TYPE else stream_for(worker_type)
+        return WorkerSession(worker_id, worker_type, slots, stream, instance_id)
 
     # ------------------------------------------------------------------
     # Dispatch

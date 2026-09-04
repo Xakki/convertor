@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from workers.gateway import ws_server
 from workers.host_telemetry.collector import HostTelemetryCollector, validate_host_name
 
 
@@ -41,6 +42,25 @@ def test_allowlist_rejects_absolute_and_parent_paths(tmp_path: Path):
         pass
     else:
         raise AssertionError("unsafe allowlist accepted")
+
+
+def test_gateway_accepts_asserted_host_shape_without_claiming_identity(monkeypatch):
+    monkeypatch.setattr(ws_server.time, "time", lambda: 1000.0)
+    snapshot = {
+        "contractVersion": 1, "host": "another-known-host.example", "observedAt": 900.0, "freshUntil": 2100.0,
+        "source": "host-collector", "scope": "host", "workers": {},
+    }
+    assert ws_server._validate_host_telemetry(snapshot) == snapshot
+    # Shared WORKER_API_TOKEN authenticates the channel only; host is not bound to it.
+
+
+def test_delivery_uses_gateway_channel_without_internal_token():
+    source = Path(__file__).parents[1] / "host_telemetry" / "__main__.py"
+    text = source.read_text()
+    assert "GATEWAY_WS_URL" in text
+    assert "WORKER_API_TOKEN" in text
+    assert "GATEWAY_INTERNAL_TOKEN" not in text
+    assert "TELEMETRY_URL" not in text
 
 
 def test_worker_symlink_cannot_escape_collector_root(tmp_path: Path):

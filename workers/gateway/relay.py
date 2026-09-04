@@ -26,6 +26,7 @@ DLQ_FAIL_PATH = "/api/v1/internal/worker/dlq-fail"
 # см. workers/gateway/liveness.py. UPDATE-ONLY на стороне PHP — сюда НЕ идёт
 # ack/кредит-логика result/fail, короче таймаут (телеметрия, не персист задачи).
 LIVENESS_PATH = "/api/v1/internal/worker/liveness"
+HOST_TELEMETRY_PATH = "/api/v1/internal/host-telemetry"
 # Accepted-but-never-claimed expiry (CNV-71-03): expiry-sweep (см.
 # workers/gateway/expiry.py) → Symfony по conversionId (та же форма вызова,
 # что post_dlq_fail — expired-запись тоже не несёт jobId к моменту detection).
@@ -226,6 +227,10 @@ class RelayClient:
             extra={"path": path, "jobId": job_id, "status": resp.status_code},
         )
         return False, resp.status_code
+
+    async def post_host_telemetry(self, snapshot: dict) -> bool:
+        """Relay a validated collector snapshot to Symfony."""
+        return await self._post(HOST_TELEMETRY_PATH, snapshot, "host-telemetry")
 
     async def post_liveness(
         self, instances: list[dict], meta: dict | None = None
