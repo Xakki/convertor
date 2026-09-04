@@ -106,6 +106,20 @@ host.
 - Tests cover malformed/partial payload, stale snapshot, unavailable source,
   mixed hosts, capacity/percentage formulas, rounding, admin authorization,
   latest-only retention, rate/freshness limits and unchanged routing matrix.
+- Collector delivery uses an outbound-only authenticated gateway telemetry
+  channel. The gateway validates a separate least-privilege collector
+  credential bound to exactly one `HOST_NAME`, applies per-host rate limits,
+  and relays accepted telemetry to Symfony with its existing server-side
+  internal credential. The payload `HOST_NAME` is not trusted standalone:
+  gateway authentication and host binding are required, and malformed,
+  mismatched, revoked, quarantined or rate-limited submissions are rejected.
+  No collector receives `GATEWAY_INTERNAL_TOKEN` or shared
+  `WORKER_API_TOKEN`, and the collector credential cannot access internal or
+  worker routes. Credential operations must support per-host rotation,
+  revocation and quarantine. Installer and secret material is collector-scoped
+  and is not published through a public CLI, gist or general worker
+  environment. Credential issuance, storage and enrollment mechanics remain
+  undecided and are not acceptance requirements for this card.
 
 **Decisions:**
 - 2026-09-01: duplicate implementation card не найдена. `CNV-35`/`CNV-69`
@@ -162,6 +176,17 @@ host.
   metadata. Validation runs before activation, activation uses atomic rename,
   and health/provenance verification must confirm rollback coherence. No
   low-level file path or schema is fixed by this decision.
+- 2026-09-04: approved gateway-mediated least-privilege collector transport —
+  the remote collector sends snapshots only through a new authenticated,
+  outbound-only gateway telemetry channel. The gateway validates a separate
+  collector credential bound to the exact `HOST_NAME`, applies host binding and
+  rate limits, and relays telemetry to Symfony using its existing server-side
+  internal credential. The payload host is not trusted standalone. Credentials
+  must support per-host rotation, revocation and quarantine; they grant no
+  internal or worker route access. No remote host receives
+  `GATEWAY_INTERNAL_TOKEN` or shared `WORKER_API_TOKEN`; installer and secret
+  material is collector-scoped, not a public CLI, gist or general worker env.
+  Credential issuance, storage and enrollment mechanics remain undecided.
 
 **Dependencies:**
 - Uses `[[CNV-35-registry-08-worker-observability]]` and
