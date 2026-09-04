@@ -54,12 +54,25 @@ def build(services: list[str], cgroup_paths: dict[str, str] | None = None) -> di
     }
 
 
+def build_initial() -> dict[str, object]:
+    """Return the safe pre-worker mapping used before the first activation."""
+    return {
+        "version": 1,
+        "provenance": {"source": "deployment", "format": "initial-empty-v1"},
+        "workers": {},
+    }
+
+
 def validate(data: dict[str, object], cgroup_root: Path | None = None) -> None:
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise ValueError("invalid deployment allowlist")
     provenance = data.get("provenance")
     workers = data.get("workers")
     if not isinstance(provenance, dict) or provenance.get("source") != "deployment":
         raise ValueError("invalid deployment allowlist")
-    if not isinstance(workers, dict) or not workers or len(workers) > 32:
+    if not isinstance(workers, dict) or len(workers) > 32:
+        raise ValueError("allowlist must contain workers")
+    if not workers and provenance.get("format") != "initial-empty-v1":
         raise ValueError("allowlist must contain workers")
     for name, path in workers.items():
         if not isinstance(name, str) or not SERVICE.fullmatch(name) or not isinstance(path, str):
@@ -88,10 +101,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--worker", action="append", default=[])
+    parser.add_argument("--initial", action="store_true")
     parser.add_argument("--service-cgroup", action="append", default=[], metavar="SERVICE=PATH")
     parser.add_argument("--docker-project", default=os.getenv("COMPOSE_PROJECT_NAME", "convertor"))
     parser.add_argument("--cgroup-root", type=Path, default=Path("/sys/fs/cgroup"))
     args = parser.parse_args()
+    if args.initial and args.worker:
+        raise SystemExit("--initial cannot be combined with --worker")
     mappings = {}
     for item in args.service_cgroup:
         service, sep, path = item.partition("=")
@@ -101,7 +117,7 @@ def main() -> None:
     for service in args.worker:
         if service not in mappings:
             mappings[service] = discover_cgroup(service, args.docker_project, args.cgroup_root)
-    data = build(args.worker, mappings)
+    data = build_initial() if args.initial else build(args.worker, mappings)
     validate(data, args.cgroup_root)
     write_atomic(args.output, data)
 

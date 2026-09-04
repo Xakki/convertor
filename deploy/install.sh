@@ -290,6 +290,41 @@ compose() {
   docker compose -f "$WORK_DIR/docker-compose.yml" --env-file "$WORK_DIR/.env" "$@"
 }
 
+validate_allowlist_file() {
+  local path="$WORK_DIR/allowlist.json"
+  python3 - "$path" "$WORK_DIR/generate-allowlist.py" <<'PY'
+import importlib.util
+import json
+import os
+import stat
+import sys
+
+path, generator_path = sys.argv[1:]
+entry = os.lstat(path)
+if stat.S_ISLNK(entry.st_mode) or not stat.S_ISREG(entry.st_mode):
+    raise SystemExit("allowlist.json must be a regular non-symlink file")
+with open(path, encoding="utf-8") as stream:
+    data = json.load(stream)
+spec = importlib.util.spec_from_file_location("allowlist_generator", generator_path)
+assert spec and spec.loader
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.validate(data)
+PY
+}
+
+ensure_initial_allowlist() {
+  local path="$WORK_DIR/allowlist.json"
+  if [[ -L "$path" || -d "$path" ]]; then
+    die "allowlist.json must be a regular non-symlink file"
+  fi
+  if [[ ! -e "$path" ]]; then
+    info "создаю начальный пустой allowlist…"
+    python3 "$WORK_DIR/generate-allowlist.py" --initial --output "$path"
+  fi
+  validate_allowlist_file || die "allowlist.json is invalid"
+}
+
 activate_allowlist() {
   local profile
   local -a workers=()
@@ -304,21 +339,32 @@ activate_allowlist() {
     esac
   done
   [[ ${#workers[@]} -gt 0 ]] || die "allowlist cannot be empty"
-  if [[ -f "$WORK_DIR/allowlist.json" ]]; then
-    cp -f "$WORK_DIR/allowlist.json" "$WORK_DIR/allowlist.json.previous"
-  fi
   python3 "$WORK_DIR/generate-allowlist.py" --output "$WORK_DIR/allowlist.json" $(printf -- '--worker %q ' "${workers[@]}")
+}
+
+backup_allowlist() {
+  validate_allowlist_file || die "cannot back up invalid allowlist.json"
+  cp -f -- "$WORK_DIR/allowlist.json" "$WORK_DIR/allowlist.json.previous"
 }
 
 rollback_allowlist() {
   if [[ -f "$WORK_DIR/allowlist.json.previous" ]]; then
     mv -f "$WORK_DIR/allowlist.json.previous" "$WORK_DIR/allowlist.json"
+    # Restore workers and collector against the same manifest; otherwise a
+    # failed activation can leave cgroups and the collector out of sync.
+    profile_args
+    compose "${PROFILE_ARGS[@]}" up -d --force-recreate >/dev/null 2>&1 || true
     compose up -d --force-recreate host-telemetry >/dev/null 2>&1 || true
   fi
 }
 
+clear_allowlist_backup() {
+  rm -f -- "$WORK_DIR/allowlist.json.previous"
+}
+
 bring_up() {
   profile_args
+  backup_allowlist
   info "pull образов (${SELECTED_PROFILES[*]})…"
   compose "${PROFILE_ARGS[@]}" pull
   info "up -d --force-recreate…"
@@ -337,6 +383,7 @@ bring_up() {
     return 1
   fi
   compose ps
+  clear_allowlist_backup
 }
 
 # --- main --------------------------------------------------------------------
@@ -359,6 +406,7 @@ case "$MODE" in
     preflight
     ensure_host_root_probe
     write_env
+    ensure_initial_allowlist
     bring_up
     info "готово. Логи: docker compose -f $WORK_DIR/docker-compose.yml --env-file $WORK_DIR/.env logs -f"
     info "обновление: bash $WORK_DIR/install.sh update"
@@ -380,7 +428,7 @@ PY
       fetch_companions "$WORK_DIR" || echo "warn: не удалось обновить companions, продолжаем со старыми" >&2
       # .env не трогаем — fetch_companions его не перезаписывает
     fi
-    activate_allowlist
+    ensure_initial_allowlist
     bring_up
     info "update завершён"
     ;;

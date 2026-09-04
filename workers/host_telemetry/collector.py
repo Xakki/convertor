@@ -57,7 +57,15 @@ class HostTelemetryCollector:
 
     def _load_allowlist(self) -> dict[str, Any]:
         raw = json.loads(self.allowlist_path.read_text(encoding="utf-8"))
-        if raw.get("version") != 1 or raw.get("provenance", {}).get("source") != "deployment" or not isinstance(raw.get("workers"), dict) or not raw["workers"]:
+        provenance = raw.get("provenance") if isinstance(raw, dict) else None
+        if (
+            not isinstance(raw, dict)
+            or raw.get("version") != 1
+            or not isinstance(provenance, dict)
+            or provenance.get("source") != "deployment"
+            or not isinstance(raw.get("workers"), dict)
+            or (not raw["workers"] and provenance.get("format") != "initial-empty-v1")
+        ):
             raise ValueError("invalid allowlist")
         for name, rel in raw["workers"].items():
             if not isinstance(name, str) or not isinstance(rel, str) or not rel or rel.startswith("/") or any(part in {"..", "."} for part in Path(rel).parts):

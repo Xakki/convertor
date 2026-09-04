@@ -44,6 +44,17 @@ def test_allowlist_rejects_absolute_and_parent_paths(tmp_path: Path):
         raise AssertionError("unsafe allowlist accepted")
 
 
+def test_initial_allowlist_allows_host_only_snapshot(tmp_path: Path):
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({
+        "version": 1,
+        "provenance": {"source": "deployment", "format": "initial-empty-v1"},
+        "workers": {},
+    }))
+    collector = HostTelemetryCollector("host.example", allowlist, tmp_path, clock=lambda: 1000.0)
+    assert collector._load_allowlist() == {}
+
+
 def test_gateway_accepts_asserted_host_shape_without_claiming_identity(monkeypatch):
     monkeypatch.setattr(ws_server.time, "time", lambda: 1000.0)
     snapshot = {

@@ -33,7 +33,7 @@ services:
             - ${HOST_ROOT_PROBE_DIR:-/var/lib/convertor/host-root-probe}:/host/root-probe:ro
             - ./allowlist.json:/etc/convertor/allowlist.json:ro
         healthcheck:
-            test: ["CMD", "python3", "-c", "import json; x=json.load(open('/etc/convertor/allowlist.json')); assert x.get('version') == 1 and x.get('provenance', {}).get('source') == 'deployment' and x.get('workers')"]
+            test: ["CMD", "python3", "-c", "import json; x=json.load(open('/etc/convertor/allowlist.json')); assert x.get('version') == 1 and x.get('provenance', {}).get('source') == 'deployment' and isinstance(x.get('workers'), dict)"]
             interval: 30s
             timeout: 5s
             retries: 3
