@@ -301,6 +301,25 @@ def _fake_compose(tmp_path: Path, services: str) -> tuple[str, Path]:
     return str(script), log
 
 
+def _fake_docker(tmp_path: Path) -> Path:
+    docker = tmp_path / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = compose ] && [ \"$2\" = -p ] && [ \"$4\" = ps ] && [ \"$5\" = -q ]; then\n"
+        "  printf 'fake-container\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"$1\" = inspect ]; then\n"
+        f"  printf '%s\\n' {os.getpid()}\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 3\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    return docker
+
+
 @pytest.fixture
 def host_root_probe_dir() -> Iterator[Path]:
     probe_dir = Path(
@@ -320,9 +339,11 @@ def _run_recreate(
     host_root_probe_dir: Path,
 ) -> subprocess.CompletedProcess[str]:
     fake_compose, log = _fake_compose(tmp_path, compose_services)
+    fake_docker = _fake_docker(tmp_path)
     env = os.environ.copy()
     env["FAKE_COMPOSE_LOG"] = str(log)
     env["HOST_ROOT_PROBE_DIR"] = str(host_root_probe_dir)
+    env["PATH"] = f"{fake_docker.parent}:{env['PATH']}"
     return subprocess.run(
         [
             "make",
