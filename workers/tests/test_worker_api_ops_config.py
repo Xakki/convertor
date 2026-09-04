@@ -2,7 +2,10 @@
 
 import os
 import re
+import shutil
 import subprocess
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -298,15 +301,28 @@ def _fake_compose(tmp_path: Path, services: str) -> tuple[str, Path]:
     return str(script), log
 
 
+@pytest.fixture
+def host_root_probe_dir() -> Iterator[Path]:
+    probe_dir = Path(
+        tempfile.mkdtemp(prefix="convertor-test-host-root-probe-", dir="/var/tmp")
+    )
+    try:
+        yield probe_dir
+    finally:
+        shutil.rmtree(probe_dir, ignore_errors=True)
+
+
 def _run_recreate(
     tmp_path: Path,
     profile: str,
     services: str,
     compose_services: str,
+    host_root_probe_dir: Path,
 ) -> subprocess.CompletedProcess[str]:
     fake_compose, log = _fake_compose(tmp_path, compose_services)
     env = os.environ.copy()
     env["FAKE_COMPOSE_LOG"] = str(log)
+    env["HOST_ROOT_PROBE_DIR"] = str(host_root_probe_dir)
     return subprocess.run(
         [
             "make",
@@ -365,8 +381,15 @@ def test_workers_recreate_rejects_missing_cuda_image_before_compose_invocation(
 
 def test_workers_recreate_accepts_savpn_data_and_image_without_whitespace_matching(
     tmp_path: Path,
+    host_root_probe_dir: Path,
 ) -> None:
-    result = _run_recreate(tmp_path, "saVpn", "worker-data worker-image", "worker-data worker-image")
+    result = _run_recreate(
+        tmp_path,
+        "saVpn",
+        "worker-data worker-image",
+        "worker-data worker-image",
+        host_root_probe_dir,
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "effective services=worker-data worker-image" in result.stdout
@@ -384,12 +407,19 @@ def test_workers_recreate_accepts_savpn_data_and_image_without_whitespace_matchi
 )
 def test_workers_recreate_sets_effective_ai_profile_for_local_and_ubook(
     tmp_path: Path,
+    host_root_probe_dir: Path,
     profile: str,
     services: str,
     compose_services: str,
     expected_profiles: str,
 ) -> None:
-    result = _run_recreate(tmp_path, profile, services, compose_services)
+    result = _run_recreate(
+        tmp_path,
+        profile,
+        services,
+        compose_services,
+        host_root_probe_dir,
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
     calls = (tmp_path / "compose.log").read_text(encoding="utf-8").splitlines()
@@ -415,11 +445,18 @@ def test_fluent_compose_targets_are_independent_of_cuda_guard(target: str) -> No
 )
 def test_workers_recreate_rejects_invalid_scope_before_up(
     tmp_path: Path,
+    host_root_probe_dir: Path,
     profile: str,
     services: str,
     compose_services: str,
 ) -> None:
-    result = _run_recreate(tmp_path, profile, services, compose_services)
+    result = _run_recreate(
+        tmp_path,
+        profile,
+        services,
+        compose_services,
+        host_root_probe_dir,
+    )
 
     assert result.returncode == 2
     compose_log = tmp_path / "compose.log"
