@@ -58,3 +58,12 @@
 - Проверенный dry-run и rollout на saVpn подтверждают, что исключённые воркеры
   не pull/recreate; затем нетрекаемый override удалён вручную на этом хосте.
 - `make docker-check`, профильные Make-контракты и kanban-lint проходят.
+
+**Handoff evidence (2026-09-05):**
+- Реализация зафиксирована в `fe9b459` на ветке `task/CNV-124`; изменены только `.env`, `.env.local_worker_example`, `docker-compose.yml`, `docs/workers-remote-deploy.md`, `workers/Makefile` и два профильных теста.
+- PASS: `make test-makefile-worker-pull` (6 passed); `make test-compose-worker-profiles` (1 passed, 20 deselected); `make test-worker-build-release-contract` (1 passed, 20 deselected); `make docker-check` (dev/test ok); `make TEST=1 test-python-host-telemetry` (103 passed, 1 skipped).
+- `make config-check` завершился успешно. Отдельные targets `config-diff` и `host-telemetry-contract` в репозитории отсутствуют; эквивалентный host telemetry contract выполнен через `test-worker-build-release-contract`.
+- `make host-telemetry-validate` заблокирован локальным prerequisite `host probe must be on root filesystem`; rollout saVpn не выполнялся по границе полномочий этой передачи.
+- Полный `make TEST=1 test-drift` выявил два предсуществующих CNV-137 version-contract failure (`APP_VER=0.1.2` ожидается тестами, текущий baseline — `0.2.0`); в CNV-124 не исправлялись.
+- `.env` и `.env.local_worker_example` содержат только non-secret profile configuration; secret values не изменялись и не раскрывались.
+- Передача ограничена независимым implementation review: merge, push, release/build и saVpn rollout не выполнялись.
