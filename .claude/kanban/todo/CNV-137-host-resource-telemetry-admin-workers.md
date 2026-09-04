@@ -107,19 +107,17 @@ host.
   mixed hosts, capacity/percentage formulas, rounding, admin authorization,
   latest-only retention, rate/freshness limits and unchanged routing matrix.
 - Collector delivery uses an outbound-only authenticated gateway telemetry
-  channel. The gateway validates a separate least-privilege collector
-  credential bound to exactly one `HOST_NAME`, applies per-host rate limits,
-  and relays accepted telemetry to Symfony with its existing server-side
-  internal credential. The payload `HOST_NAME` is not trusted standalone:
-  gateway authentication and host binding are required, and malformed,
-  mismatched, revoked, quarantined or rate-limited submissions are rejected.
-  No collector receives `GATEWAY_INTERNAL_TOKEN` or shared
-  `WORKER_API_TOKEN`, and the collector credential cannot access internal or
-  worker routes. Credential operations must support per-host rotation,
-  revocation and quarantine. Installer and secret material is collector-scoped
-  and is not published through a public CLI, gist or general worker
-  environment. Credential issuance, storage and enrollment mechanics remain
-  undecided and are not acceptance requirements for this card.
+  channel. The collector authenticates to the gateway with the existing worker
+  credential, `WORKER_API_TOKEN`; it never receives `GATEWAY_INTERNAL_TOKEN`.
+  The gateway must still validate strict `HOST_NAME` payload binding and
+  telemetry frame scope, rate, body and freshness limits before relaying
+  accepted telemetry to Symfony with its existing server-side internal
+  credential. The collector's reused worker credential cannot directly call
+  Symfony internal routes. The current shared token does not support per-host
+  credential revoke, rotate or quarantine; those per-host lifecycle claims are
+  superseded/deferred until worker credentials are separated. Do not claim
+  least privilege or one-host revocation. Preserve the remote outbound-only
+  and no-Docker-socket constraints.
 
 **Decisions:**
 - 2026-09-01: duplicate implementation card не найдена. `CNV-35`/`CNV-69`
@@ -176,7 +174,9 @@ host.
   metadata. Validation runs before activation, activation uses atomic rename,
   and health/provenance verification must confirm rollback coherence. No
   low-level file path or schema is fixed by this decision.
-- 2026-09-04: approved gateway-mediated least-privilege collector transport —
+- 2026-09-04: superseded by the 2026-09-04 shared-worker-credential decision
+  below — prior approved gateway-mediated least-privilege collector transport
+  recorded for history only:
   the remote collector sends snapshots only through a new authenticated,
   outbound-only gateway telemetry channel. The gateway validates a separate
   collector credential bound to the exact `HOST_NAME`, applies host binding and
@@ -187,6 +187,16 @@ host.
   `GATEWAY_INTERNAL_TOKEN` or shared `WORKER_API_TOKEN`; installer and secret
   material is collector-scoped, not a public CLI, gist or general worker env.
   Credential issuance, storage and enrollment mechanics remain undecided.
+- 2026-09-04: user-approved superseding credential decision — the collector
+  reuses the existing worker credential, `WORKER_API_TOKEN`, only toward the
+  gateway telemetry channel; it never receives `GATEWAY_INTERNAL_TOKEN` and
+  cannot directly call Symfony internal routes. The gateway still validates
+  strict `HOST_NAME` payload binding plus telemetry frame scope, rate, body and
+  freshness limits. The current shared token does not provide per-host revoke,
+  rotate or quarantine, so those per-host lifecycle claims are
+  superseded/deferred until worker credentials are separated. This decision
+  makes no least-privilege or one-host-revocation claim and preserves the
+  remote outbound-only/no-Docker-socket constraints.
 
 **Dependencies:**
 - Uses `[[CNV-35-registry-08-worker-observability]]` and
