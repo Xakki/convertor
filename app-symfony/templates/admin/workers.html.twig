@@ -106,20 +106,21 @@
                 <div class="flex justify-between"><strong class="font-mono text-white" x-text="snapshot.host"></strong><span x-show="snapshot.stale" class="text-yellow-400">устарело</span></div>
                 <div class="mt-2 grid grid-cols-2 gap-2" aria-label="Host resource telemetry">
                     <span title="Host CPU utilization = /proc/stat busy delta / total delta; host scope; explicit observation window; host-collector source"><b>CPU:</b> <span x-text="formatPercent(hostCpuPercent(snapshot))"></span></span>
-                    <span title="MemAvailable / MemTotal; host scope; observed timestamp; host-collector source"><b>Свободная память:</b> <span x-text="formatPercent(hostMemoryAvailablePercent(snapshot))"></span></span>
+                    <span title="(MemTotal - MemAvailable) / MemTotal; host scope; observed timestamp; host-collector source"><b>Потребление памяти:</b> <span x-text="formatPercent(hostMemoryConsumptionPercent(snapshot))"></span></span>
+                    <span title="MemAvailable from /proc/meminfo; host scope; observed timestamp; host-collector source"><b>Свободная память:</b> <span x-text="formatBytes(snapshot.memAvailableBytes) + ' (' + formatPercent(hostMemoryAvailablePercent(snapshot)) + ')' "></span></span>
                     <span title="Root filesystem used bytes / total bytes; host scope; observed timestamp"><b>Диск /:</b> <span x-text="formatBytes(snapshot.diskUsedBytes) + ' / ' + formatBytes(snapshot.diskTotalBytes)"></span></span>
-                    <span title="Raw 1-minute host load average; host scope; observed timestamp"><b>Load 1m:</b> <span x-text="snapshot.load1 ?? '—'"></span></span>
+                    <span title="Raw 1-minute load average / logical host CPUs; normalized host load; host scope; observed timestamp"><b>Нагрузка хоста:</b> <span x-text="formatPercent(normalizedLoadPercent(snapshot))"></span></span>
+                    <span title="Logical CPU count from the host; host scope; observed timestamp"><b>Логические CPU:</b> <span x-text="snapshot.cpuCount ?? '—'"></span></span>
                 </div>
                 <div class="mt-3 border-t border-zinc-800 pt-2" aria-describedby="worker-aggregate-help">
                     <strong>Агрегат воркеров</strong>
                     <span id="worker-aggregate-help" class="ml-1 text-zinc-500"
-                          title="Worker scope. CPU = aggregate worker usage / logical host CPU over the reported sample window; memory = aggregate RSS / host MemTotal; load = raw host 1-minute load / logical CPUs. Null means the source did not provide a safe denominator or window.">
+                          title="Worker scope. CPU = aggregate worker usage / logical host CPU over the reported sample window; memory = aggregate RSS / host MemTotal. Null means the source did not provide a safe denominator or window.">
                         ⓘ
                     </span>
-                    <div class="mt-1 grid grid-cols-3 gap-2">
+                    <div class="mt-1 grid grid-cols-2 gap-2">
                         <span title="Worker CPU aggregate / logical host CPU; sample-window percentage"><b>CPU:</b> <span x-text="formatPercent(workerCpuPercent(snapshot))"></span></span>
                         <span title="Worker aggregate RSS / host MemTotal; host denominator"><b>Память:</b> <span x-text="formatPercent(workerMemoryPercent(snapshot))"></span></span>
-                        <span title="Raw 1-minute load average / logical host CPUs; normalized host load"><b>Load:</b> <span x-text="formatPercent(normalizedLoadPercent(snapshot))"></span></span>
                     </div>
                 </div>
                 <div class="mt-2 text-zinc-500" x-text="'Наблюдение: ' + fmtDate(snapshot.observedAt) + (snapshot.stale ? ' (данные старше 20 минут)' : '')"></div>
@@ -663,6 +664,12 @@
                 const total = Number(snapshot.memTotalBytes);
                 const available = Number(snapshot.memAvailableBytes);
                 return Number.isFinite(total) && total > 0 && Number.isFinite(available) && available >= 0 && available <= total ? available / total : null;
+            },
+
+            hostMemoryConsumptionPercent(snapshot) {
+                const total = Number(snapshot.memTotalBytes);
+                const available = Number(snapshot.memAvailableBytes);
+                return Number.isFinite(total) && total > 0 && Number.isFinite(available) && available >= 0 && available <= total ? (total - available) / total : null;
             },
 
             workerCpuPercent(snapshot) {

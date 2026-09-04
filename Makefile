@@ -66,9 +66,10 @@ init: build up migrate ## First-time setup: build + up + migrate (планы с�
 	@echo -e "$(GREEN)Project initialised!$(RESET)"
 
 .PHONY: up
-up: host-root-probe validate-ai-image ## Start stack и дождаться healthy — ГЛАВНЫЙ СЕРВЕР (remote-хосты: workers-recreate)
+up: host-root-probe validate-ai-image ## Start configured stack and wait until healthy
 	$(DC) up -d --wait
-	$(MAKE) host-telemetry-refresh
+	worker_services="$$( $(DC) ps --services | awk '/^worker-(libreoffice|ffmpeg-audio|ffmpeg-video|image|data|ai)$$/ {printf "%s ", $$1}' )"; \
+	$(MAKE) WORKER_SERVICES="$$worker_services" host-telemetry-refresh
 
 .PHONY: down
 down: ## Stop & remove containers — ГЛАВНЫЙ СЕРВЕР (remote-хосты гасят свои воркеры)

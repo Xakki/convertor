@@ -75,6 +75,11 @@ final class AdminControllerTest extends WebTestCase
         self::assertStringContainsString('Агрегат воркеров', $html);
         self::assertStringContainsString('workerCpuPercent(snapshot)', $html);
         self::assertStringContainsString('workerMemoryPercent(snapshot)', $html);
+        self::assertStringContainsString('hostMemoryConsumptionPercent(snapshot)', $html);
+        self::assertStringContainsString('Свободная память', $html);
+        self::assertStringContainsString('Нагрузка хоста', $html);
+        self::assertStringContainsString('Логические CPU', $html);
+        self::assertStringNotContainsString('Raw 1-minute load average / logical host CPUs; normalized host load"><b>Load:</b>', $html);
         self::assertStringContainsString('normalizedLoadPercent(snapshot)', $html);
         self::assertStringContainsString('logical host CPU', $html);
         self::assertStringContainsString('MemTotal', $html);

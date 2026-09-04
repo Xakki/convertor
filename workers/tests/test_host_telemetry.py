@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from workers.gateway import ws_server
@@ -32,7 +33,7 @@ def test_snapshot_is_bounded_and_rate_limited(tmp_path: Path):
     assert collector.collect() is not None
 
 
-def test_worker_cpu_delta_and_host_cpu_window_are_unknown_then_bounded(tmp_path: Path):
+def test_worker_cpu_delta_and_host_cpu_window_are_unknown_then_bounded(tmp_path: Path, monkeypatch):
     root = tmp_path / "host"
     (root / "proc").mkdir(parents=True)
     (root / "proc/meminfo").write_text("MemTotal: 100 kB\nMemAvailable: 40 kB\n")
@@ -47,6 +48,7 @@ def test_worker_cpu_delta_and_host_cpu_window_are_unknown_then_bounded(tmp_path:
     allowlist = tmp_path / "allowlist.json"
     allowlist.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment", "format": "actual-cgroup-v2-service-v1"}, "workers": {"worker-data": "worker-data"}}))
     (root / "proc/stat").write_text("cpu 10 0 10 80 0 0 0 0 0 0\n")
+    monkeypatch.setattr(os, "sysconf", lambda name: 100)
     values = iter([1000.0, 1600.0]).__next__
     collector = HostTelemetryCollector("host.example", allowlist, root, values)
     assert collector.collect()["workerCpuUsageUsec"] is None
@@ -58,6 +60,27 @@ def test_worker_cpu_delta_and_host_cpu_window_are_unknown_then_bounded(tmp_path:
     assert snapshot["hostCpuUtilization"] == 0.5
     assert snapshot["sampleWindowStart"] == 1000.0
     assert snapshot["sampleWindowEnd"] == 1600.0
+
+
+def test_host_cpu_jiffies_are_converted_to_usec_at_runtime_tick_rate(tmp_path: Path, monkeypatch):
+    root = tmp_path / "host"
+    (root / "proc").mkdir(parents=True)
+    (root / "proc/stat").write_text("cpu 10 0 10 80 0 0 0 0 0 0\n")
+    monkeypatch.setattr(os, "sysconf", lambda name: 100)
+    collector = HostTelemetryCollector("host.example", tmp_path / "allowlist.json", root)
+
+    assert collector._read_host_cpu() == (200_000, 1_000_000)
+
+
+def test_host_cpu_is_unknown_when_runtime_tick_rate_is_unavailable(tmp_path: Path, monkeypatch):
+    root = tmp_path / "host"
+    (root / "proc").mkdir(parents=True)
+    (root / "proc/stat").write_text("cpu 10 0 10 80 0 0 0 0 0 0\n")
+    monkeypatch.setattr(os, "sysconf", lambda name: -1)
+    collector = HostTelemetryCollector("host.example", tmp_path / "allowlist.json", root)
+
+    assert collector._read_host_cpu() is None
+
 
 def test_allowlist_rejects_absolute_and_parent_paths(tmp_path: Path):
     p = tmp_path / "allowlist.json"

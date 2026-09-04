@@ -192,14 +192,21 @@ class HostTelemetryCollector:
 
     def _read_host_cpu(self) -> tuple[int, int] | None:
         try:
+            clock_ticks_per_second = os.sysconf("SC_CLK_TCK")
+            if not isinstance(clock_ticks_per_second, int) or clock_ticks_per_second <= 0:
+                return None
             fields = self._read("/proc/stat").splitlines()[0].split()[1:]
             values = [int(value) for value in fields]
             if len(values) < 4:
                 return None
             idle = values[3] + (values[4] if len(values) > 4 else 0)
-            total = sum(values)
-            return total - idle, total
-        except (OSError, ValueError, IndexError):
+            busy_ticks = sum(values) - idle
+            total_ticks = sum(values)
+            return (
+                busy_ticks * 1_000_000 // clock_ticks_per_second,
+                total_ticks * 1_000_000 // clock_ticks_per_second,
+            )
+        except (OSError, ValueError, IndexError, TypeError):
             return None
 
     def _read_disk(self) -> tuple[int | None, int | None]:
