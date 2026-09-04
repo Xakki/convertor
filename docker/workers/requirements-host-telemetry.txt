@@ -1,0 +1,2 @@
+# Host telemetry collector runtime dependencies
+websockets==13.1

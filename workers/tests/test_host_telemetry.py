@@ -124,6 +124,17 @@ def test_delivery_uses_gateway_channel_without_internal_token():
     assert "TELEMETRY_URL" not in text
 
 
+def test_collector_image_installs_websockets_for_startup_import():
+    repository_root = Path(__file__).resolve().parents[2]
+    dockerfile = (repository_root / "docker/workers/host-telemetry.Dockerfile").read_text()
+    requirements_path = repository_root / "docker/workers/requirements-host-telemetry.txt"
+    requirements = requirements_path.read_text()
+
+    assert "COPY docker/workers/requirements-host-telemetry.txt /tmp/requirements.txt" in dockerfile
+    assert "pip install --no-cache-dir -r /tmp/requirements.txt" in dockerfile
+    assert "websockets==13.1" in requirements
+
+
 def test_worker_symlink_cannot_escape_collector_root(tmp_path: Path):
     outside = tmp_path / "outside"
     outside.mkdir()
