@@ -80,9 +80,9 @@ final class HostTelemetryController extends AbstractController
             }
             $sanitizedWorkers[$worker] = ['cpuUsageUsec' => $cpu, 'memoryBytes' => $memory];
         }
-        $body            = array_merge($body, $normalizedMetrics);
-        $body['workers'] = $sanitizedWorkers;
-        $telemetryFields = ['sampleWindowStart', 'sampleWindowEnd', 'sampleWindowUsec', 'workerCpuUsageUsec', 'workerCpuWindowUsec', 'hostCpuUsageUsec', 'hostCpuWindowUsec', 'hostCpuUtilization'];
+        $body              = array_merge($body, $normalizedMetrics);
+        $body['workers']   = $sanitizedWorkers;
+        $telemetryFields   = ['sampleWindowStart', 'sampleWindowEnd', 'sampleWindowUsec', 'workerCpuUsageUsec', 'workerCpuWindowUsec', 'hostCpuUsageUsec', 'hostCpuWindowUsec', 'hostCpuUtilization'];
         $body['telemetry'] = [];
         foreach ($telemetryFields as $field) {
             $value = $body[$field] ?? null;
