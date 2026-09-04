@@ -225,3 +225,12 @@ host.
   worker-container scope, CPU/memory/load formulas, capacity fields, MemAvailable
   display, root filesystem and stale-after-20m policy recorded. All prior open
   questions resolved; card is implementable as one backend+UI task.
+- 2026-09-05: approved merged completion reconciled on `main`: `main` matches
+  `origin/main` at `d8b6940` with a clean pre-move worktree. CNV-137 source,
+  deployment and test work is present in the merged `cnv137` commit series;
+  review hardening is recorded at `1a9f3f2`, and the final focused worker gate
+  passed with 103 tests and 1 skip (`make test-python-host-telemetry`). No
+  runtime release or deployment claim is made. The shared `WORKER_API_TOKEN`
+  limitation and deferred per-host credential lifecycle remain owned by
+  `[[CNV-139-per-host-worker-credentials-lifecycle]]`. Explicit user approval
+  authorizes direct todo→done lifecycle reconciliation after merged completion.
