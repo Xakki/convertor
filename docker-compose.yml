@@ -283,6 +283,7 @@ services:
                 condition: service_started
 
     worker-libreoffice:
+        profiles: ["document"]
         build:
             context: .
             dockerfile: docker/workers/libreoffice.Dockerfile
@@ -317,6 +318,7 @@ services:
             - default
 
     worker-ffmpeg-audio:
+        profiles: ["audio"]
         build:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
@@ -350,6 +352,7 @@ services:
             - default
 
     worker-ffmpeg-video:
+        profiles: ["video"]
         build:
             context: .
             dockerfile: docker/workers/ffmpeg.Dockerfile
@@ -383,6 +386,7 @@ services:
             - default
 
     worker-image:
+        profiles: ["image"]
         build:
             context: .
             dockerfile: docker/workers/image.Dockerfile
@@ -570,6 +574,7 @@ services:
             - default
 
     worker-data:
+        profiles: ["data"]
         build:
             context: .
             dockerfile: docker/workers/data.Dockerfile

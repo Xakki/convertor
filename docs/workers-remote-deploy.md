@@ -109,7 +109,7 @@ metrics-exporter — под `monitoring` (он к тому же требует �
 |---|---|---|
 | `COMPOSE_PROJECT_NAME` | своё уникальное, НЕ `xakki-convertor` | **Критично.** `WORKER_ID` каждого воркера = hostname контейнера = `${COMPOSE_PROJECT_NAME}-worker-*` (`docker-compose.yml`), и ЭТО ЖЕ имя используется дословно как имя KeyDB-consumer'а в `XREADGROUP` (`workers/gateway/ws_server.py`). Одинаковый `COMPOSE_PROJECT_NAME` на двух хостах → два физически разных контейнера претендуют на одно имя consumer'а — gateway не различит их, reclaim/ack начнут путаться. |
 | `WORKER_API_TOKEN` | реальный токен | Единственная обязательная переменная без дефолта — пустая строка блокирует старт воркера (`WsClientConfig.validate()`), это НАМЕРЕННО (без него был бы reconnect-storm против недоступного/неавторизованного gateway). |
-| `COMPOSE_PROFILES` | `ai` (или пусто на CPU-хосте без worker-ai) | НЕ добавлять `server`/`monitoring` — иначе `make up` потянет серверную часть, которой здесь нет. |
+| `COMPOSE_PROFILES` | `document,audio,video,image,data,ai` (уберите `ai` без AI) | Каждый worker включается собственным профилем; НЕ добавлять `server`/`api`/`monitoring` — иначе `make up` потянет серверную часть, которой здесь нет. |
 | `WORKER_PULL_POLICY` | `missing` | Happy path: `make workers-pull`/`make up` тянет готовые образы из Harbor вместо сборки; если тега ещё нет (свежий хост до первого релиза) — падает обратно на `build:`-секцию. Это и дефолт `docker-compose.yml`, `.env.local_worker_example` просто фиксирует его явно. |
 | `AI_PULL_POLICY` | `always` на CPU-хосте / `build` на GPU-хосте | Отдельная политика для `worker-ai`: `worker-ai-cpu:latest` публикуется в Harbor (`always` безопасен), `worker-ai-cuda` — НЕТ (GPU-хост обязан ставить `build`: `missing` спасает только `make up`, явный `make workers-pull` при `missing` всё равно пытается запросить несуществующий образ и падает exit 2; `always` хардфейлит «pull access denied» сразу). |
 | `IMAGE_TAG` | `latest` (или запиненная версия релиза, напр. `0.1.2`) | Какой тег пуллить/использовать в compose; публичные образы имеют только `APP_VER` и `latest`, главный сервер всегда на `latest`. |
@@ -215,7 +215,9 @@ make up
 безвреден: ротировать ему на remote-хосте нечего — воркеры пишут только в
 stdout через `fluentd`-driver.
 
-Точечно, без полного `up`: `make workers-recreate` (по умолчанию профиль
+Точечно, без полного `up`: `make workers-recreate SERVICE=worker-data` (только один
+известный worker; его Compose profile включается автоматически). Для обратной
+совместимости остаётся пакетный режим `make workers-recreate` (по умолчанию профиль
 `remote`, то есть все 6 воркеров) и `make fluent-up` (только сайдкар). CUDA-
 гейт `AI_VARIANT=cuda` → `AI_IMAGE` применяется к операциям основного
 `docker-compose.yml`; `fluent-up`/`fluent-recreate`/`fluent-restart` используют
@@ -227,11 +229,11 @@ stdout через `fluentd`-driver.
 
 Если в effective-набор входит `worker-ai`, `workers-recreate` сам передаёт
 Compose профиль `ai` и запускает CPU-вариант по умолчанию (`AI_VARIANT=cpu`,
-`AI_RUNTIME=runc`). Без `worker-ai` профиль `ai` не передаётся. Для обычного
-`make up` на remote/local/uBook-хосте `.env.local` должен содержать
-`COMPOSE_PROFILES=ai`, если нужен CPU-AI; оставьте его пустым, если AI на этом
-хосте не запускается. Профили `server`, `api` и `monitoring` на таких хостах
-не нужны.
+`AI_RUNTIME=runc`). При пакетном запуске Compose получает профиль каждого
+выбранного worker. Для обычного `make up` на remote/local/uBook-хосте `.env.local`
+должен содержать `document,audio,video,image,data,ai`, если нужен CPU-AI; уберите
+только `ai`, если AI на этом хосте не запускается. Профили `server`, `api` и
+`monitoring` на таких хостах не нужны.
 
 Обновление (happy path — pull, без сборки):
 ```bash

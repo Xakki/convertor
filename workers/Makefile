@@ -184,6 +184,7 @@ WORKER_RECREATE_SERVICES ?=
 WORKER_RECREATE_REMOTE_SERVICES := worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
 WORKER_RECREATE_LOCAL_SERVICES := $(WORKER_RECREATE_REMOTE_SERVICES)
 WORKER_RECREATE_SAVPN_SERVICES := worker-data worker-image
+WORKER_SERVICE_NAMES := worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
 
 # Пересоздать/пуллить ТОЛЬКО контейнеры из проверенного effective set, не трогая
 # php/nginx/keydb/mariadb/ws-gateway/db-dump-cron. worker-api отделён от worker-*.
@@ -201,7 +202,7 @@ workers-pull: validate-ai-image ## Pull только worker-образы: WORKER
 	if [ -z "$$requested" ]; then requested="$$allowed"; fi; \
 	for service in $$requested; do case " $$allowed " in *" $$service "*) ;; *) echo "workers-pull: service '$$service' is not allowed by profile $(WORKER_RECREATE_PROFILE)"; exit 2 ;; esac; done; \
 	requested=$$(printf '%s\n' $$requested | sort -u | tr '\n' ' '); \
-	case " $$requested " in *" worker-ai "*) compose_profiles=ai ;; *) compose_profiles= ;; esac; \
+	compose_profiles=; for service in $$requested; do case "$$service" in worker-libreoffice) profile=document ;; worker-ffmpeg-audio) profile=audio ;; worker-ffmpeg-video) profile=video ;; worker-image) profile=image ;; worker-data) profile=data ;; worker-ai) profile=ai ;; *) echo "workers-pull: unknown service '$$service'"; exit 2 ;; esac; case ",$$compose_profiles," in *,$$profile,*) ;; *) compose_profiles="$${compose_profiles:+$$compose_profiles,}$$profile" ;; esac; done; \
 	echo "workers-pull: profile=$(WORKER_RECREATE_PROFILE) effective services=$$requested compose_profiles=$${compose_profiles:-none}"; \
 	available="$$(COMPOSE_PROFILES="$$compose_profiles" $(DC) config --services)"; \
 	images="$$(COMPOSE_PROFILES="$$compose_profiles" $(DC) config --images)"; \
@@ -210,19 +211,37 @@ workers-pull: validate-ai-image ## Pull только worker-образы: WORKER
 	COMPOSE_PROFILES="$$compose_profiles" $(DC) pull $$requested; $(MAKE) WORKER_SERVICES="$$requested" host-telemetry-refresh
 
 .PHONY: workers-recreate
-workers-recreate: validate-ai-image ## Recreate только worker-образы: WORKER_RECREATE_PROFILE=remote|local|uBook|saVpn; опционально WORKER_RECREATE_SERVICES=<allowlist>
+workers-recreate: validate-ai-image ## Recreate one worker: SERVICE=worker-data (known worker service only)
 	@set -eu; \
+	if [ -n "$(SERVICE)" ]; then \
+	  service="$(SERVICE)"; \
+	  case "$$service" in \
+	    worker-libreoffice) compose_profile=document ;; \
+	    worker-ffmpeg-audio) compose_profile=audio ;; \
+	    worker-ffmpeg-video) compose_profile=video ;; \
+	    worker-image) compose_profile=image ;; \
+	    worker-data) compose_profile=data ;; \
+	    worker-ai) compose_profile=ai ;; \
+	    *) echo "workers-recreate: unknown SERVICE '$$service' (use $(WORKER_SERVICE_NAMES))"; exit 2 ;; \
+	  esac; \
+	  available="$$(COMPOSE_PROFILES="$$compose_profile" $(DC) config --services)"; \
+	  printf '%s\n' "$$available" | grep -Fqx "$$service" || { echo "workers-recreate: SERVICE '$$service' is not in the effective Compose service set"; exit 2; }; \
+	  echo "workers-recreate: SERVICE=$$service compose_profile=$$compose_profile"; \
+	  COMPOSE_PROFILES="$$compose_profile" $(DC) up -d --force-recreate --no-deps "$$service"; \
+	  $(MAKE) WORKER_SERVICES="$$service" host-telemetry-refresh; \
+	  exit 0; \
+	fi; \
 	case "$(WORKER_RECREATE_PROFILE)" in \
-	    remote|uBook|ubook) allowed="$(WORKER_RECREATE_REMOTE_SERVICES)" ;; \
-	    local) allowed="$(WORKER_RECREATE_LOCAL_SERVICES)" ;; \
-	    saVpn) allowed="$(WORKER_RECREATE_SAVPN_SERVICES)" ;; \
-	    *) echo "workers-recreate: unknown profile '$(WORKER_RECREATE_PROFILE)' (use remote, local, ubook or saVpn)"; exit 2 ;; \
+    remote|uBook|ubook) allowed="$(WORKER_RECREATE_REMOTE_SERVICES)" ;; \
+    local) allowed="$(WORKER_RECREATE_LOCAL_SERVICES)" ;; \
+    saVpn) allowed="$(WORKER_RECREATE_SAVPN_SERVICES)" ;; \
+    *) echo "workers-recreate: unknown profile '$(WORKER_RECREATE_PROFILE)' (use remote, local, ubook or saVpn)"; exit 2 ;; \
 	esac; \
 	requested="$(WORKER_RECREATE_SERVICES)"; \
 	if [ -z "$$requested" ]; then requested="$$allowed"; fi; \
 	for service in $$requested; do case " $$allowed " in *" $$service "*) ;; *) echo "workers-recreate: service '$$service' is not allowed by profile $(WORKER_RECREATE_PROFILE)"; exit 2 ;; esac; done; \
 	requested=$$(printf '%s\n' $$requested | sort -u | tr '\n' ' '); \
-	case " $$requested " in *" worker-ai "*) compose_profiles=ai ;; *) compose_profiles= ;; esac; \
+	compose_profiles=; for service in $$requested; do case "$$service" in worker-libreoffice) profile=document ;; worker-ffmpeg-audio) profile=audio ;; worker-ffmpeg-video) profile=video ;; worker-image) profile=image ;; worker-data) profile=data ;; worker-ai) profile=ai ;; *) echo "workers-recreate: unknown service '$$service'"; exit 2 ;; esac; case ",$$compose_profiles," in *,$$profile,*) ;; *) compose_profiles="$${compose_profiles:+$$compose_profiles,}$$profile" ;; esac; done; \
 	effective="$$requested"; \
 	echo "workers-recreate: profile=$(WORKER_RECREATE_PROFILE) effective services=$$effective compose_profiles=$${compose_profiles:-none}"; \
 	available="$$(COMPOSE_PROFILES="$$compose_profiles" $(DC) config --services)"; \
@@ -465,6 +484,10 @@ test-makefile-worker-pull: ## Structural fake-Compose tests for profile-scoped w
 .PHONY: test-worker-build-release-contract
 test-worker-build-release-contract: ## Static build/release inventory and worker image contract tests
 	PYTHONPATH=. python3 -m pytest workers/tests/test_worker_api_ops_config.py -k host_telemetry_is_in_sanctioned_build_release_and_deploy_contract -p no:cacheprovider -q
+
+.PHONY: test-compose-worker-profiles
+test-compose-worker-profiles: ## Static worker profile and SERVICE recreate contract tests
+	PYTHONPATH=. python3 -m pytest workers/tests/test_worker_api_ops_config.py -k each_standard_worker_has_a_dedicated_compose_profile -p no:cacheprovider -q
 
 # Per-worker unit runs: тесты каждого воркера идут внутри pre-baked :test образа
 # (test-deps запечены — никакого pip install в runtime). Стенд НЕ нужен.

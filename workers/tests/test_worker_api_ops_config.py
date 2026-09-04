@@ -92,6 +92,29 @@ def test_worker_api_profile_is_enabled_only_on_the_main_server() -> None:
     )
 
 
+def test_each_standard_worker_has_a_dedicated_compose_profile() -> None:
+    compose = _read("docker-compose.yml")
+    expected = {
+        "worker-libreoffice": "document",
+        "worker-ffmpeg-audio": "audio",
+        "worker-ffmpeg-video": "video",
+        "worker-image": "image",
+        "worker-data": "data",
+        "worker-ai": "ai",
+    }
+    for service, profile in expected.items():
+        assert _compose_profiles(_compose_service(compose, service)) == {profile}
+
+    assert _environment_profiles(".env") >= set(expected.values())
+    assert _environment_profiles(".env.local_worker_example") == set(expected.values())
+
+    makefile = _read("workers/Makefile")
+    recreate = _target_recipe(makefile, "workers-recreate")
+    assert "SERVICE=worker-data" in recreate
+    assert "unknown SERVICE" in recreate
+    assert "--force-recreate --no-deps \"$$service\"" in recreate
+
+
 def test_worker_api_compose_is_production_profiled_logged_and_bounded() -> None:
     compose = _read("docker-compose.yml")
     worker_api = compose[compose.index("    worker-api:") : compose.index("    ws-gateway:")]
@@ -422,7 +445,7 @@ def test_workers_recreate_accepts_savpn_data_and_image_without_whitespace_matchi
 @pytest.mark.parametrize(
     ("profile", "services", "compose_services", "expected_profiles"),
     [
-        ("local", "worker-data", "worker-data", ""),
+        ("local", "worker-data", "worker-data", "data"),
         ("uBook", "worker-ai", "worker-ai", "ai"),
     ],
 )
