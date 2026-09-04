@@ -96,6 +96,10 @@ build-api-test: build-api ## Build worker-api:test with test dependencies
 build-metrics-exporter: bump-i ## Build metrics-exporter image
 	$(call build_img,metrics-exporter,metrics_exporter)
 
+.PHONY: build-host-telemetry
+build-host-telemetry: bump-i ## Build worker-host-telemetry image
+	$(call build_img,worker-host-telemetry,host-telemetry)
+
 .PHONY: build-gateway
 build-gateway: bump-i ## Build ws-gateway image (Harbor-suitable)
 	$(call build_gateway_img)
@@ -164,7 +168,7 @@ gateway-verify-code: ## RO: скопировать dlq_consumer.py ИЗ конт
 	@tmp=$$(mktemp); $(DC) cp ws-gateway:/app/workers/gateway/dlq_consumer.py $$tmp && grep -n DLQ_AUDIT_LOG_MARKER $$tmp; rm -f $$tmp
 
 .PHONY: build-workers
-build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-gateway ## REMOTE-safe: build 6 runnable образов без server-only worker-api и worker-ai
+build-workers: build-libreoffice build-ffmpeg build-image build-data build-metrics-exporter build-host-telemetry build-gateway ## REMOTE-safe: build 7 runnable образов без server-only worker-api и worker-ai
 
 .PHONY: build-server-workers
 build-server-workers: build-workers build-api ## SERVER: build generic remote-safe images + production-only worker-api
@@ -354,7 +358,7 @@ build-ai-cpu: bump-i build-ai-base ## LOCAL build: свежий ai-base + ai.cpu
 # после смены IMAGE_NS на Harbor-namespace build_test_img тегает :test прямо в Harbor,
 # такой образ никогда не должен уехать push'ем). worker-ai-cuda НЕ публикуется —
 # остаётся локальной сборкой GPU-хоста (§1, карта CNV-7-cuda-worker-ai-rebuild-gpu-host).
-RELEASE_IMAGES := worker-libreoffice worker-ffmpeg worker-image worker-data worker-api metrics-exporter ws-gateway
+RELEASE_IMAGES := worker-libreoffice worker-ffmpeg worker-image worker-data worker-api metrics-exporter worker-host-telemetry ws-gateway
 
 .PHONY: release-tag
 release-tag:  # служебный prereq release-workers — печатает RELEASE_TAG до старта сборки
@@ -457,6 +461,10 @@ dlq-inspect: ## RO-инспекция DLQ-стрима STREAM=conv.dead (default
 .PHONY: test-makefile-worker-pull
 test-makefile-worker-pull: ## Structural fake-Compose tests for profile-scoped worker pulls
 	python3 -m pytest workers/tests/test_makefile_worker_pull.py -p no:cacheprovider -q
+
+.PHONY: test-worker-build-release-contract
+test-worker-build-release-contract: ## Static build/release inventory and worker image contract tests
+	PYTHONPATH=. python3 -m pytest workers/tests/test_worker_api_ops_config.py -k host_telemetry_is_in_sanctioned_build_release_and_deploy_contract -p no:cacheprovider -q
 
 # Per-worker unit runs: тесты каждого воркера идут внутри pre-baked :test образа
 # (test-deps запечены — никакого pip install в runtime). Стенд НЕ нужен.

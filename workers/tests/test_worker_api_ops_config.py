@@ -145,6 +145,7 @@ def test_worker_api_make_targets_keep_generic_operations_remote_safe() -> None:
         "build-image",
         "build-data",
         "build-metrics-exporter",
+        "build-host-telemetry",
         "build-gateway",
     ]
     assert build_server_dependencies == ["build-workers", "build-api"]
@@ -164,6 +165,29 @@ def test_worker_api_make_targets_keep_generic_operations_remote_safe() -> None:
     assert "build-api-test" in test_images
     assert len(test_images.partition(":")[2].partition("##")[0].split()) == 6
     assert "worker-api" in makefile[makefile.index("RELEASE_IMAGES :=") :].splitlines()[0]
+
+
+def test_host_telemetry_is_in_sanctioned_build_release_and_deploy_contract() -> None:
+    makefile = _read("workers/Makefile")
+    dockerfile = _read("docker/workers/host-telemetry.Dockerfile")
+    deploy_compose = _read("deploy/docker-compose.yml")
+    build_target = _target_recipe(makefile, "build-host-telemetry")
+
+    build_workers = _target_recipe(makefile, "build-workers")
+    release_images = makefile[makefile.index("RELEASE_IMAGES :=") :].splitlines()[0]
+
+    assert "build-host-telemetry" in build_workers
+    assert "$(call build_img,worker-host-telemetry,host-telemetry)" in build_target
+    assert "worker-host-telemetry" in release_images
+    assert "image: ${IMAGE_NS:-harbor.xakki.ru/convertor}/worker-host-telemetry:${IMAGE_TAG:-latest}" in deploy_compose
+
+    assert "ARG APP_VER=0" in dockerfile
+    assert "LABEL org.opencontainers.image.version=${APP_VER}" in dockerfile
+    assert "USER collector" in dockerfile
+    assert 'ENTRYPOINT ["python3", "-m", "workers.host_telemetry"]' in dockerfile
+    assert "requirements-host-telemetry.txt" in dockerfile
+    assert "worker-ai-cuda" not in build_workers
+    assert "worker-ai-cuda" not in release_images
 
 
 def test_worker_recreate_profiles_keep_savpn_and_cpu_scope_explicit() -> None:
