@@ -64,6 +64,12 @@ def test_initial_allowlist_is_regular_empty_mapping_without_worker_claims(tmp_pa
     }
 
 
+def test_main_up_allows_host_only_without_inactive_worker_profiles():
+    makefile = (MODULE_PATH.parents[1] / "Makefile").read_text()
+    assert "WORKER_SERVICES ?=" in makefile
+    assert "generate-allowlist.py --initial" in makefile
+    assert "workers-recreate" in (MODULE_PATH.parents[1] / "workers" / "Makefile").read_text()
+
 def test_install_lifecycle_initializes_before_transition_and_generates_after_transition():
     script = (MODULE_PATH.parent / "install.sh").read_text()
     assert "--initial" in script

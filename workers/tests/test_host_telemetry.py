@@ -32,6 +32,33 @@ def test_snapshot_is_bounded_and_rate_limited(tmp_path: Path):
     assert collector.collect() is not None
 
 
+def test_worker_cpu_delta_and_host_cpu_window_are_unknown_then_bounded(tmp_path: Path):
+    root = tmp_path / "host"
+    (root / "proc").mkdir(parents=True)
+    (root / "proc/meminfo").write_text("MemTotal: 100 kB\nMemAvailable: 40 kB\n")
+    (root / "proc/loadavg").write_text("2.0 1 1 1/1 1\n")
+    (root / "sys/devices/system/cpu").mkdir(parents=True)
+    (root / "sys/devices/system/cpu/possible").write_text("0-3\n")
+    (root / "root-probe").mkdir()
+    cgroup = root / "sys/fs/cgroup/worker-data"
+    cgroup.mkdir(parents=True)
+    (cgroup / "cpu.stat").write_text("usage_usec 100\n")
+    (cgroup / "memory.current").write_text("10\n")
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment", "format": "actual-cgroup-v2-service-v1"}, "workers": {"worker-data": "worker-data"}}))
+    (root / "proc/stat").write_text("cpu 10 0 10 80 0 0 0 0 0 0\n")
+    values = iter([1000.0, 1600.0]).__next__
+    collector = HostTelemetryCollector("host.example", allowlist, root, values)
+    assert collector.collect()["workerCpuUsageUsec"] is None
+    (cgroup / "cpu.stat").write_text("usage_usec 700\n")
+    (root / "proc/stat").write_text("cpu 30 0 30 120 0 0 0 0 0 0\n")
+    snapshot = collector.collect()
+    assert snapshot["workerCpuUsageUsec"] == 600
+    assert snapshot["workerCpuWindowUsec"] == 600_000_000
+    assert snapshot["hostCpuUtilization"] == 0.5
+    assert snapshot["sampleWindowStart"] == 1000.0
+    assert snapshot["sampleWindowEnd"] == 1600.0
+
 def test_allowlist_rejects_absolute_and_parent_paths(tmp_path: Path):
     p = tmp_path / "allowlist.json"
     p.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment", "format": "actual-cgroup-v2-service-v1"}, "workers": {"worker-data": "../proc"}}))

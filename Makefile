@@ -29,7 +29,7 @@ PHP_CONT   = $(COMPOSE_PROJECT_NAME)-php
 KEYDB_CONT = $(COMPOSE_PROJECT_NAME)-keydb
 HOST_NAME ?=
 HOST_IP   :=
-WORKER_SERVICES ?= worker-libreoffice worker-ffmpeg-audio worker-ffmpeg-video worker-image worker-data worker-ai
+WORKER_SERVICES ?=
 MYSQL_SLOWLOG_PATH    := $(CURDIR)/docker/logs
 JSON_LOG_PATH         := $(CURDIR)/docker/logs
 FLUENT_BIT_CONF_DIR   := $(CURDIR)/docker/fluent-log/fluent-bit
@@ -140,7 +140,11 @@ host-root-probe:
 	@test "$$(df -P / | awk 'NR==2 {print $$1}')" = "$$(df -P "$(HOST_ROOT_PROBE_DIR)" | awk 'NR==2 {print $$1}')" || { echo "host probe must be on root filesystem" >&2; exit 1; }
 
 host-telemetry-allowlist: host-root-probe
-	@python3 deploy/generate-allowlist.py --output deploy/allowlist.json --docker-project "$(COMPOSE_PROJECT_NAME)" --cgroup-root /sys/fs/cgroup $(foreach svc,$(WORKER_SERVICES),--worker $(svc))
+	@if [ -z "$(strip $(WORKER_SERVICES))" ]; then \
+		python3 deploy/generate-allowlist.py --initial --output deploy/allowlist.json; \
+	else \
+		python3 deploy/generate-allowlist.py --output deploy/allowlist.json --docker-project "$(COMPOSE_PROJECT_NAME)" --cgroup-root /sys/fs/cgroup $(foreach svc,$(WORKER_SERVICES),--worker $(svc)); \
+	fi
 
 host-telemetry-refresh: host-root-probe
 	@set -eu; backup=$$(mktemp); trap 'rm -f "$$backup"' EXIT; \

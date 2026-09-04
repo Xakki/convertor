@@ -105,8 +105,8 @@
                      :class="snapshot.stale ? 'border-yellow-500/40' : ''">
                 <div class="flex justify-between"><strong class="font-mono text-white" x-text="snapshot.host"></strong><span x-show="snapshot.stale" class="text-yellow-400">устарело</span></div>
                 <div class="mt-2 grid grid-cols-2 gap-2" aria-label="Host resource telemetry">
-                    <span title="Logical host CPUs; host scope; observed timestamp"><b>CPU:</b> <span x-text="snapshot.cpuCount ?? '—'"></span></span>
-                    <span title="MemAvailable; bytes; host scope; observed timestamp"><b>Свободная память:</b> <span x-text="formatBytes(snapshot.memAvailableBytes)"></span></span>
+                    <span title="Host CPU utilization = /proc/stat busy delta / total delta; host scope; explicit observation window; host-collector source"><b>CPU:</b> <span x-text="formatPercent(hostCpuPercent(snapshot))"></span></span>
+                    <span title="MemAvailable / MemTotal; host scope; observed timestamp; host-collector source"><b>Свободная память:</b> <span x-text="formatPercent(hostMemoryAvailablePercent(snapshot))"></span></span>
                     <span title="Root filesystem used bytes / total bytes; host scope; observed timestamp"><b>Диск /:</b> <span x-text="formatBytes(snapshot.diskUsedBytes) + ' / ' + formatBytes(snapshot.diskTotalBytes)"></span></span>
                     <span title="Raw 1-minute host load average; host scope; observed timestamp"><b>Load 1m:</b> <span x-text="snapshot.load1 ?? '—'"></span></span>
                 </div>
@@ -652,11 +652,25 @@
                 return (value * 100).toFixed(1) + '%';
             },
 
+            hostCpuPercent(snapshot) {
+                const telemetry = snapshot.telemetry || snapshot;
+                const value = Number(telemetry.hostCpuUtilization);
+                const window = Number(telemetry.hostCpuWindowUsec);
+                return Number.isFinite(value) && value >= 0 && value <= 1 && Number.isFinite(window) && window > 0 ? value : null;
+            },
+
+            hostMemoryAvailablePercent(snapshot) {
+                const total = Number(snapshot.memTotalBytes);
+                const available = Number(snapshot.memAvailableBytes);
+                return Number.isFinite(total) && total > 0 && Number.isFinite(available) && available >= 0 && available <= total ? available / total : null;
+            },
+
             workerCpuPercent(snapshot) {
-                const windowUsec = Number(snapshot.workerCpuWindowUsec);
+                const telemetry = snapshot.telemetry || snapshot;
+                const windowUsec = Number(telemetry.workerCpuWindowUsec);
                 const cpuCount = Number(snapshot.cpuCount);
                 if (!Number.isFinite(windowUsec) || windowUsec <= 0 || !Number.isFinite(cpuCount) || cpuCount <= 0) return null;
-                const aggregateUsec = Number(snapshot.workerCpuUsageUsec ?? Object.values(snapshot.workers || {}).reduce((sum, worker) => sum + (Number(worker.cpuUsageUsec) || 0), 0));
+                const aggregateUsec = Number(telemetry.workerCpuUsageUsec);
                 return Number.isFinite(aggregateUsec) && aggregateUsec >= 0 ? aggregateUsec / windowUsec / cpuCount : null;
             },
 

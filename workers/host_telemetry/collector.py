@@ -39,6 +39,9 @@ class HostTelemetryCollector:
         self.clock = clock
         self.disk_probe = disk_probe
         self._last_collected: float | None = None
+        self._previous_worker_cpu: dict[str, int] | None = None
+        self._previous_host_cpu: tuple[int, int] | None = None
+        self._previous_sample_at: float | None = None
 
     def collect(self) -> dict[str, Any] | None:
         now = float(self.clock())
@@ -49,6 +52,35 @@ class HostTelemetryCollector:
         mem = self._read_meminfo()
         load = self._read_load()
         disk = self._read_disk()
+        cpu_count = self._read_cpu_count()
+        workers = self._read_workers(allowlist)
+        worker_cpu = {
+            name: value["cpuUsageUsec"] for name, value in workers.items()
+            if value["cpuUsageUsec"] is not None
+        }
+        window_usec = None
+        worker_delta = None
+        host_delta = None
+        host_window_usec = None
+        host_utilization = None
+        previous_sample_at = self._previous_sample_at
+        if previous_sample_at is not None and now > previous_sample_at:
+            window_usec = int((now - previous_sample_at) * 1_000_000)
+            if self._previous_worker_cpu is not None and len(worker_cpu) == len(workers):
+                deltas = [worker_cpu[name] - self._previous_worker_cpu.get(name, -1) for name in workers]
+                if all(delta >= 0 for delta in deltas):
+                    worker_delta = min(sum(deltas), window_usec * max(cpu_count or 1, 1))
+            current_host_cpu = self._read_host_cpu()
+            if self._previous_host_cpu is not None and current_host_cpu is not None:
+                busy_delta = current_host_cpu[0] - self._previous_host_cpu[0]
+                total_delta = current_host_cpu[1] - self._previous_host_cpu[1]
+                if busy_delta >= 0 and total_delta > 0:
+                    host_delta = busy_delta
+                    host_window_usec = total_delta
+                    host_utilization = busy_delta / total_delta
+        self._previous_worker_cpu = worker_cpu if len(worker_cpu) == len(workers) else None
+        self._previous_host_cpu = self._read_host_cpu()
+        self._previous_sample_at = now
         return {
             "contractVersion": HOST_TELEMETRY_VERSION,
             "host": self.host_name,
@@ -56,13 +88,21 @@ class HostTelemetryCollector:
             "freshUntil": now + 1200,
             "source": "host-collector",
             "scope": "host",
-            "cpuCount": self._read_cpu_count(),
+            "cpuCount": cpu_count,
             "memTotalBytes": mem[0],
             "memAvailableBytes": mem[1],
             "diskTotalBytes": disk[0],
             "diskUsedBytes": disk[1],
             "load1": load,
-            "workers": self._read_workers(allowlist),
+            "sampleWindowStart": previous_sample_at if previous_sample_at is not None else None,
+            "sampleWindowEnd": now,
+            "sampleWindowUsec": window_usec,
+            "workerCpuUsageUsec": worker_delta,
+            "workerCpuWindowUsec": window_usec if worker_delta is not None else None,
+            "hostCpuUsageUsec": host_delta,
+            "hostCpuWindowUsec": host_window_usec,
+            "hostCpuUtilization": host_utilization,
+            "workers": workers,
         }
 
     def _load_allowlist(self) -> dict[str, Any]:
@@ -148,6 +188,18 @@ class HostTelemetryCollector:
             count = sum(1 for line in self._read("/proc/stat").splitlines() if re.match(r"^cpu[0-9]+ ", line))
             return count or None
         except OSError:
+            return None
+
+    def _read_host_cpu(self) -> tuple[int, int] | None:
+        try:
+            fields = self._read("/proc/stat").splitlines()[0].split()[1:]
+            values = [int(value) for value in fields]
+            if len(values) < 4:
+                return None
+            idle = values[3] + (values[4] if len(values) > 4 else 0)
+            total = sum(values)
+            return total - idle, total
+        except (OSError, ValueError, IndexError):
             return None
 
     def _read_disk(self) -> tuple[int | None, int | None]:

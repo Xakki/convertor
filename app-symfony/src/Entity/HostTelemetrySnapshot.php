@@ -25,6 +25,9 @@ class HostTelemetrySnapshot
     /** @var array<string, mixed> */
     #[ORM\Column(type: 'json')]
     private array $workers = [];
+    /** @var array<string, mixed> */
+    #[ORM\Column(type: 'json')]
+    private array $telemetry = [];
     #[ORM\Column(type: 'integer')] private int $contractVersion;
     #[ORM\Column(type: 'datetime_immutable')] private \DateTimeImmutable $observedAt;
     #[ORM\Column(type: 'datetime_immutable')] private \DateTimeImmutable $receivedAt;
@@ -43,6 +46,7 @@ class HostTelemetrySnapshot
         $this->diskUsedBytes     = self::intOrNull($data['diskUsedBytes'] ?? null);
         $this->load1             = is_numeric($data['load1'] ?? null) ? (float) $data['load1'] : null;
         $this->workers           = is_array($data['workers'] ?? null) ? $data['workers'] : [];
+        $this->telemetry         = is_array($data['telemetry'] ?? null) ? $data['telemetry'] : [];
         $this->observedAt        = $observedAt;
         $this->receivedAt        = $receivedAt;
     }
@@ -67,6 +71,6 @@ class HostTelemetrySnapshot
      */
     public function getData(): array
     {
-        return ['contractVersion' => $this->contractVersion,'host' => $this->hostName,'cpuCount' => $this->cpuCount,'memTotalBytes' => $this->memTotalBytes,'memAvailableBytes' => $this->memAvailableBytes,'diskTotalBytes' => $this->diskTotalBytes,'diskUsedBytes' => $this->diskUsedBytes,'load1' => $this->load1,'workers' => $this->workers,'observedAt' => $this->observedAt->format(\DateTimeInterface::ATOM),'receivedAt' => $this->receivedAt->format(\DateTimeInterface::ATOM)];
+        return ['contractVersion' => $this->contractVersion,'host' => $this->hostName,'cpuCount' => $this->cpuCount,'memTotalBytes' => $this->memTotalBytes,'memAvailableBytes' => $this->memAvailableBytes,'diskTotalBytes' => $this->diskTotalBytes,'diskUsedBytes' => $this->diskUsedBytes,'load1' => $this->load1,'workers' => $this->workers,'telemetry' => $this->telemetry,'observedAt' => $this->observedAt->format(\DateTimeInterface::ATOM),'receivedAt' => $this->receivedAt->format(\DateTimeInterface::ATOM)];
     }
 }

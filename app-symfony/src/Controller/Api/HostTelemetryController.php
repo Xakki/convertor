@@ -82,6 +82,15 @@ final class HostTelemetryController extends AbstractController
         }
         $body            = array_merge($body, $normalizedMetrics);
         $body['workers'] = $sanitizedWorkers;
+        $telemetryFields = ['sampleWindowStart', 'sampleWindowEnd', 'sampleWindowUsec', 'workerCpuUsageUsec', 'workerCpuWindowUsec', 'hostCpuUsageUsec', 'hostCpuWindowUsec', 'hostCpuUtilization'];
+        $body['telemetry'] = [];
+        foreach ($telemetryFields as $field) {
+            $value = $body[$field] ?? null;
+            if ($value !== null && $this->number($value) === null) {
+                return $this->json(['error' => 'invalid telemetry observation'], Response::HTTP_BAD_REQUEST);
+            }
+            $body['telemetry'][$field] = $value === null ? null : $this->number($value);
+        }
         $this->snapshots->save(new HostTelemetrySnapshot($host, $body, (new \DateTimeImmutable())->setTimestamp((int) $observed), new \DateTimeImmutable()));
 
         return $this->json(['ok' => true]);
