@@ -21,7 +21,7 @@ def test_snapshot_is_bounded_and_rate_limited(tmp_path: Path):
     (root / "sys/devices/system/cpu/possible").write_text("0-3\n")
     (root / "root-probe").mkdir()
     allowlist = tmp_path / "allowlist.json"
-    allowlist.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment"}, "workers": {"worker-data": "convertor-workers/worker-data"}}))
+    allowlist.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment", "format": "actual-cgroup-v2-service-v1"}, "workers": {"worker-data": "convertor-workers/worker-data"}}))
     clock = iter([1000.0, 1001.0, 1600.0]).__next__
     collector = HostTelemetryCollector("host.example", allowlist, root, clock)
     first = collector.collect()
@@ -34,7 +34,7 @@ def test_snapshot_is_bounded_and_rate_limited(tmp_path: Path):
 
 def test_allowlist_rejects_absolute_and_parent_paths(tmp_path: Path):
     p = tmp_path / "allowlist.json"
-    p.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment"}, "workers": {"x": "../proc"}}))
+    p.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment", "format": "actual-cgroup-v2-service-v1"}, "workers": {"worker-data": "../proc"}}))
     collector = HostTelemetryCollector("host.example", p, tmp_path)
     try:
         collector.collect()
@@ -80,11 +80,53 @@ def test_worker_symlink_cannot_escape_collector_root(tmp_path: Path):
     link = tmp_path / "worker"
     link.symlink_to(outside, target_is_directory=True)
     allowlist = tmp_path / "allowlist.json"
-    allowlist.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment"}, "workers": {"x": "worker"}}))
+    allowlist.write_text(json.dumps({"version": 1, "provenance": {"source": "deployment", "format": "actual-cgroup-v2-service-v1"}, "workers": {"worker-data": "worker"}}))
 
     result = HostTelemetryCollector("host.example", allowlist, tmp_path).collect()
 
-    assert result["workers"]["x"] == {"cpuUsageUsec": None, "memoryBytes": None}
+    assert result["workers"]["worker-data"] == {"cpuUsageUsec": None, "memoryBytes": None}
+
+
+def test_allowlist_rejects_unknown_service_before_worker_reads(tmp_path: Path):
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({
+        "version": 1,
+        "provenance": {"source": "deployment", "format": "actual-cgroup-v2-service-v1"},
+        "workers": {"not-a-compose-service": "worker-data"},
+    }))
+    collector = HostTelemetryCollector("host.example", allowlist, tmp_path)
+    try:
+        collector._load_allowlist()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown service accepted")
+
+
+def test_allowlist_rejects_bad_provenance_and_count(tmp_path: Path):
+    for provenance, workers in [
+        ({"source": "operator", "format": "actual-cgroup-v2-service-v1"}, {"worker-data": "worker-data"}),
+        ({"source": "deployment", "format": "initial-empty-v1"}, {"worker-data": "worker-data"}),
+        ({"source": "deployment", "format": "actual-cgroup-v2-service-v1"}, {f"worker-data-{i}": "worker-data" for i in range(33)}),
+    ]:
+        path = tmp_path / f"allowlist-{len(workers)}.json"
+        path.write_text(json.dumps({"version": 1, "provenance": provenance, "workers": workers}))
+        try:
+            HostTelemetryCollector("host.example", path, tmp_path)._load_allowlist()
+        except ValueError:
+            continue
+        raise AssertionError("invalid allowlist accepted")
+
+
+def test_allowlist_rejects_duplicate_json_keys(tmp_path: Path):
+    path = tmp_path / "allowlist.json"
+    path.write_text('{"version":1,"version":1,"provenance":{"source":"deployment","format":"initial-empty-v1"},"workers":{}}')
+    try:
+        HostTelemetryCollector("host.example", path, tmp_path)._load_allowlist()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("duplicate key accepted")
 
 
 def test_gateway_telemetry_ingress_is_bounded_and_per_host():

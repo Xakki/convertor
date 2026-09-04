@@ -12,6 +12,10 @@ from pathlib import Path
 
 SERVICE = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 CGROUP = re.compile(r"^[a-zA-Z0-9_.@+:-]+(?:/[a-zA-Z0-9_.@+:-]+)*$")
+SUPPORTED_SERVICES = frozenset({
+    "worker-libreoffice", "worker-ffmpeg-audio", "worker-ffmpeg-video",
+    "worker-image", "worker-data", "worker-ai",
+})
 
 
 def _safe_relative(path: str) -> str:
@@ -41,8 +45,10 @@ def discover_cgroup(service: str, project: str, cgroup_root: Path) -> str:
 
 
 def build(services: list[str], cgroup_paths: dict[str, str] | None = None) -> dict[str, object]:
-    unique = list(dict.fromkeys(services))
-    if not unique or len(unique) > 32 or any(not SERVICE.fullmatch(item) for item in unique):
+    if len(set(services)) != len(services):
+        raise ValueError("duplicate worker service")
+    unique = list(services)
+    if not unique or len(unique) > 32 or any(not SERVICE.fullmatch(item) or item not in SUPPORTED_SERVICES for item in unique):
         raise ValueError("invalid worker service list")
     if cgroup_paths is None or set(cgroup_paths) != set(unique):
         raise ValueError("actual cgroup mappings are required")
@@ -64,18 +70,25 @@ def build_initial() -> dict[str, object]:
 
 
 def validate(data: dict[str, object], cgroup_root: Path | None = None) -> None:
-    if not isinstance(data, dict) or data.get("version") != 1:
+    if not isinstance(data, dict) or set(data) != {"version", "provenance", "workers"} or data.get("version") != 1:
         raise ValueError("invalid deployment allowlist")
     provenance = data.get("provenance")
     workers = data.get("workers")
-    if not isinstance(provenance, dict) or provenance.get("source") != "deployment":
+    if (
+        not isinstance(provenance, dict)
+        or set(provenance) != {"source", "format"}
+        or provenance.get("source") != "deployment"
+        or provenance.get("format") not in {"actual-cgroup-v2-service-v1", "initial-empty-v1"}
+    ):
         raise ValueError("invalid deployment allowlist")
     if not isinstance(workers, dict) or len(workers) > 32:
         raise ValueError("allowlist must contain workers")
     if not workers and provenance.get("format") != "initial-empty-v1":
         raise ValueError("allowlist must contain workers")
+    if workers and provenance.get("format") != "actual-cgroup-v2-service-v1":
+        raise ValueError("invalid allowlist provenance")
     for name, path in workers.items():
-        if not isinstance(name, str) or not SERVICE.fullmatch(name) or not isinstance(path, str):
+        if not isinstance(name, str) or not SERVICE.fullmatch(name) or name not in SUPPORTED_SERVICES or not isinstance(path, str):
             raise ValueError("invalid worker mapping")
         relative = _safe_relative(path)
         if cgroup_root is not None and not (cgroup_root / relative).is_dir():

@@ -104,11 +104,23 @@
             <article class="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-xs text-zinc-300"
                      :class="snapshot.stale ? 'border-yellow-500/40' : ''">
                 <div class="flex justify-between"><strong class="font-mono text-white" x-text="snapshot.host"></strong><span x-show="snapshot.stale" class="text-yellow-400">устарело</span></div>
-                <div class="mt-2 grid grid-cols-2 gap-2">
+                <div class="mt-2 grid grid-cols-2 gap-2" aria-label="Host resource telemetry">
                     <span title="Logical host CPUs; host scope; observed timestamp"><b>CPU:</b> <span x-text="snapshot.cpuCount ?? '—'"></span></span>
                     <span title="MemAvailable; bytes; host scope; observed timestamp"><b>Свободная память:</b> <span x-text="formatBytes(snapshot.memAvailableBytes)"></span></span>
                     <span title="Root filesystem used bytes / total bytes; host scope; observed timestamp"><b>Диск /:</b> <span x-text="formatBytes(snapshot.diskUsedBytes) + ' / ' + formatBytes(snapshot.diskTotalBytes)"></span></span>
-                    <span title="1-minute load average; host scope; normalized by logical CPUs in UI"><b>Load 1m:</b> <span x-text="snapshot.load1 ?? '—'"></span></span>
+                    <span title="Raw 1-minute host load average; host scope; observed timestamp"><b>Load 1m:</b> <span x-text="snapshot.load1 ?? '—'"></span></span>
+                </div>
+                <div class="mt-3 border-t border-zinc-800 pt-2" aria-describedby="worker-aggregate-help">
+                    <strong>Агрегат воркеров</strong>
+                    <span id="worker-aggregate-help" class="ml-1 text-zinc-500"
+                          title="Worker scope. CPU = aggregate worker usage / logical host CPU over the reported sample window; memory = aggregate RSS / host MemTotal; load = raw host 1-minute load / logical CPUs. Null means the source did not provide a safe denominator or window.">
+                        ⓘ
+                    </span>
+                    <div class="mt-1 grid grid-cols-3 gap-2">
+                        <span title="Worker CPU aggregate / logical host CPU; sample-window percentage"><b>CPU:</b> <span x-text="formatPercent(workerCpuPercent(snapshot))"></span></span>
+                        <span title="Worker aggregate RSS / host MemTotal; host denominator"><b>Память:</b> <span x-text="formatPercent(workerMemoryPercent(snapshot))"></span></span>
+                        <span title="Raw 1-minute load average / logical host CPUs; normalized host load"><b>Load:</b> <span x-text="formatPercent(normalizedLoadPercent(snapshot))"></span></span>
+                    </div>
                 </div>
                 <div class="mt-2 text-zinc-500" x-text="'Наблюдение: ' + fmtDate(snapshot.observedAt) + (snapshot.stale ? ' (данные старше 20 минут)' : '')"></div>
             </article>
@@ -633,6 +645,39 @@
                     }
                 }
                 host.workersList = next;
+            },
+
+            formatPercent(value) {
+                if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+                return (value * 100).toFixed(1) + '%';
+            },
+
+            workerCpuPercent(snapshot) {
+                const windowUsec = Number(snapshot.workerCpuWindowUsec);
+                const cpuCount = Number(snapshot.cpuCount);
+                if (!Number.isFinite(windowUsec) || windowUsec <= 0 || !Number.isFinite(cpuCount) || cpuCount <= 0) return null;
+                const aggregateUsec = Number(snapshot.workerCpuUsageUsec ?? Object.values(snapshot.workers || {}).reduce((sum, worker) => sum + (Number(worker.cpuUsageUsec) || 0), 0));
+                return Number.isFinite(aggregateUsec) && aggregateUsec >= 0 ? aggregateUsec / windowUsec / cpuCount : null;
+            },
+
+            workerMemoryPercent(snapshot) {
+                const total = Number(snapshot.memTotalBytes);
+                if (!Number.isFinite(total) || total <= 0) return null;
+                const workers = Object.values(snapshot.workers || {});
+                if (workers.length === 0) return null;
+                let aggregate = 0;
+                for (const worker of workers) {
+                    const value = Number(worker.memoryBytes);
+                    if (!Number.isFinite(value) || value < 0) return null;
+                    aggregate += value;
+                }
+                return aggregate / total;
+            },
+
+            normalizedLoadPercent(snapshot) {
+                const load = Number(snapshot.load1);
+                const cpuCount = Number(snapshot.cpuCount);
+                return Number.isFinite(load) && load >= 0 && Number.isFinite(cpuCount) && cpuCount > 0 ? load / cpuCount : null;
             },
 
             formatBytes(value) {

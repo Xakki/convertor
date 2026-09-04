@@ -9,7 +9,17 @@ from typing import Any
 
 HOST_TELEMETRY_VERSION = 1
 _MIN_INTERVAL_SECONDS = 600
+_MAX_WORKERS = 32
 _HOST_NAME = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$")
+_SERVICE = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
+_CGROUP = re.compile(r"^[a-zA-Z0-9_.@+:-]+(?:/[a-zA-Z0-9_.@+:-]+)*$")
+# Keep this boundary local to the collector: it must fail closed when a
+# deployment file is replaced independently of the compose manifest.
+_SUPPORTED_SERVICES = frozenset({
+    "worker-libreoffice", "worker-ffmpeg-audio", "worker-ffmpeg-video",
+    "worker-image", "worker-data", "worker-ai",
+})
+_ALLOWLIST_FORMATS = frozenset({"actual-cgroup-v2-service-v1", "initial-empty-v1"})
 
 
 def validate_host_name(value: str | None) -> str | None:
@@ -56,21 +66,53 @@ class HostTelemetryCollector:
         }
 
     def _load_allowlist(self) -> dict[str, Any]:
-        raw = json.loads(self.allowlist_path.read_text(encoding="utf-8"))
-        provenance = raw.get("provenance") if isinstance(raw, dict) else None
-        if (
-            not isinstance(raw, dict)
-            or raw.get("version") != 1
-            or not isinstance(provenance, dict)
-            or provenance.get("source") != "deployment"
-            or not isinstance(raw.get("workers"), dict)
-            or (not raw["workers"] and provenance.get("format") != "initial-empty-v1")
-        ):
+        def reject_duplicate(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate allowlist key")
+                result[key] = value
+            return result
+
+        try:
+            raw = json.loads(
+                self.allowlist_path.read_text(encoding="utf-8"),
+                object_pairs_hook=reject_duplicate,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError("invalid allowlist") from exc
+
+        if not isinstance(raw, dict) or set(raw) != {"version", "provenance", "workers"} or raw["version"] != 1:
             raise ValueError("invalid allowlist")
-        for name, rel in raw["workers"].items():
-            if not isinstance(name, str) or not isinstance(rel, str) or not rel or rel.startswith("/") or any(part in {"..", "."} for part in Path(rel).parts):
+        provenance = raw["provenance"]
+        if (
+            not isinstance(provenance, dict)
+            or set(provenance) != {"source", "format"}
+            or provenance["source"] != "deployment"
+            or provenance["format"] not in _ALLOWLIST_FORMATS
+        ):
+            raise ValueError("invalid allowlist provenance")
+        workers = raw["workers"]
+        if not isinstance(workers, dict) or len(workers) > _MAX_WORKERS:
+            raise ValueError("invalid allowlist worker count")
+        if not workers and provenance["format"] != "initial-empty-v1":
+            raise ValueError("invalid empty allowlist")
+        if workers and provenance["format"] != "actual-cgroup-v2-service-v1":
+            raise ValueError("invalid allowlist provenance")
+
+        validated: dict[str, str] = {}
+        for name, rel in workers.items():
+            if not isinstance(name, str) or not _SERVICE.fullmatch(name) or name not in _SUPPORTED_SERVICES:
+                raise ValueError("invalid worker service")
+            if (
+                not isinstance(rel, str)
+                or not _CGROUP.fullmatch(rel)
+                or rel.startswith("/")
+                or any(part in {".", ".."} for part in Path(rel).parts)
+            ):
                 raise ValueError("invalid relative worker cgroup path")
-        return raw["workers"]
+            validated[name] = rel
+        return validated
 
     def _read(self, path: str) -> str:
         return (self.root / path.lstrip("/")).read_text(encoding="utf-8")

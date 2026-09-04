@@ -71,6 +71,15 @@ final class AdminControllerTest extends WebTestCase
         self::assertStringContainsString('href="/admin/workers"', $html, 'sidebar path nav link present');
         self::assertStringNotContainsString('href="#workers"', $html);
         self::assertStringContainsString('/api/v1/admin/workers', $html, 'JSON endpoint URL present in the poll code');
+        self::assertStringContainsString('Host resource telemetry', $html);
+        self::assertStringContainsString('Агрегат воркеров', $html);
+        self::assertStringContainsString('workerCpuPercent(snapshot)', $html);
+        self::assertStringContainsString('workerMemoryPercent(snapshot)', $html);
+        self::assertStringContainsString('normalizedLoadPercent(snapshot)', $html);
+        self::assertStringContainsString('logical host CPU', $html);
+        self::assertStringContainsString('MemTotal', $html);
+        self::assertStringContainsString('sample window', $html);
+        self::assertStringContainsString('aria-describedby="worker-aggregate-help"', $html);
         self::assertStringNotContainsString('id="overview"', $html);
         self::assertStringNotContainsString('chart.js', $html);
     }
