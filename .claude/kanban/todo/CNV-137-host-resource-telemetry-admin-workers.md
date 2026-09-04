@@ -205,6 +205,9 @@ host.
 - Coordinates with `[[CNV-133-distributed-workers-stage2]]` for remote-host
   privacy, identity and rollout topology; remote hosts/secrets are not required
   to implement this card.
+- Per-host credential separation and lifecycle are owned by
+  `[[CNV-139-per-host-worker-credentials-lifecycle]]`; until that card's cutover,
+  this card retains the explicitly deferred shared `WORKER_API_TOKEN` limitation.
 
 **Execution Log:**
 - 2026-09-01: inventory completed against compose, WorkerType, worker capability
