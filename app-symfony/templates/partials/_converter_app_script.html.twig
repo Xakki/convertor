@@ -155,7 +155,11 @@
             lockedCategory: options.lockedCategory || null,
             auth: { token: null, username: null },
             authError: '',
-            formats: [],        // [{from, to, category, isAi, ocrCapable}]
+            formats: [],        // [{from, to, category, isAi, ocrCapable, settingsProfile}]
+            settingsVersion: '',
+            settingsProfiles: {},
+            settingsValues: {},
+            settingsError: '',
             examples: [],       // home-04: живые примеры из GET /api/v1/examples
             inputMode: 'file',  // 'file' | 'text' — home-02 переключатель входа
             file: null,
@@ -165,12 +169,10 @@
             fromFormat: options.lockedFrom || '',
             toFormat: options.lockedTo || '',
             ocr: false,
-            imageOptionsOpen: false,
-            imageOptions: { width: '', height: '', quality: '', background: '#FFFFFF' },
             submitting: false,
-            downloading: false,
             error: '',
             errorInsufficientBalance: false,
+            downloading: false,
             dragging: false,
             job: { id: null, status: null, error: null },
             // home-13: виджет квот у формы (гость + залогиненный) — из GET
@@ -232,17 +234,12 @@
                     // залогиненного (guest-cookie аутентифицирует, но план/лимиты
                     // были бы гостевые, не реальные пользователя).
                     this.loadQuota();
+                    this.loadFormats();
                     if (ok) this.refreshTelegramLinkFlag();
                 });
 
                 // CNV-59: после оплаты в Telegram — обновить баланс при возврате на вкладку.
                 window.addEventListener('focus', () => this.onBillingWindowFocus());
-
-                // Загружаем матрицу форматов (публичный эндпоинт)
-                fetch('/api/v1/formats')
-                    .then((r) => r.json())
-                    .then((d) => { this.formats = d.formats || []; })
-                    .catch(() => { this.error = I18N.errors.formatsLoadFailed; });
 
                 // home-04: живые примеры (публичный эндпоинт). Тихий фейл —
                 // блок примеров вспомогательный, не критичен для конвертации.
@@ -262,6 +259,134 @@
                         this.examples = list;
                     })
                     .catch(() => { /* примеры не критичны — просто не покажем */ });
+            },
+
+            async loadFormats() {
+                try {
+                    const res = await this.authFetch('/api/v1/formats');
+                    if (!res.ok) throw new Error('formats request failed');
+                    const payload = await res.json();
+                    if (!this.isValidFormatsPayload(payload)) throw new Error('invalid formats payload');
+                    this.formats = payload.formats;
+                    this.settingsVersion = payload.settings.version;
+                    this.settingsProfiles = payload.settings.profiles;
+                    this.settingsError = '';
+                    this.loadSettingsState();
+                } catch (e) {
+                    this.formats = [];
+                    this.settingsVersion = '';
+                    this.settingsProfiles = {};
+                    this.settingsValues = {};
+                    this.settingsError = I18N.errors.formatsLoadFailed;
+                    this.error = I18N.errors.formatsLoadFailed;
+                }
+            },
+
+            isValidFormatsPayload(payload) {
+                if (!payload || !Array.isArray(payload.formats) || !payload.settings
+                    || typeof payload.settings.version !== 'string'
+                    || !payload.settings.profiles || typeof payload.settings.profiles !== 'object') return false;
+                for (const profile of Object.values(payload.settings.profiles)) {
+                    if (!profile || !Array.isArray(profile.fields)) return false;
+                    for (const field of profile.fields) {
+                        if (!this.isValidSettingsField(field)) return false;
+                    }
+                }
+                return true;
+            },
+
+            isValidSettingsField(field) {
+                const types = ['range', 'select', 'number', 'text', 'boolean', 'color'];
+                if (!field || typeof field.key !== 'string' || !types.includes(field.type)
+                    || typeof field.label !== 'string' || typeof field.editable !== 'boolean') return false;
+                if (['range', 'number'].includes(field.type)
+                    && (!Number.isInteger(field.min) || !Number.isInteger(field.max) || field.min > field.max)) return false;
+                if (field.type === 'select' && (!Array.isArray(field.options)
+                    || field.options.some((option) => !option || typeof option.value !== 'string' || typeof option.label !== 'string'))) return false;
+                return true;
+            },
+
+            get selectedSettingsProfile() {
+                if (this.ocr || !this.fromFormat || !this.toFormat) return null;
+                const pair = this.formats.find((format) => format.from === this.fromFormat && format.to === this.toFormat);
+                const profileId = pair?.settingsProfile;
+                return profileId && this.settingsProfiles[profileId] ? this.settingsProfiles[profileId] : null;
+            },
+
+            get settingsFields() {
+                return this.selectedSettingsProfile?.fields.filter((field) => field.editable === true) || [];
+            },
+
+            settingsStorageKey() { return 'convertor:settings:' + this.toFormat; },
+
+            loadSettingsState() {
+                this.settingsValues = {};
+                if (!this.toFormat) return;
+                try {
+                    const saved = JSON.parse(localStorage.getItem(this.settingsStorageKey()) || '{}');
+                    if (saved.version === this.settingsVersion && saved.values && typeof saved.values === 'object') {
+                        this.settingsValues = saved.values;
+                    }
+                } catch (e) { /* повреждённое локальное состояние безопасно игнорируем */ }
+                this.applySettingsDefaults();
+            },
+
+            applySettingsDefaults() {
+                for (const field of this.settingsFields) {
+                    if (this.settingsValues[field.key] === undefined && field.default !== null && field.default !== undefined) {
+                        this.settingsValues[field.key] = field.default;
+                    }
+                }
+            },
+
+            settingsValue(field) { return this.settingsValues[field.key] ?? field.default ?? ''; },
+
+            setSettingsValue(key, value) {
+                this.settingsValues[key] = value;
+                this.persistSettings();
+            },
+
+            persistSettings() {
+                if (!this.toFormat || !this.settingsVersion) return;
+                localStorage.setItem(this.settingsStorageKey(), JSON.stringify({
+                    version: this.settingsVersion,
+                    values: this.settingsValues,
+                }));
+            },
+
+            normalizedSettings() {
+                if (this.ocr) return {};
+                const result = {};
+                for (const field of this.settingsFields) {
+                    const value = this.settingsValues[field.key];
+                    if (value === undefined || value === '') continue;
+                    if (field.type === 'boolean') {
+                        if (typeof value === 'boolean') result[field.key] = value;
+                        continue;
+                    }
+                    if (['number', 'range'].includes(field.type)) {
+                        const number = Number(value);
+                        if (Number.isInteger(number) && number >= field.min && number <= field.max) result[field.key] = number;
+                        continue;
+                    }
+                    if (field.type === 'color' && typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) {
+                        result[field.key] = value;
+                        continue;
+                    }
+                    if (field.type === 'select' && field.options.some((option) => option.value === value && option.editable === true)) {
+                        result[field.key] = value;
+                        continue;
+                    }
+                    if (field.type === 'text' && typeof value === 'string'
+                        && value.length >= (field.minLength || 0)
+                        && value.length <= (field.maxLength || Number.MAX_SAFE_INTEGER)
+                        && (!field.pattern || new RegExp('^(?:' + field.pattern + ')$').test(value))) result[field.key] = value;
+                }
+                return result;
+            },
+
+            onFormatChange() {
+                this.loadSettingsState();
             },
 
             isActive(s) { return ACTIVE_STATUSES.includes(s); },
@@ -302,43 +427,6 @@
                     (f) => f.from === this.fromFormat && f.to === this.toFormat,
                 );
                 return pair?.ocrCapable === true;
-            },
-
-            // Категория target сама по себе неоднозначна (например, PDF → JPG —
-            // document, PNG → JPG — image). Поэтому проверяем выбранную пару,
-            // а не первый попавшийся target в общей матрице.
-            get imageOptionsAvailable() {
-                return this.inputMode === 'file'
-                    && this.formats.some((f) => f.from === this.fromFormat && f.to === this.toFormat && f.category === 'image');
-            },
-            get imageQualityAvailable() { return ['jpg', 'jpeg', 'webp'].includes(this.toFormat); },
-            get imageBackgroundAvailable() { return ['jpg', 'jpeg'].includes(this.toFormat); },
-            imageOptionsStorageKey() { return 'convertor:image-options:' + this.toFormat; },
-            resetImageOptions() {
-                this.imageOptions = { width: '', height: '', quality: '', background: '#FFFFFF' };
-                if (this.toFormat) localStorage.removeItem(this.imageOptionsStorageKey());
-            },
-            loadImageOptions() {
-                if (!this.imageOptionsAvailable) return this.resetImageOptions();
-                try {
-                    const saved = JSON.parse(localStorage.getItem(this.imageOptionsStorageKey()) || '{}');
-                    this.imageOptions = {
-                        width: Number.isInteger(saved.width) && saved.width > 0 && saved.width <= 10000 ? String(saved.width) : '',
-                        height: Number.isInteger(saved.height) && saved.height > 0 && saved.height <= 10000 ? String(saved.height) : '',
-                        quality: Number.isInteger(saved.quality) && saved.quality > 0 && saved.quality <= 100 ? String(saved.quality) : '',
-                        background: typeof saved.background === 'string' && /^#[0-9a-f]{6}$/i.test(saved.background) ? saved.background : '#FFFFFF',
-                    };
-                } catch (e) { this.resetImageOptions(); }
-            },
-            normalizedImageOptions() {
-                if (!this.imageOptionsAvailable) return {};
-                const result = {};
-                for (const key of ['width', 'height', 'quality']) {
-                    const value = Number(this.imageOptions[key]);
-                    if (Number.isInteger(value) && value > 0) result[key] = value;
-                }
-                if (this.imageBackgroundAvailable && /^#[0-9a-f]{6}$/i.test(this.imageOptions.background)) result.background = this.imageOptions.background;
-                return result;
             },
 
             // Требует логина: ai-флаг ИЛИ категория video. Совпадает с гейтом
@@ -834,9 +922,9 @@
                     if (this.showOcr && this.ocr) fd.append('ocr', '1');
                 }
                 fd.append('to_format', this.toFormat);
-                const imageOptions = this.normalizedImageOptions();
-                for (const [key, value] of Object.entries(imageOptions)) fd.append(`options[${key}]`, value);
-                if (Object.keys(imageOptions).length > 0) localStorage.setItem(this.imageOptionsStorageKey(), JSON.stringify(imageOptions));
+                const settings = this.normalizedSettings();
+                for (const [key, value] of Object.entries(settings)) fd.append(`options[${key}]`, value);
+                this.persistSettings();
 
                 try {
                     const res = await this.authFetch('/api/v1/convert', { method: 'POST', body: fd });

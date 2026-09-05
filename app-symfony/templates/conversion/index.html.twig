@@ -181,7 +181,7 @@
                     <span class="mb-1 block text-sm font-medium text-slate-600">{{ 'home.target_format_label'|trans }}</span>
                     <select
                         x-model="toFormat"
-                        @change="loadImageOptions()"
+                        @change="onFormatChange()"
                         :disabled="targets.length === 0"
                         class="w-full rounded border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:outline-none disabled:bg-slate-100"
                     >
@@ -193,18 +193,43 @@
                 </label>
             </div>
 
-            <section x-show="imageOptionsAvailable" x-cloak class="mt-4 rounded-lg border border-slate-200 p-4">
-                <button type="button" @click="imageOptionsOpen = !imageOptionsOpen" :aria-expanded="imageOptionsOpen.toString()" class="flex w-full items-center justify-between text-left text-sm font-medium text-slate-700">
-                    <span>Настройки изображения</span><span x-text="imageOptionsOpen ? '−' : '+'"></span>
-                </button>
-                <div x-show="imageOptionsOpen" class="mt-4 grid gap-3 sm:grid-cols-2">
-                    <label class="text-sm text-slate-600">Ширина, px<input x-model="imageOptions.width" inputmode="numeric" type="number" min="1" max="10000" class="mt-1 w-full rounded border border-slate-300 px-3 py-2"></label>
-                    <label class="text-sm text-slate-600">Высота, px<input x-model="imageOptions.height" inputmode="numeric" type="number" min="1" max="10000" class="mt-1 w-full rounded border border-slate-300 px-3 py-2"></label>
-                    <label x-show="imageQualityAvailable" class="text-sm text-slate-600">Качество<input x-model="imageOptions.quality" inputmode="numeric" type="number" min="1" max="100" class="mt-1 w-full rounded border border-slate-300 px-3 py-2"></label>
-                    <label x-show="imageBackgroundAvailable" class="text-sm text-slate-600">Фон JPEG<input x-model="imageOptions.background" type="color" class="mt-1 block h-10 w-full rounded border border-slate-300"></label>
-                    <button type="button" @click="resetImageOptions" class="self-end text-sm text-indigo-600 hover:text-indigo-800">Сбросить</button>
+            <section x-show="settingsFields.length > 0 && !ocr" x-cloak class="mt-4 rounded-lg border border-slate-200 p-4">
+                <div class="flex items-center justify-between text-sm font-medium text-slate-700">
+                    <span x-text="selectedSettingsProfile?.label || 'Настройки'" ></span>
+                    <span class="text-xs font-normal text-slate-400" x-text="settingsVersion"></span>
+                </div>
+                <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                    <template x-for="field in settingsFields" :key="field.key">
+                        <label class="text-sm text-slate-600">
+                            <span x-text="field.label"></span>
+                            <template x-if="field.type === 'select'">
+                                <select :value="settingsValue(field)" @change="setSettingsValue(field.key, $event.target.value)" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                                    <option value="">—</option>
+                                    <template x-for="option in field.options.filter((item) => item.editable !== false)" :key="option.value">
+                                        <option :value="option.value" x-text="option.label"></option>
+                                    </template>
+                                </select>
+                            </template>
+                            <template x-if="field.type === 'boolean'">
+                                <input type="checkbox" :checked="settingsValue(field) === true" @change="setSettingsValue(field.key, $event.target.checked)" class="mt-2 h-4 w-4 rounded border-slate-300">
+                            </template>
+                            <template x-if="['number', 'range'].includes(field.type)">
+                                <input :type="field.type === 'range' ? 'range' : 'number'" :min="field.min" :max="field.max" :step="field.step || 1" :value="settingsValue(field)" @input="setSettingsValue(field.key, $event.target.value)" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                            </template>
+                            <template x-if="field.type === 'color'">
+                                <input type="color" :value="settingsValue(field) || '#FFFFFF'" @input="setSettingsValue(field.key, $event.target.value)" class="mt-1 block h-10 w-full rounded border border-slate-300">
+                            </template>
+                            <template x-if="field.type === 'text'">
+                                <input type="text" :value="settingsValue(field)" :minlength="field.minLength" :maxlength="field.maxLength" @input="setSettingsValue(field.key, $event.target.value)" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                            </template>
+                            <span x-show="field.unit" x-text="field.unit" class="ml-1 text-xs text-slate-400"></span>
+                        </label>
+                    </template>
                 </div>
             </section>
+            <template x-if="settingsError">
+                <div class="mt-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" x-text="settingsError"></div>
+            </template>
 
             {# OCR toggle: file-режим, только для растр/pdf источников с текстовым таргетом #}
             <label x-show="inputMode === 'file' && showOcr" x-cloak class="mt-4 flex items-center gap-2 text-sm text-slate-700">
