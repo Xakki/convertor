@@ -73,3 +73,10 @@
   invocations and asserts no other worker is selected. Targeted test, config-check,
   docker-check and card lint pass; full test-drift still has the two pre-existing
   CNV-140 version-contract failures.
+- 2026-09-05: explicit user authorization records CNV-124 completion after the
+  implementation source was merged and pushed (`fe9b459` is an ancestor of
+  `main`, and `main` matches `origin/main` at `068554c`). The sanctioned `saVpn`
+  live rollout was not executed because sanctioned access was unavailable. This
+  is a lifecycle completion authorization, not a claim that the live rollout,
+  release or build was performed. The `saVpn` access boundary and the two
+  pre-existing CNV-140 version-contract failures remain known limitations.
