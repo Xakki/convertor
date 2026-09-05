@@ -117,10 +117,18 @@ async function runScenario(name) {
         const response = await app.authFetch('/api/v1/formats');
         if (calls !== 2 || response.status !== 200 || app.auth.token !== 'new') throw new Error('authenticated retry was not bounded');
         app.auth.token = 'old'; calls = 0; runtime.window.sharedAuthRefresh = async () => ({ ok: false, token: null });
-        app.clearAuth = () => { app.auth.token = null; }; app.resetJob = () => {};
+        app.clearAuth = () => { app.auth.token = null; };
+        app.job = { id: 'in-flight-job', status: 'processing', error: null };
+        app._pollGen = 7;
+        let resetJobCalls = 0;
+        const resetJob = app.resetJob.bind(app);
+        app.resetJob = () => { resetJobCalls += 1; resetJob(); };
         const failed = await app.authFetch('/api/v1/formats');
         if (calls !== 1 || failed.status !== 401 || app.auth.token !== null || !app.authError) throw new Error('failed auth did not fail closed');
-        return { successfulCalls: 2, failedCalls: calls };
+        if (resetJobCalls !== 1 || app.job.id !== null || app.job.status !== null || app._pollGen !== 8) {
+            throw new Error('failed auth did not reset the in-flight job exactly once');
+        }
+        return { successfulCalls: 2, failedCalls: calls, resetJobCalls, job: app.job, pollGen: app._pollGen };
     }
     throw new Error(`unknown scenario: ${name}`);
 }
