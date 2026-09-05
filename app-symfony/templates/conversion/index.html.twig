@@ -205,7 +205,7 @@
                             <template x-if="field.type === 'select'">
                                 <select :value="settingsValue(field)" @change="setSettingsValue(field.key, $event.target.value)" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
                                     <option value="">—</option>
-                                    <template x-for="option in field.options.filter((item) => item.editable !== false)" :key="option.value">
+                                    <template x-for="option in field.options.filter((item) => item.editable === true)" :key="option.value">
                                         <option :value="option.value" x-text="option.label"></option>
                                     </template>
                                 </select>

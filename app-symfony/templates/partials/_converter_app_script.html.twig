@@ -282,28 +282,84 @@
                 }
             },
 
+            isPlainRecord(value) {
+                if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+                const proto = Object.getPrototypeOf(value);
+                return proto === Object.prototype || proto === null;
+            },
+
             isValidFormatsPayload(payload) {
-                if (!payload || !Array.isArray(payload.formats) || !payload.settings
-                    || typeof payload.settings.version !== 'string'
-                    || !payload.settings.profiles || typeof payload.settings.profiles !== 'object') return false;
-                for (const profile of Object.values(payload.settings.profiles)) {
-                    if (!profile || !Array.isArray(profile.fields)) return false;
+                if (!payload || !Array.isArray(payload.formats) || !this.isPlainRecord(payload.settings)
+                    || typeof payload.settings.version !== 'string' || payload.settings.version === ''
+                    || !this.isPlainRecord(payload.settings.profiles)) return false;
+                for (const format of payload.formats) {
+                    if (!this.isValidFormatEntry(format)
+                        || (format.settingsProfile !== null && !Object.prototype.hasOwnProperty.call(payload.settings.profiles, format.settingsProfile))) return false;
+                }
+                for (const [profileId, profile] of Object.entries(payload.settings.profiles)) {
+                    if (!this.isPlainRecord(profile) || profile.id !== profileId
+                        || typeof profile.label !== 'string' || !Array.isArray(profile.fields)
+                        || profile.fields.length === 0) return false;
+                    const keys = new Set();
                     for (const field of profile.fields) {
-                        if (!this.isValidSettingsField(field)) return false;
+                        if (keys.has(field?.key) || !this.isValidSettingsField(field)) return false;
+                        keys.add(field.key);
                     }
                 }
                 return true;
             },
 
+            isValidFormatEntry(format) {
+                return this.isPlainRecord(format)
+                    && typeof format.from === 'string' && typeof format.to === 'string'
+                    && typeof format.category === 'string' && typeof format.isAi === 'boolean'
+                    && typeof format.ocrCapable === 'boolean'
+                    && (format.settingsProfile === null || typeof format.settingsProfile === 'string');
+            },
+
             isValidSettingsField(field) {
                 const types = ['range', 'select', 'number', 'text', 'boolean', 'color'];
-                if (!field || typeof field.key !== 'string' || !types.includes(field.type)
+                if (!this.isPlainRecord(field) || typeof field.key !== 'string'
+                    || !/^[a-z][a-zA-Z0-9_]*$/.test(field.key) || !types.includes(field.type)
                     || typeof field.label !== 'string' || typeof field.editable !== 'boolean') return false;
                 if (['range', 'number'].includes(field.type)
-                    && (!Number.isInteger(field.min) || !Number.isInteger(field.max) || field.min > field.max)) return false;
-                if (field.type === 'select' && (!Array.isArray(field.options)
-                    || field.options.some((option) => !option || typeof option.value !== 'string' || typeof option.label !== 'string'))) return false;
-                return true;
+                    && (!Number.isSafeInteger(field.min) || !Number.isSafeInteger(field.max)
+                        || field.min > field.max || !(Number.isSafeInteger(field.step) && field.step > 0))) return false;
+                if (field.type === 'select' && (!Array.isArray(field.options) || field.options.length === 0
+                    || field.options.some((option) => !this.isPlainRecord(option)
+                        || typeof option.value !== 'string' || typeof option.label !== 'string'
+                        || typeof option.editable !== 'boolean' || typeof option.minPlan !== 'string'))) return false;
+                if (field.type === 'text' && (!Number.isSafeInteger(field.minLength) || field.minLength < 0
+                    || !Number.isSafeInteger(field.maxLength) || field.minLength > field.maxLength
+                    || (field.pattern !== undefined && (typeof field.pattern !== 'string' || !this.isValidPattern(field.pattern))))) return false;
+                return field.default === undefined || field.default === null
+                    || this.isCompatibleSettingsValue(field, field.default);
+            },
+
+            isValidPattern(pattern) {
+                try { new RegExp('^(?:' + pattern + ')$'); return true; } catch (e) { return false; }
+            },
+
+            isStepAlignedNumber(value, field) {
+                if (!Number.isSafeInteger(field.min) || !Number.isSafeInteger(field.max)
+                    || !Number.isSafeInteger(field.step) || field.step <= 0) return false;
+                const number = typeof value === 'string' && /^-?(?:0|[1-9][0-9]*)$/.test(value)
+                    ? Number(value) : value;
+                return Number.isSafeInteger(number) && number >= field.min && number <= field.max
+                    && (number - field.min) % field.step === 0;
+            },
+
+            isCompatibleSettingsValue(field, value) {
+                if (!this.isPlainRecord(field)) return false;
+                if (field.type === 'boolean') return typeof value === 'boolean';
+                if (['number', 'range'].includes(field.type)) return this.isStepAlignedNumber(value, field);
+                if (field.type === 'color') return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
+                if (field.type === 'select') return typeof value === 'string'
+                    && field.options.some((option) => option.value === value && option.editable === true);
+                if (field.type === 'text') return typeof value === 'string'
+                    && value.length >= field.minLength && value.length <= field.maxLength
+                    && (!field.pattern || new RegExp('^(?:' + field.pattern + ')$').test(value));
+                return false;
             },
 
             get selectedSettingsProfile() {
@@ -324,10 +380,16 @@
                 if (!this.toFormat) return;
                 try {
                     const saved = JSON.parse(localStorage.getItem(this.settingsStorageKey()) || '{}');
-                    if (saved.version === this.settingsVersion && saved.values && typeof saved.values === 'object') {
-                        this.settingsValues = saved.values;
+                    if (this.isPlainRecord(saved) && saved.version === this.settingsVersion
+                        && this.isPlainRecord(saved.values) && !Array.isArray(saved.values)) {
+                        for (const field of this.settingsFields) {
+                            const value = saved.values[field.key];
+                            if (value !== undefined && this.isCompatibleSettingsValue(field, value)) {
+                                this.settingsValues[field.key] = value;
+                            }
+                        }
                     }
-                } catch (e) { /* повреждённое локальное состояние безопасно игнорируем */ }
+                } catch (e) { /* corrupted or unavailable local storage is safe to ignore */ }
                 this.applySettingsDefaults();
             },
 
@@ -348,10 +410,12 @@
 
             persistSettings() {
                 if (!this.toFormat || !this.settingsVersion) return;
-                localStorage.setItem(this.settingsStorageKey(), JSON.stringify({
-                    version: this.settingsVersion,
-                    values: this.settingsValues,
-                }));
+                try {
+                    localStorage.setItem(this.settingsStorageKey(), JSON.stringify({
+                        version: this.settingsVersion,
+                        values: this.normalizedSettings(),
+                    }));
+                } catch (e) { /* local storage can be unavailable or full */ }
             },
 
             normalizedSettings() {
@@ -365,8 +429,7 @@
                         continue;
                     }
                     if (['number', 'range'].includes(field.type)) {
-                        const number = Number(value);
-                        if (Number.isInteger(number) && number >= field.min && number <= field.max) result[field.key] = number;
+                        if (this.isStepAlignedNumber(value, field)) result[field.key] = Number(value);
                         continue;
                     }
                     if (field.type === 'color' && typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) {
@@ -1205,7 +1268,7 @@
             // зируются с нуля вместо ручной синхронизации нескольких копий auth.
             clearAuth() {
                 this.auth = { token: null, username: null };
-                localStorage.removeItem('jwt');
+                try { localStorage.removeItem('jwt'); } catch (e) { /* storage may be blocked */ }
             },
         }, billingTopUpMixin(), filePreviewMixin());
     }

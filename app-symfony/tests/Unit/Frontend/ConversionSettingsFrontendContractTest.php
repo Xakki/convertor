@@ -65,4 +65,40 @@ final class ConversionSettingsFrontendContractTest extends TestCase
         self::assertStringContainsString("this.authFetch('/api/v1/formats')", $script);
         self::assertStringNotContainsString("fetch('/api/v1/formats')", $script);
     }
+
+    public function testCatalogValidationCoversEveryRendererDereference(): void
+    {
+        $script = file_get_contents(self::SCRIPT);
+
+        self::assertIsString($script);
+        self::assertStringContainsString('this.isPlainRecord(payload.settings.profiles)', $script);
+        self::assertStringContainsString('this.isValidFormatEntry(format)', $script);
+        self::assertStringContainsString('profile.id !== profileId', $script);
+        self::assertStringContainsString('field.default === undefined || field.default === null', $script);
+        self::assertStringContainsString('typeof option.editable !== \'boolean\'', $script);
+        self::assertStringContainsString('option.editable === true', $script);
+    }
+
+    public function testNumericSettingsMatchBackendIntegerAndStepContract(): void
+    {
+        $script = file_get_contents(self::SCRIPT);
+
+        self::assertIsString($script);
+        self::assertStringContainsString('Number.isSafeInteger(field.step) && field.step > 0', $script);
+        self::assertStringContainsString('this.isStepAlignedNumber(value, field)', $script);
+        self::assertStringContainsString('Number.isSafeInteger(number)', $script);
+        self::assertStringContainsString('(number - field.min) % field.step === 0', $script);
+    }
+
+    public function testSavedStateIsPlainRecordAndStorageFailuresAreIgnored(): void
+    {
+        $script = file_get_contents(self::SCRIPT);
+
+        self::assertIsString($script);
+        self::assertStringContainsString('this.isPlainRecord(saved.values)', $script);
+        self::assertStringContainsString('Array.isArray(saved.values)', $script);
+        self::assertStringContainsString('this.isCompatibleSettingsValue(field, value)', $script);
+        self::assertStringContainsString('localStorage.setItem(this.settingsStorageKey()', $script);
+        self::assertStringContainsString('corrupted or unavailable local storage is safe to ignore', $script);
+    }
 }
