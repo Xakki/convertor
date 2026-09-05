@@ -74,6 +74,14 @@ test-php: ## Run PHPUnit (в php-контейнере тест-стенда; php
 	$(REQUIRE_TEST)
 	$(PHP_EXEC) php vendor/bin/phpunit $(if $(FILTER),--filter="$(FILTER)")
 
+.PHONY: frontend-contract-test
+frontend-contract-test: ## Run executable renderer/settings contract fixtures with Node
+	node tests/Unit/Frontend/converter_app_contract_harness.js templates/partials/_converter_app_script.html.twig normalized-submit
+	node tests/Unit/Frontend/converter_app_contract_harness.js templates/partials/_converter_app_script.html.twig ocr-no-options
+	node tests/Unit/Frontend/converter_app_contract_harness.js templates/partials/_converter_app_script.html.twig catalog-fail-closed
+	node tests/Unit/Frontend/converter_app_contract_harness.js templates/partials/_converter_app_script.html.twig persist-target-version
+	node tests/Unit/Frontend/converter_app_contract_harness.js templates/partials/_converter_app_script.html.twig auth-retry
+
 .PHONY: test-php-unit
 test-php-unit: ## Fast PHPUnit: only tests/Unit (no test-stand/DB)
 	$(PHP_EXEC) php vendor/bin/phpunit tests/Unit
