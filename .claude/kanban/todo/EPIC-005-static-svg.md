@@ -29,7 +29,6 @@ backend implementation scope.
   задача отдельного browser worker.
 
 **Subtasks:**
-- CNV-92 — generic settings renderer
 - CNV-96 — static SVG catalog fallback
 - CNV-99 — document controls
 - CNV-102 — media controls
