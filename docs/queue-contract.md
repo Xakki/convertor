@@ -189,6 +189,30 @@ name converter is configured), so the JSON keys are the property names verbatim.
 | `options`      | object/array    | Per-job options bag. Для image target: `width`/`height` (1–10000 px), `quality` (1–100 для JPEG/WebP), `background` (`#RRGGBB` для JPEG). **Empty = `[]`** (PHP empty array serializes to JSON `[]`, not `{}`) — workers must not assume a map when empty. |
 | `attempt`      | string (int)    | Generation/attempt marker of the `Conversion` (JSON string, e.g. `"0"`). Bumped by operator-requeue; echoed into the DLQ payload so a stale `dlq-fail` can be ignored (`ConversionResultPersister` stale-guard). Absent on legacy jobs → treated as `0`. |
 
+> **Настройки в job payload:** публичное описание и правила нормализации находятся
+> в [`conversion-settings-contract.md`](conversion-settings-contract.md). В этот
+> wire-контракт попадает уже server-side нормализованный результат; worker не
+> должен трактовать `options` как произвольную карту аргументов движка.
+
+### 3.1. Conversion settings in `options`
+
+`options` содержит только whitelisted-ключи профиля, разрешённого для конкретной
+`sourceFormat`/`targetFormat`. Неприсланное поле с непустым `default` уже
+материализовано validator-ом; поле без default отсутствует. Поэтому пустой набор
+остаётся JSON-массивом `[]`, а не `{}` — это нормальная сериализация пустого PHP
+массива и валидное состояние отсутствия опций.
+
+Текущие image-ключи, применимые к соответствующему профилю, — `width` и `height`
+(целые 1–10000), `quality` (целое 1–100 для JPEG/WebP) и `background`
+(`#RRGGBB` для JPEG). Этот список не заменяет каталог: при появлении новых
+доменов worker-specific ключи добавляются только вместе с публичным профилем,
+validator-ом и документацией. Raw renderer/FFmpeg/LibreOffice arguments в job
+контракт не входят.
+
+На OCR-маршруте клиент отправляет пустой `options`; присланные настройки сервер
+отвергает до постановки job. Значения, недоступные плану, неизвестные ключи и
+невалидные значения не могут попасть в payload.
+
 ---
 
 ## 4. Redis status hash — `conv:status:{conversionId}`
