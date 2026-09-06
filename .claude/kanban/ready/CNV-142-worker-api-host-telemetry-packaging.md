@@ -91,3 +91,15 @@ look deployable until the container enters its crash loop.
   passed, and `make build-api` completed successfully with the module COPY
   step. `make release-guard` correctly refused the dirty pre-commit tree;
   no release, push, recreate, or deploy was attempted.
+- 2026-09-06: APPROVE — production rollout verified on `main` at the ordered
+  commits `24bcefc` и `e1b896b`; `make worker-api-pull` и
+  `make worker-api-recreate` завершились успешно. После ожидания `make ps`
+  показал `worker-api` в состоянии healthy без цикла перезапусков; ограниченная
+  проверка логов подтвердила подключение WebSocket и отправку ready с
+  `workerType=api`, без `ModuleNotFoundError`. Нефатальный `worker register`
+  401 относится к отдельно принятой проблеме учётных данных CNV-139 и не
+  учитывается как дефект упаковки. Секреты, токены, заголовки, тела запросов,
+  IP-адреса и прочие чувствительные данные не записывались.
+- 2026-09-06: граница приёмки — только CNV-142 переведена из `progress/` в
+  `ready/`; родительские и соседние карточки не изменялись. Merge, push,
+  release и повторный deploy не выполнялись.
