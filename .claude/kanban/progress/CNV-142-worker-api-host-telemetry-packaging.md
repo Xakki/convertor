@@ -54,11 +54,9 @@ look deployable until the container enters its crash loop.
   moves, or unrelated Kanban cards are changed; the missing package remains a
   release blocker until the build, recreate, and runtime verification pass.
 
-**Open questions:**
-- None for grooming; the implementation owner must use the existing worker-api
-  operations test location and current release/recreate verification path.
-
 **Decisions:**
+- 2026-09-06: No open questions remain; implementation uses the existing
+  worker-api operations test and current release/recreate verification path.
 - 2026-09-06: No existing active, grooming, ready, todo, freeze, or completed
   card was found for this exact worker-api `host_telemetry` packaging outage.
   `CNV-137` owns the host-resource telemetry feature contract, not this image
@@ -85,3 +83,11 @@ look deployable until the container enters its crash loop.
   full-board Kanban lint — 63 cards checked, 0 errors, 0 warnings; `git diff
   --check` passed before commit. No runtime/source/deploy verification was
   attempted because this change records the grooming card only.
+- 2026-09-06: implementation evidence — strict TDD RED targeted test failed
+  because `api.Dockerfile` omitted `workers/host_telemetry`; added the minimal
+  `COPY --chown=app:app workers/host_telemetry/ /app/workers/host_telemetry/`
+  line and the targeted test passed. Full worker-api operations test passed
+  (22 tests), `TEST=1 make test-drift` passed (50 tests), `make config-check`
+  passed, and `make build-api` completed successfully with the module COPY
+  step. `make release-guard` correctly refused the dirty pre-commit tree;
+  no release, push, recreate, or deploy was attempted.

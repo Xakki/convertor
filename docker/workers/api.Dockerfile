@@ -13,6 +13,7 @@ COPY docker/workers/requirements-api.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 WORKDIR /app
 COPY --chown=app:app workers/common/ /app/workers/common/
+COPY --chown=app:app workers/host_telemetry/ /app/workers/host_telemetry/
 COPY --chown=app:app workers/api/ /app/workers/api/
 COPY --chown=app:app worker-api.yaml /app/worker-api.yaml
 

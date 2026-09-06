@@ -73,6 +73,14 @@ def test_worker_api_image_has_version_metadata_and_catalog_healthcheck() -> None
     assert "G4F_API_KEY" not in dockerfile
 
 
+def test_worker_api_image_ships_shared_host_telemetry_module() -> None:
+    dockerfile = _read("docker/workers/api.Dockerfile")
+    ws_client = _read("workers/common/ws_client.py")
+
+    assert "from workers.host_telemetry import validate_host_name" in ws_client
+    assert "COPY --chown=app:app workers/host_telemetry/ /app/workers/host_telemetry/" in dockerfile
+
+
 def test_worker_api_profile_is_enabled_only_on_the_main_server() -> None:
     worker_api = _compose_service(_read("docker-compose.yml"), "worker-api")
     main_profiles = _environment_profiles(".env")
