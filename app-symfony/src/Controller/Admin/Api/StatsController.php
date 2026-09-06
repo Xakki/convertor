@@ -23,6 +23,7 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
  * посчитать нельзя): плитка отдаёт 0/«n/a».
  */
 #[Route('/api/v1/admin')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 #[IsGranted('ROLE_ADMIN')]
 class StatsController extends AbstractController
 {

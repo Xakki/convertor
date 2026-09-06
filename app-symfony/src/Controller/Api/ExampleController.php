@@ -43,6 +43,7 @@ use Symfony\Component\Routing\Attribute\Route;
  * (у промо-примеров исходник — S3-объект конвертации, диска вообще нет).
  */
 #[Route('/api/v1/examples')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['public'])]
 final class ExampleController extends AbstractController
 {
     public function __construct(
@@ -53,7 +54,7 @@ final class ExampleController extends AbstractController
 
     #[Route('', name: 'api_examples_list', methods: ['GET'])]
     #[OA\Tag(name: 'Examples')]
-    #[OA\Get(summary: 'Список живых примеров конвертаций для лендинга (публичный)')]
+    #[OA\Get(summary: 'Список живых примеров конвертаций для лендинга (публичный)', security: [])]
     #[OA\Response(
         response: 200,
         description: 'Примеры, для которых результат реально существует в S3',
@@ -114,7 +115,7 @@ final class ExampleController extends AbstractController
         'name'     => '[a-z0-9._-]+',
     ])]
     #[OA\Tag(name: 'Examples')]
-    #[OA\Get(summary: 'Отдать (inline) результат примера из S3 (публичный)')]
+    #[OA\Get(summary: 'Отдать (inline) результат примера из S3 (публичный)', security: [])]
     #[OA\Parameter(name: 'category', in: 'path', required: true, schema: new OA\Schema(type: 'string'))]
     #[OA\Parameter(name: 'name', in: 'path', required: true, schema: new OA\Schema(type: 'string'))]
     #[OA\Response(response: 200, description: 'Бинарный результат примера (inline)')]
@@ -145,7 +146,7 @@ final class ExampleController extends AbstractController
         'name'     => '[a-z0-9._-]+',
     ])]
     #[OA\Tag(name: 'Examples')]
-    #[OA\Get(summary: 'Отдать (inline) исходный sample-файл примера из S3 (публичный)')]
+    #[OA\Get(summary: 'Отдать (inline) исходный sample-файл примера из S3 (публичный)', security: [])]
     #[OA\Parameter(name: 'category', in: 'path', required: true, schema: new OA\Schema(type: 'string'))]
     #[OA\Parameter(name: 'name', in: 'path', required: true, schema: new OA\Schema(type: 'string'))]
     #[OA\Response(response: 200, description: 'Бинарный исходник примера (inline)')]

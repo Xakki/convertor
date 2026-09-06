@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Controller\Api;
 
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
+use Symfony\Component\Process\Process;
 
 final class ConversionOpenApiTest extends WebTestCase
 {
@@ -57,11 +58,17 @@ final class ConversionOpenApiTest extends WebTestCase
         $openApi             = json_decode((string) $client->getResponse()->getContent(), true, flags: JSON_THROW_ON_ERROR);
         $expectedDescription = 'Требуемая возможность воркера временно недоступна. Для API-задач нужны свежие активные регистрации: каждая должна соответствовать `ApiCapabilityContract`, а общее множество валидированных моделей должно быть непустым. Для остальных типов действует сохранённая регистрация возможности независимо от кратковременной потери активности.';
 
-        foreach (['/api/v1/convert', '/api/v1/convert/{id}/retry'] as $path) {
-            $description = $openApi['paths'][$path]['post']['responses']['503']['description'];
+        $description = $openApi['paths']['/api/v1/convert']['post']['responses']['503']['description'];
+        self::assertSame($expectedDescription, $description);
+        self::assertStringNotContainsString('никогда не регистрировался', $description);
 
-            self::assertSame($expectedDescription, $description);
-            self::assertStringNotContainsString('никогда не регистрировался', $description);
-        }
+        $process = new Process(['php', 'bin/console', 'nelmio:apidoc:dump', '--area=private_user', '--format=json', '--no-pretty']);
+        $process->setTimeout(30);
+        $process->run();
+        self::assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $privateSpec      = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+        $retryDescription = $privateSpec['paths']['/api/v1/convert/{id}/retry']['post']['responses']['503']['description'];
+        self::assertSame($expectedDescription, $retryDescription);
+        self::assertStringNotContainsString('никогда не регистрировался', $retryDescription);
     }
 }

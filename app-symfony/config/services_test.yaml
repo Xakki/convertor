@@ -1,0 +1,11 @@
+services:
+    App\Tests\Support\CaptureLogger:
+        public: true
+
+    App\Security\GuestAuthenticator:
+        arguments:
+            $tokenService: '@App\Service\Auth\GuestTokenService'
+            $cookieFactory: '@App\Service\Auth\GuestCookieFactory'
+            $users: '@App\Repository\UserRepository'
+            $anonymousIdentity: '@App\Service\Auth\AnonymousIdentityService'
+            $logger: '@App\Tests\Support\CaptureLogger'

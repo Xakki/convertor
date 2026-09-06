@@ -40,6 +40,7 @@ use Symfony\Component\Security\Http\Attribute\CurrentUser;
 use Symfony\Component\Security\Http\Attribute\IsGranted;
 
 #[Route('/api/v1')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['public', 'private_user'])]
 class ConversionController extends AbstractController
 {
     /** Потолок чтения результата для inline-превью (64 KiB) — не тянем весь объект. */
@@ -70,6 +71,7 @@ class ConversionController extends AbstractController
     #[OA\Tag(name: 'Conversion')]
     #[OA\Post(
         summary: 'Поставить файл ИЛИ текст в очередь на конвертацию',
+        security: [],
         description: 'Принимает multipart/form-data с РОВНО ОДНИМ входом: либо `file` (загруженный файл), '
             . 'либо `text` + `source_format` (вставленный текст без файла — сервер материализует его во '
             . 'временный файл с расширением `source_format` и дальше ведёт по тому же пайплайну). '
@@ -319,7 +321,7 @@ class ConversionController extends AbstractController
 
     #[Route('/convert/{id}/status', methods: ['GET'])]
     #[OA\Tag(name: 'Conversion')]
-    #[OA\Get(summary: 'Статус задачи конвертации')]
+    #[OA\Get(summary: 'Статус задачи конвертации', security: [])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID задачи', schema: new OA\Schema(type: 'integer'))]
     #[OA\Response(
         response: 200,
@@ -363,7 +365,7 @@ class ConversionController extends AbstractController
 
     #[Route('/convert/{id}/download', methods: ['GET'])]
     #[OA\Tag(name: 'Conversion')]
-    #[OA\Get(summary: 'Скачать результат конвертации')]
+    #[OA\Get(summary: 'Скачать результат конвертации', security: [])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID задачи', schema: new OA\Schema(type: 'integer'))]
     #[OA\Response(
         response: 200,
@@ -567,7 +569,7 @@ class ConversionController extends AbstractController
 
     #[Route('/convert/history', methods: ['GET'])]
     #[OA\Tag(name: 'Conversion')]
-    #[OA\Get(summary: 'История конвертаций пользователя')]
+    #[OA\Get(summary: 'История конвертаций пользователя', security: [])]
     #[OA\Parameter(name: 'limit', in: 'query', required: false, description: 'Кол-во записей (макс. 100)', schema: new OA\Schema(type: 'integer', default: 20))]
     #[OA\Parameter(name: 'offset', in: 'query', required: false, description: 'Смещение', schema: new OA\Schema(type: 'integer', default: 0))]
     #[OA\Response(
@@ -623,7 +625,8 @@ class ConversionController extends AbstractController
     #[Route('/convert/{id}/retry', methods: ['POST'])]
     #[IsGranted('ROLE_USER')]
     #[OA\Tag(name: 'Conversion')]
-    #[OA\Post(summary: 'Повторить конверсию (новая задача из того же исходника)')]
+    #[OA\Post(summary: 'Повторить конверсию (новая задача из того же исходника)', security: [['Bearer' => []]])]
+    #[\Nelmio\ApiDocBundle\Attribute\Areas(['private_user'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID исходной задачи', schema: new OA\Schema(type: 'integer'))]
     #[OA\Response(
         response: 202,
@@ -702,7 +705,8 @@ class ConversionController extends AbstractController
     #[Route('/convert/{id}', methods: ['DELETE'])]
     #[IsGranted('ROLE_USER')]
     #[OA\Tag(name: 'Conversion')]
-    #[OA\Delete(summary: 'Удалить конверсию (hard delete + S3)')]
+    #[OA\Delete(summary: 'Удалить конверсию (hard delete + S3)', security: [['Bearer' => []]])]
+    #[\Nelmio\ApiDocBundle\Attribute\Areas(['private_user'])]
     #[OA\Parameter(name: 'id', in: 'path', required: true, description: 'ID задачи', schema: new OA\Schema(type: 'integer'))]
     #[OA\Response(response: 204, description: 'Удалено')]
     #[OA\Response(response: 401, description: 'Требуется аутентификация')]
@@ -846,7 +850,7 @@ class ConversionController extends AbstractController
 
     #[Route('/quota', methods: ['GET'])]
     #[OA\Tag(name: 'Conversion')]
-    #[OA\Get(summary: 'Остаток квоты пользователя (4 тира × 2 окна)')]
+    #[OA\Get(summary: 'Остаток квоты пользователя (4 тира × 2 окна)', security: [])]
     #[OA\Response(
         response: 200,
         description: 'Пер-тир daily+monthly used/limit/remaining + max_upload_bytes (CNV-30)',

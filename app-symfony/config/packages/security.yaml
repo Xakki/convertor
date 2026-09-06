@@ -22,6 +22,12 @@ security:
             provider: app_user_provider
             jwt: ~
 
+        token_management:
+            pattern: ^/api/v1/auth/tokens
+            stateless: true
+            provider: app_user_provider
+            jwt: ~
+
         auth:
             pattern: ^/api/v1/auth
             stateless: true
@@ -39,6 +45,13 @@ security:
             custom_authenticators:
                 - App\Security\WorkerAuthenticator
 
+        personal_audit_api:
+            pattern: ^/api/v1/audit/history
+            stateless: true
+            provider: app_user_provider
+            custom_authenticators:
+                - App\Security\PersonalApiTokenAuthenticator
+
         # Telegram webhook: без firewall-аутентификации — вход защищён
         # секрет-заголовком X-Telegram-Bot-Api-Secret-Token в контроллере.
         # ДОЛЖЕН стоять ДО `api`, иначе catch-all ^/api потребует ROLE_USER.
@@ -51,10 +64,10 @@ security:
             pattern: ^/api
             stateless: true
             provider: app_user_provider
-            jwt: ~
-            # GuestAuthenticator ПОСЛЕ jwt: срабатывает только когда нет Bearer
-            # (см. GuestAuthenticator::supports). JWT и guest взаимоисключающи.
+            # Personal tokens are deliberately scoped by path; guest is fallback.
             custom_authenticators:
+                - App\Security\PersonalApiTokenAuthenticator
+                - App\Security\ApiJwtAuthenticator
                 - App\Security\GuestAuthenticator
 
         main:
@@ -74,6 +87,7 @@ security:
         - { path: ^/api/v1/auth/oauth, roles: PUBLIC_ACCESS }
         # Link Telegram — только ROLE_USER (гость → 403). До общего PUBLIC auth.
         - { path: ^/api/v1/auth/telegram/link, roles: ROLE_USER }
+        - { path: ^/api/v1/auth/tokens, roles: ROLE_USER }
         - { path: ^/api/v1/auth, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/telegram/webhook, roles: PUBLIC_ACCESS }
         - { path: ^/api/v1/formats, roles: PUBLIC_ACCESS }
@@ -96,12 +110,15 @@ security:
         # Гейт ai/video режется в контроллере (403 auth_required), не на firewall.
         - { path: ^/api/v1/convert, roles: ROLE_GUEST }
         - { path: ^/api/v1/quota, roles: ROLE_GUEST }
+        - { path: ^/api/v1/audit/history, roles: ROLE_USER }
         # /me доступен гостю на уровне firewall, чтобы контроллер вернул чистый 401
         # (а не firewall-403) для гостя/анонима — у них нет TG-профиля.
         - { path: ^/api/v1/me$, roles: PUBLIC_ACCESS }
-        # Swagger UI/JSON (NelmioApiDocBundle) — публичная документация API,
-        # ДОЛЖНО стоять ДО общего ^/api, иначе анонима встречает 401.
+        # OpenAPI public aliases and audience-specific areas. These rules must
+        # precede the catch-all API rule.
         - { path: ^/api/doc, roles: PUBLIC_ACCESS }
+        - { path: ^/api/user/doc, roles: ROLE_USER }
+        - { path: ^/api/admin/doc, roles: ROLE_ADMIN }
         - { path: ^/api, roles: ROLE_USER }
 
 when@test:

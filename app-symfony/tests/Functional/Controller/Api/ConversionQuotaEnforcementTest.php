@@ -6,16 +6,15 @@ namespace App\Tests\Functional\Controller\Api;
 
 use App\Entity\Conversion;
 use App\Entity\User;
-use App\Entity\WorkerCapability;
 use App\Enum\BillingMode;
 use App\Messenger\Transport\CleanRedisTransport;
 use App\Repository\ConversionRepository;
-use App\Repository\WorkerCapabilityRepository;
 use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
 use App\Service\Billing\BalanceService;
 use App\Service\Queue\RedisConnectionFactory;
 use App\Service\Storage\S3Storage;
+use App\Tests\Support\WorkerCapabilityFixture;
 use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
@@ -36,7 +35,7 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
     /** @var list<array{class: class-string, id: int}> */
     private array $toRemove = [];
 
-    private ?WorkerCapability $aiAvailabilityFixture = null;
+    private ?WorkerCapabilityFixture $workerCapabilityFixture = null;
 
     protected function tearDown(): void
     {
@@ -58,14 +57,10 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
             $this->toRemove = [];
         }
 
-        if ($this->aiAvailabilityFixture !== null && static::$kernel !== null) {
-            $em      = static::getContainer()->get(EntityManagerInterface::class);
-            $fixture = $em->find(WorkerCapability::class, $this->aiAvailabilityFixture->getId());
-            if ($fixture !== null) {
-                $em->remove($fixture);
-                $em->flush();
-            }
-            $this->aiAvailabilityFixture = null;
+        if ($this->workerCapabilityFixture !== null && static::$kernel !== null) {
+            $this->workerCapabilityFixture->cleanup();
+            $this->workerCapabilityFixture->assertNoOwnedRowsRemain();
+            $this->workerCapabilityFixture = null;
         }
 
         parent::tearDown();
@@ -73,7 +68,8 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
 
     public function testRegisteredUserOverDailyQuotaUsesPrepaidBalance(): void
     {
-        $client    = static::createClient();
+        $client = static::createClient();
+        $this->normalQueueFixture('document');
         $container = static::getContainer();
         /** @var EntityManagerInterface $em */
         $em = $container->get(EntityManagerInterface::class);
@@ -140,6 +136,7 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
     public function testFreeUserVideoConversionReturns429InsufficientBalance(): void
     {
         $client = static::createClient();
+        $this->normalQueueFixture('video');
 
         $this->assertFreeUserInsufficientBalance($client, 'mp4', 'mkv', $this->mp4Bytes());
     }
@@ -155,7 +152,8 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
     public function testGuestOverLightQuotaReturns429WithDailyMessage(): void
     {
         $client = static::createClient();
-        $em     = static::getContainer()->get(EntityManagerInterface::class);
+        $this->normalQueueFixture('document');
+        $em = static::getContainer()->get(EntityManagerInterface::class);
 
         $guestId = 'guest-quota-' . bin2hex(random_bytes(8));
         $guest   = (new User())
@@ -205,6 +203,7 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
     public function testGuestVideoStillReturns403AuthRequiredNot429(): void
     {
         $client = static::createClient();
+        $this->normalQueueFixture('video');
 
         $client->request(
             'POST',
@@ -250,19 +249,22 @@ final class ConversionQuotaEnforcementTest extends WebTestCase
 
     private function createAiAvailabilityFixture(): void
     {
-        $instanceId                  = 'quota-enforcement-ai-' . bin2hex(random_bytes(8));
-        $this->aiAvailabilityFixture = static::getContainer()->get(WorkerCapabilityRepository::class)->upsert(
-            'ai',
-            $instanceId,
-            [
-                'workerType'  => 'ai',
-                'instanceId'  => $instanceId,
-                'isAi'        => true,
-                'streams'     => ['ai'],
-                'routingKeys' => ['ai'],
-                'matrix'      => ['mp3' => ['txt']],
-            ],
+        $this->workerCapabilityFixture ??= new WorkerCapabilityFixture(
+            static::getContainer()->get(\App\Repository\WorkerCapabilityRepository::class),
+            static::getContainer()->get(EntityManagerInterface::class),
         );
+        $capability = $this->workerCapabilityFixture->addAi();
+        self::assertTrue($capability->getCapabilities()['isAi']);
+        self::assertSame(['txt'], $capability->getCapabilities()['matrix']['mp3']);
+    }
+
+    private function normalQueueFixture(string $workerType): void
+    {
+        $this->workerCapabilityFixture ??= new WorkerCapabilityFixture(
+            static::getContainer()->get(\App\Repository\WorkerCapabilityRepository::class),
+            static::getContainer()->get(EntityManagerInterface::class),
+        );
+        $this->workerCapabilityFixture->addNormal($workerType);
     }
 
     private function assertFreeUserQuota429(string $from, string $to, string $bytes, string $messageNeedle): void

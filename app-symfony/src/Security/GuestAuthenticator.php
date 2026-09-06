@@ -6,13 +6,17 @@ namespace App\Security;
 
 use App\Entity\User;
 use App\Repository\UserRepository;
+use App\Service\Auth\AnonymousIdentityService;
 use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
+use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
 use Symfony\Component\Security\Core\Exception\AuthenticationException;
+use Symfony\Component\Security\Core\Exception\CustomUserMessageAuthenticationException;
 use Symfony\Component\Security\Http\Authenticator\AbstractAuthenticator;
 use Symfony\Component\Security\Http\Authenticator\Passport\Badge\UserBadge;
 use Symfony\Component\Security\Http\Authenticator\Passport\Passport;
@@ -49,6 +53,9 @@ class GuestAuthenticator extends AbstractAuthenticator
     /** Request-атрибут: созданный транзиентный guest-User (кандидат на cookie). */
     public const ATTR_GUEST_USER = '_guest_user';
 
+    /** Marks a guest materialized from the anonymous IP fallback. */
+    public const ATTR_ANONYMOUS_IDENTITY = '_anonymous_identity';
+
     /**
      * Пути, где guest-аутентификация уместна (без ведущего `/api/v1`, т.к.
      * firewall уже сузил до `^/api`). convert/history/quota + status/download.
@@ -62,6 +69,8 @@ class GuestAuthenticator extends AbstractAuthenticator
         private readonly GuestTokenService $tokenService,
         private readonly GuestCookieFactory $cookieFactory,
         private readonly UserRepository $users,
+        private readonly AnonymousIdentityService $anonymousIdentity,
+        private readonly LoggerInterface $logger,
     ) {
     }
 
@@ -73,7 +82,14 @@ class GuestAuthenticator extends AbstractAuthenticator
             return false;
         }
 
-        return $this->isGuestPath($request->getPathInfo());
+        $path = $request->getPathInfo();
+        if ($path === '/api/v1/convert/history') {
+            $cookie = $request->cookies->get($this->cookieFactory->name());
+
+            return is_string($cookie) && $cookie !== '';
+        }
+
+        return $this->isGuestPath($path);
     }
 
     public function authenticate(Request $request): Passport
@@ -88,12 +104,38 @@ class GuestAuthenticator extends AbstractAuthenticator
             }
         }
 
+        if ($guest === null && $request->getPathInfo() === '/api/v1/convert/history') {
+            throw new CustomUserMessageAuthenticationException('A valid guest cookie is required.');
+        }
+
+        $anonymous   = false;
+        $anonymousId = null;
+        if ($guest === null && $this->allowsAnonymousIpFallback($request->getPathInfo())) {
+            $anonymousId = $this->anonymousIdentity->fromRequest($request);
+            if ($anonymousId !== null) {
+                $guest     = $this->users->findActiveAnonymousIpByIdentity($anonymousId);
+                $anonymous = true;
+
+                try {
+                    $this->logger->log(LogLevel::DEBUG, 'Anonymous API identity resolved', [
+                        'auth_identity_type' => 'anonymous_ip',
+                        'identity_opaque'    => true,
+                    ]);
+                } catch (\Throwable) {
+                    // Logging must never alter authentication or the API response.
+                }
+            }
+        }
+
         if ($guest === null) {
-            $guest = $this->createGuest();
+            $guest = $this->createGuest($anonymousId ?? null);
             // Кладём транзиентного гостя в атрибут — кандидат на Set-Cookie.
             // Cookie эмитится листенером ТОЛЬКО если гость материализуется за
             // этот запрос (id!==null). Для существующего гостя атрибут не ставим.
             $request->attributes->set(self::ATTR_GUEST_USER, $guest);
+            if ($anonymous) {
+                $request->attributes->set(self::ATTR_ANONYMOUS_IDENTITY, true);
+            }
         }
 
         // Loader возвращает уже разрешённого гостя (существующего из БД или
@@ -118,19 +160,25 @@ class GuestAuthenticator extends AbstractAuthenticator
      * Создаёт ТРАНЗИЕНТНОГО гостя (без persist/flush). Строка в `users`
      * материализуется позже — при первой успешной постановке конвертации.
      */
-    private function createGuest(): User
+    private function createGuest(?string $guestId = null): User
     {
         $guest = new User();
         $guest->setIsGuest(true);
-        $guest->setGuestId($this->tokenService->generateGuestId());
+        $guest->setGuestId($guestId ?? $this->tokenService->generateGuestId());
+        $guest->setAnonymousIp($guestId !== null);
 
         return $guest;
+    }
+
+    private function allowsAnonymousIpFallback(string $path): bool
+    {
+        return $path !== '/api/v1/convert/history' && $this->isGuestPath($path);
     }
 
     private function isGuestPath(string $path): bool
     {
         foreach (self::GUEST_PATHS as $prefix) {
-            if (str_starts_with($path, $prefix)) {
+            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
                 return true;
             }
         }

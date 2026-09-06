@@ -20,6 +20,7 @@ use Symfony\Component\Security\Http\Attribute\CurrentUser;
  * нет presign, а <img> не умеет слать Bearer) из закешированной в S3 копии.
  */
 #[Route('/api/v1')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['public', 'private_user'])]
 class MeController extends AbstractController
 {
     /** Потолок на размер аватара для data-URI (байты). Аватары мелкие; крупный — пропускаем. */

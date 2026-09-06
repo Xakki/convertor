@@ -17,6 +17,7 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
  * на JWT-firewall (для не-админа 403, для админа 200).
  */
 #[Route('/api/v1/admin')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 #[IsGranted('ROLE_ADMIN')]
 class AdminApiController extends AbstractController
 {

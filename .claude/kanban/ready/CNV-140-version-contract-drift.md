@@ -29,21 +29,38 @@ selection и запрет старого формата. Не менять produ
 **Acceptance Criteria:**
 - Drift-тесты больше не требуют `APP_VER=0.1.2` или CUDA tags `0.1.2`, если
   canonical tracked baseline равен `0.2.0`.
-- Сохраняются проверки `latest`, CUDA image naming и compose image selection.
+- Изменяются только два stale worker version-contract assertions/fixtures с
+  `0.1.2` на `0.2.0`; source/runtime/config/deploy scope не расширяется.
+- Сохраняются проверки tag shape, `latest`, CUDA image naming и compose image
+  selection; `worker-ai:cuda` остаётся local-only.
 - `make TEST=1 test-drift` проходит, включая оба ранее красных
   version-contract теста.
 - Профильный Make/test contract и kanban-lint проходят; CNV-124 scope не
   расширяется.
 
-**Open questions:**
-- Перед реализацией подтвердить, что `0.2.0` остаётся canonical release
-  baseline, а не временным локальным override.
-
 **Decisions:**
 - 2026-09-05: side-file as a narrowly scoped grooming card; no CNV-124
   production or test repair is included in this card.
+- 2026-09-06: tracked `APP_VER=0.2.0` is the canonical release baseline. The
+  implementation updates only the two stale worker version-contract
+  assertions/fixtures from `0.1.2` to `0.2.0`, preserving tag shape, `latest`,
+  CUDA local-only semantics, and compose image selection. No release workflow
+  or environment change is authorized.
 
 **Execution Log:**
 - 2026-09-05 — CNV-124 handoff evidence recorded two pre-existing
   version-contract failures in `make TEST=1 test-drift`; tracked `.env` is at
   `APP_VER=0.2.0`, while tests still assert `0.1.2` and matching CUDA tags.
+- 2026-09-06 — Canonically moved `todo → progress` after approval `f93355f`.
+  Updated only the stale worker version-contract assertions/fixtures in
+  `workers/tests/test_worker_api_ops_config.py` from `0.1.2` to canonical
+  `0.2.0`; preserved tag shape, `latest`, CUDA local-only naming, and Compose
+  selection. Exact two tests passed; `make TEST=1 test-drift` passed (49 tests).
+  No production, environment, release-workflow, Compose, Dockerfile, or image
+  policy files changed.
+- 2026-09-06 — Full gate `HOST_ROOT_PROBE_DIR=/var/tmp/convertor-epic006-root-probe
+  make test` passed; `make build` passed for all configured images. Config check,
+  targeted/full Kanban lint (0 errors, 0 warnings), and working/staged
+  `git diff --check` passed. CNV-140 remains `progress` pending review; CNV-141
+  was not modified or moved, and no merge, push, release, or deploy was done.
+- 2026-09-06 — APPROVE accepted on `epic/EPIC-006` at `65676c2`: exact version-drift tests passed; `make TEST=1 test-drift` passed (49 tests); full `HOST_ROOT_PROBE_DIR=/var/tmp/convertor-epic006-root-probe make test` and `make build` passed. Evidence is sanitized; no credentials, tokens, raw request data, or generated artifacts are recorded. CNV-140 is authorized only for `progress → ready`; CNV-141 and the parent remain untouched, with no done, merge, push, release, or deploy action.

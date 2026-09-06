@@ -12,6 +12,7 @@ use App\Service\Storage\S3Storage;
 use App\Service\Worker\ResultKeyBuilder;
 use App\Service\Worker\WorkerLivenessReconciler;
 use App\Service\Worker\WorkerStreamGateway;
+use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -37,6 +38,7 @@ use Symfony\Component\Routing\Attribute\Route;
  *   (тот же путь, что fail/dlq-fail, target-статус Expired вместо Failed).
  */
 #[Route('/api/v1/internal/worker')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 final class InternalWorkerController extends AbstractController
 {
     public function __construct(
@@ -57,6 +59,7 @@ final class InternalWorkerController extends AbstractController
      * При ошибке S3/persist исключение всплывает как 5xx — gateway НЕ ацкает.
      */
     #[Route('/result', methods: ['POST'])]
+    #[OA\Post(summary: 'Relay worker result from the gateway', security: [['GatewayToken' => []]])]
     public function result(Request $request): JsonResponse
     {
         $body  = json_decode((string) $request->getContent(), true, 512, 0);
@@ -108,6 +111,7 @@ final class InternalWorkerController extends AbstractController
      * Body: {"jobId":"<streamId>","error":"<msg>","processingMs":<opt int|null>}
      */
     #[Route('/fail', methods: ['POST'])]
+    #[OA\Post(summary: 'Relay worker failure from the gateway', security: [['GatewayToken' => []]])]
     public function fail(Request $request): JsonResponse
     {
         $body  = json_decode((string) $request->getContent(), true, 512, 0);
@@ -152,6 +156,7 @@ final class InternalWorkerController extends AbstractController
      * comparison lives in {@see ConversionResultPersister::persist()}.
      */
     #[Route('/dlq-fail', methods: ['POST'])]
+    #[OA\Post(summary: 'Relay dead-letter failure from the gateway', security: [['GatewayToken' => []]])]
     public function dlqFail(Request $request): JsonResponse
     {
         $body         = json_decode((string) $request->getContent(), true, 512, 0);
@@ -208,6 +213,7 @@ final class InternalWorkerController extends AbstractController
      * reuse the exact 'failed' path (same ConversionFailed event dispatch).
      */
     #[Route('/expire', methods: ['POST'])]
+    #[OA\Post(summary: 'Relay worker timeout from the gateway', security: [['GatewayToken' => []]])]
     public function expire(Request $request): JsonResponse
     {
         $body         = json_decode((string) $request->getContent(), true, 512, 0);
@@ -298,6 +304,7 @@ final class InternalWorkerController extends AbstractController
      * delaying a heartbeat is not operationally significant.
      */
     #[Route('/liveness', methods: ['POST'])]
+    #[OA\Post(summary: 'Update worker liveness from the gateway', security: [['GatewayToken' => []]])]
     public function liveness(Request $request): JsonResponse
     {
         $body = json_decode((string) $request->getContent(), true, 512, 0);

@@ -43,6 +43,12 @@ final class GuestCookieResponseListener
             return;
         }
 
+        // IP-derived identity is deliberately stateless and must not become a
+        // browser tracking cookie; the HMAC key remains the sole owner key.
+        if ($event->getRequest()->attributes->getBoolean(GuestAuthenticator::ATTR_ANONYMOUS_IDENTITY)) {
+            return;
+        }
+
         // Гость остался транзиентным (не конвертировал) → cookie не выставляем.
         if ($guest->getId() === null) {
             return;

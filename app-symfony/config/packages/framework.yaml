@@ -15,10 +15,8 @@ framework:
     set_locale_from_accept_language: true
     enabled_locales: ['en', 'ru']
 
-    # За фронтом стоит nginx (X-Forwarded-For / X-Real-IP), поэтому без доверенных
-    # прокси Request::getClientIp() вернул бы IP nginx для ВСЕХ запросов — и guest
-    # rate-limit «по IP» стал бы одним общим ведром на весь сайт. Доверяем прокси
-    # из TRUSTED_PROXIES (по умолчанию — приватные docker-сети), заголовки X-Forwarded-*.
+    # Edge nginx overwrites client-IP headers before forwarding to PHP. Do not
+    # trust arbitrary private networks: that would permit client spoofing.
     trusted_proxies: '%env(TRUSTED_PROXIES)%'
     trusted_headers: ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port']
 

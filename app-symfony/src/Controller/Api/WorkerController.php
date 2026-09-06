@@ -12,6 +12,7 @@ use App\Service\Storage\S3Storage;
 use App\Service\Worker\ResultKeyBuilder;
 use App\Service\Worker\WorkerStreamGateway;
 use AsyncAws\S3\Exception\NoSuchKeyException;
+use OpenApi\Attributes as OA;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -35,6 +36,7 @@ use Symfony\Component\Routing\Attribute\Route;
  * Contract and rationale: .claude/kanban/progress/validate-ai-worker.md
  */
 #[Route('/api/v1/worker')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 final class WorkerController extends AbstractController
 {
     /**
@@ -68,6 +70,7 @@ final class WorkerController extends AbstractController
      * `worker_capabilities`, и не зависит от регистрации воркера.
      */
     #[Route('/register', methods: ['POST'])]
+    #[OA\Post(summary: 'Register worker capabilities', security: [['WorkerToken' => []]])]
     public function register(Request $request): JsonResponse
     {
         $data = json_decode($request->getContent(), true);
@@ -151,6 +154,7 @@ final class WorkerController extends AbstractController
      * Streams the raw input file from S3 to the worker.
      */
     #[Route('/jobs/{jobId}/input', methods: ['GET'], requirements: ['jobId' => '[0-9]+-[0-9]+'])]
+    #[OA\Get(summary: 'Download worker job input', security: [['WorkerToken' => []]])]
     public function input(string $jobId): JsonResponse|StreamedResponse
     {
         $meta = $this->gateway->getJobMeta($jobId);
@@ -180,6 +184,7 @@ final class WorkerController extends AbstractController
      * делает gateway на доверии к WS-сообщению {type:"result", jobId, resultKey}.
      */
     #[Route('/jobs/{jobId}/result', methods: ['POST'], requirements: ['jobId' => '[0-9]+-[0-9]+'])]
+    #[OA\Post(summary: 'Submit worker job result', security: [['WorkerToken' => []]])]
     public function result(string $jobId, Request $request): JsonResponse
     {
         $meta = $this->gateway->getJobMeta($jobId);

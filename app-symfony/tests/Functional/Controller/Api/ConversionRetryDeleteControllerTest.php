@@ -15,6 +15,7 @@ use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
 use App\Service\Conversion\Settings\ConversionSettingsCatalog;
 use App\Service\Storage\S3Storage;
+use App\Tests\Support\WorkerCapabilityFixture;
 use App\Tests\Unit\Service\Conversion\Settings\ConversionSettingsCatalogTest;
 use AsyncAws\S3\S3Client;
 use Doctrine\ORM\EntityManagerInterface;
@@ -35,6 +36,8 @@ final class ConversionRetryDeleteControllerTest extends WebTestCase
 
     /** @var list<array{class: class-string, id: int}> */
     private array $toRemoveById = [];
+
+    private ?WorkerCapabilityFixture $workerCapabilityFixture = null;
 
     protected function tearDown(): void
     {
@@ -63,6 +66,12 @@ final class ConversionRetryDeleteControllerTest extends WebTestCase
             $em->flush();
         }
 
+        if ($this->workerCapabilityFixture !== null && static::$kernel !== null) {
+            $this->workerCapabilityFixture->cleanup();
+            $this->workerCapabilityFixture->assertNoOwnedRowsRemain();
+            $this->workerCapabilityFixture = null;
+        }
+
         parent::tearDown();
         $this->toRemove     = [];
         $this->toRemoveById = [];
@@ -71,9 +80,10 @@ final class ConversionRetryDeleteControllerTest extends WebTestCase
     public function testRetryCreatesNewConversion(): void
     {
         $client = static::createClient();
-        $owner  = $this->persistUser();
-        $token  = $this->jwtFor($owner);
-        $conv   = $this->seedConversion($owner, 'jpg', 'png', ConversionStatus::Completed);
+        $this->normalQueueFixture('image');
+        $owner = $this->persistUser();
+        $token = $this->jwtFor($owner);
+        $conv  = $this->seedConversion($owner, 'jpg', 'png', ConversionStatus::Completed);
         static::getContainer()->get(EntityManagerInterface::class)->flush();
 
         // HEAD (exists) + COPY — оба 200.
@@ -107,6 +117,15 @@ final class ConversionRetryDeleteControllerTest extends WebTestCase
         );
         $this->toRemoveById[] = ['class' => FileStorage::class, 'id' => $fresh->getInputFile()->getId()];
         $this->toRemoveById[] = ['class' => Conversion::class, 'id' => $fresh->getId()];
+    }
+
+    private function normalQueueFixture(string $workerType): void
+    {
+        $this->workerCapabilityFixture ??= new WorkerCapabilityFixture(
+            static::getContainer()->get(\App\Repository\WorkerCapabilityRepository::class),
+            static::getContainer()->get(EntityManagerInterface::class),
+        );
+        $this->workerCapabilityFixture->addNormal($workerType);
     }
 
     public function testRetryReturns410WhenInputGone(): void

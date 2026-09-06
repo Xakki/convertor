@@ -50,6 +50,7 @@ use Symfony\Component\Routing\Attribute\Route;
  * сам /start НЕ авторизует — авторизует тап по кнопке.
  */
 #[Route('/api/v1/telegram/webhook')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 class TelegramWebhookController extends AbstractController
 {
     private const CALLBACK_PREFIX_LOGIN = 'login:';
@@ -75,7 +76,7 @@ class TelegramWebhookController extends AbstractController
 
     #[Route('', name: 'telegram_webhook', methods: ['POST'])]
     #[OA\Tag(name: 'Auth')]
-    #[OA\Post(summary: 'Telegram webhook (внутренний, защищён секрет-заголовком)', security: [])]
+    #[OA\Post(summary: 'Telegram webhook (внутренний, защищён секрет-заголовком)', security: [['TelegramWebhookSecret' => []]])]
     #[OA\Response(response: 200, description: 'Апдейт принят')]
     #[OA\Response(response: 403, description: 'Неверный секрет-заголовок')]
     public function handle(Request $request): JsonResponse

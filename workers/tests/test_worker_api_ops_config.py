@@ -229,7 +229,7 @@ def test_worker_recreate_profiles_keep_savpn_and_cpu_scope_explicit() -> None:
 
 def test_release_version_is_bumped_for_worker_rollout() -> None:
     env = _read(".env")
-    assert "APP_VER=0.1.2" in env
+    assert "APP_VER=0.2.0" in env
     assert "APP_VER=0.1.1" not in env
 
 
@@ -270,21 +270,21 @@ def test_ai_cuda_build_and_compose_use_local_app_ver_tags() -> None:
     example = _read(".env.local_worker_example")
 
     cuda_build = subprocess.run(
-        ["make", "--no-print-directory", "-n", "build-ai-cuda", "APP_VER=0.1.2"],
+        ["make", "--no-print-directory", "-n", "build-ai-cuda", "APP_VER=0.2.0"],
         cwd=ROOT_DIR,
         text=True,
         capture_output=True,
         check=False,
     )
     assert cuda_build.returncode == 0, cuda_build.stdout + cuda_build.stderr
-    assert "-t worker-ai-cuda:0.1.2 -t worker-ai-cuda:latest" in cuda_build.stdout
-    assert "worker-ai:0.1.2-cuda" not in cuda_build.stdout
-    assert "worker-ai-cuda:0.1.2-cuda" not in cuda_build.stdout
+    assert "-t worker-ai-cuda:0.2.0 -t worker-ai-cuda:latest" in cuda_build.stdout
+    assert "worker-ai:0.2.0-cuda" not in cuda_build.stdout
+    assert "worker-ai-cuda:0.2.0-cuda" not in cuda_build.stdout
 
     assert "AI_IMAGE=worker-ai-cuda:latest" in example
     assert "image: ${AI_IMAGE:-${IMAGE_NS}/worker-ai-${AI_VARIANT:-cpu}:${IMAGE_TAG:-latest}}" in compose
     env = os.environ.copy()
-    env.update(AI_VARIANT="cuda", AI_IMAGE="worker-ai-cuda:0.1.2", IMAGE_TAG="0.1.2")
+    env.update(AI_VARIANT="cuda", AI_IMAGE="worker-ai-cuda:0.2.0", IMAGE_TAG="0.2.0")
     # .env.test intentionally omits ai so test runtime does not start worker-ai.
     # This config-only assertion enables ai for its single Compose inspection.
     env["COMPOSE_PROFILES"] = "server,test,ai"
@@ -297,7 +297,7 @@ def test_ai_cuda_build_and_compose_use_local_app_ver_tags() -> None:
         check=False,
     )
     assert compose_config.returncode == 0, compose_config.stdout + compose_config.stderr
-    assert "worker-ai-cuda:0.1.2" in compose_config.stdout
+    assert "worker-ai-cuda:0.2.0" in compose_config.stdout
     assert "AI_CUDA_IMAGE   ?= worker-ai-cuda:$(APP_VER)" in makefile
     assert "-t $(HARBOR_NS)/worker-ai-base:$(APP_VER)" in makefile
     assert "-t $(HARBOR_NS)/worker-ai-base:latest" in makefile

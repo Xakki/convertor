@@ -17,6 +17,7 @@ use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/api/v1/auth')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['public'])]
 class AuthController extends AbstractController
 {
     public function __construct(

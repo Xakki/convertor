@@ -38,6 +38,7 @@ use Symfony\Component\Routing\Attribute\Route;
  * Под firewall `auth` (^/api/v1/auth, security: false) — start/callback публичны.
  */
 #[Route('/api/v1/auth/oauth')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['public'])]
 class OauthController extends AbstractController
 {
     public function __construct(

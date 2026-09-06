@@ -45,6 +45,7 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
  * не может overshoot квоту; при исчерпанном лимите — 429 с сообщением check().
  */
 #[Route('/api/v1/admin/dead-letter')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 #[IsGranted('ROLE_ADMIN')]
 final class DlqController extends AbstractController
 {

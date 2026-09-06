@@ -28,6 +28,7 @@ use Symfony\Component\Security\Http\Attribute\CurrentUser;
  * Firewall: `auth_telegram_link` (JWT), см. security.yaml.
  */
 #[Route('/api/v1/auth/telegram/link')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_user'])]
 class TelegramLinkController extends AbstractController
 {
     public function __construct(

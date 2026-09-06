@@ -5,11 +5,10 @@ declare(strict_types=1);
 namespace App\Tests\Functional\Security;
 
 use App\Entity\User;
-use App\Entity\WorkerCapability;
 use App\Repository\UserRepository;
-use App\Repository\WorkerCapabilityRepository;
 use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
+use App\Tests\Support\WorkerCapabilityFixture;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
@@ -28,18 +27,14 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  */
 final class GuestAuthenticationTest extends WebTestCase
 {
-    private ?WorkerCapability $aiAvailabilityFixture = null;
+    private ?WorkerCapabilityFixture $workerCapabilityFixture = null;
 
     protected function tearDown(): void
     {
-        if ($this->aiAvailabilityFixture !== null && static::$kernel !== null) {
-            $em      = static::getContainer()->get(EntityManagerInterface::class);
-            $fixture = $em->find(WorkerCapability::class, $this->aiAvailabilityFixture->getId());
-            if ($fixture !== null) {
-                $em->remove($fixture);
-                $em->flush();
-            }
-            $this->aiAvailabilityFixture = null;
+        if ($this->workerCapabilityFixture !== null && static::$kernel !== null) {
+            $this->workerCapabilityFixture->cleanup();
+            $this->workerCapabilityFixture->assertNoOwnedRowsRemain();
+            $this->workerCapabilityFixture = null;
         }
 
         parent::tearDown();
@@ -81,6 +76,15 @@ final class GuestAuthenticationTest extends WebTestCase
             $this->userCount($em),
             'lazy guest: /quota must NOT create a users row',
         );
+    }
+
+    public function testHistoryWithoutCookieCannotUseAnonymousFallback(): void
+    {
+        $client = static::createClient();
+
+        $client->request('GET', '/api/v1/convert/history');
+
+        self::assertSame(401, $client->getResponse()->getStatusCode());
     }
 
     public function testGuestCookieIsReusedAcrossRequests(): void
@@ -162,6 +166,7 @@ final class GuestAuthenticationTest extends WebTestCase
     public function testGuestVideoConversionReturns403AuthRequired(): void
     {
         $client = static::createClient();
+        $this->normalQueueFixture('video');
         // mp4→mkv = video. Гость получает 403 auth_required.
         $this->assertGuestGate403($client, 'mp4', 'mkv', $this->mp4Bytes());
     }
@@ -207,19 +212,22 @@ final class GuestAuthenticationTest extends WebTestCase
 
     private function createAiAvailabilityFixture(): void
     {
-        $instanceId                  = 'guest-authentication-ai-' . bin2hex(random_bytes(8));
-        $this->aiAvailabilityFixture = static::getContainer()->get(WorkerCapabilityRepository::class)->upsert(
-            'ai',
-            $instanceId,
-            [
-                'workerType'  => 'ai',
-                'instanceId'  => $instanceId,
-                'isAi'        => true,
-                'streams'     => ['ai'],
-                'routingKeys' => ['ai'],
-                'matrix'      => ['mp3' => ['txt']],
-            ],
+        $this->workerCapabilityFixture ??= new WorkerCapabilityFixture(
+            static::getContainer()->get(\App\Repository\WorkerCapabilityRepository::class),
+            static::getContainer()->get(EntityManagerInterface::class),
         );
+        $capability = $this->workerCapabilityFixture->addAi();
+        self::assertTrue($capability->getCapabilities()['isAi']);
+        self::assertSame(['txt'], $capability->getCapabilities()['matrix']['mp3']);
+    }
+
+    private function normalQueueFixture(string $workerType): void
+    {
+        $this->workerCapabilityFixture ??= new WorkerCapabilityFixture(
+            static::getContainer()->get(\App\Repository\WorkerCapabilityRepository::class),
+            static::getContainer()->get(EntityManagerInterface::class),
+        );
+        $this->workerCapabilityFixture->addNormal($workerType);
     }
 
     private function userCount(EntityManagerInterface $em): int

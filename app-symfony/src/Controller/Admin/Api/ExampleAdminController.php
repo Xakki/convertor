@@ -30,6 +30,7 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
  * `PAGE_SIZE`/пагинация кандидатов — тот же паттерн, что {@see UserController::list()}.
  */
 #[Route('/api/v1/admin/examples')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 #[IsGranted('ROLE_ADMIN')]
 final class ExampleAdminController extends AbstractController
 {

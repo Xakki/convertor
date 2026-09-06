@@ -36,6 +36,7 @@ use Symfony\Component\Routing\Attribute\Route;
  * публичный CODE, не завершит вход (его браузер не несёт nonce-cookie → 403).
  */
 #[Route('/api/v1/auth/telegram')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['public'])]
 class TelegramLoginController extends AbstractController
 {
     public function __construct(

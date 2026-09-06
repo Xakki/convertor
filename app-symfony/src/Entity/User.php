@@ -117,11 +117,15 @@ class User implements UserInterface
     private bool $isGuest = false;
 
     /**
-     * Сырое значение cookie-id гостя (уникальное). У обычного пользователя = null.
-     * Аутентификатор ищет гостя по этому полю (только среди активных).
+     * Opaque owner key. Cookie guests and IP-derived identities share the
+     * storage column but are separated by `anonymousIp`.
      */
     #[ORM\Column(type: 'string', length: 64, nullable: true)]
     private ?string $guestId = null;
+
+    /** True only for an opaque IP-derived identity, never for cookie guests. */
+    #[ORM\Column(type: 'boolean', options: ['default' => false])]
+    private bool $anonymousIp = false;
 
     public function __construct()
     {
@@ -401,6 +405,18 @@ class User implements UserInterface
     public function setGuestId(?string $guestId): self
     {
         $this->guestId = $guestId;
+
+        return $this;
+    }
+
+    public function isAnonymousIp(): bool
+    {
+        return $this->anonymousIp;
+    }
+
+    public function setAnonymousIp(bool $anonymousIp): self
+    {
+        $this->anonymousIp = $anonymousIp;
 
         return $this;
     }

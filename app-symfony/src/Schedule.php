@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App;
 
+use App\Message\AnonymousIdentityCleanupMessage;
+use App\Message\ApiAuditRetentionMessage;
 use App\Message\FileCleanupMessage;
 use App\Message\WorkerCapabilityGcMessage;
 use Symfony\Component\Scheduler\Attribute\AsSchedule;
@@ -34,6 +36,8 @@ class Schedule implements ScheduleProviderInterface
 
             // Ежечасная авто-очистка устаревших файлов/строк БД (file-cleanup-24h-cron).
             ->add(RecurringMessage::every('1 hour', new FileCleanupMessage()))
+            ->add(RecurringMessage::every('1 day', new AnonymousIdentityCleanupMessage()))
+            ->add(RecurringMessage::every('1 day', new ApiAuditRetentionMessage()))
 
             // Ежечасный long-TTL GC мёртвых worker_capabilities строк (registry-06).
             ->add(RecurringMessage::every('1 hour', new WorkerCapabilityGcMessage()))

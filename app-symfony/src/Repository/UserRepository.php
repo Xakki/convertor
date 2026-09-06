@@ -35,7 +35,43 @@ class UserRepository extends ServiceEntityRepository
      */
     public function findActiveGuestByGuestId(string $guestId): ?User
     {
-        return $this->findOneBy(['guestId' => $guestId, 'isGuest' => true, 'isActive' => true]);
+        return $this->findOneBy([
+            'guestId'     => $guestId,
+            'isGuest'     => true,
+            'isActive'    => true,
+            'anonymousIp' => false,
+        ]);
+    }
+
+    public function findActiveAnonymousIpByIdentity(string $identity): ?User
+    {
+        return $this->findOneBy([
+            'guestId'     => $identity,
+            'isGuest'     => true,
+            'isActive'    => true,
+            'anonymousIp' => true,
+        ]);
+    }
+
+    /** Deactivate only IP-derived anonymous owners past the retention window. */
+    public function deactivateExpiredAnonymousIpGuests(\DateTimeImmutable $cutoff): int
+    {
+        return $this->createQueryBuilder('u')
+            ->update()
+            ->set('u.isActive', ':inactive')
+            ->set('u.guestId', ':empty')
+            ->where('u.isGuest = :guest')
+            ->andWhere('u.anonymousIp = :anonymousIp')
+            ->andWhere('u.isActive = :active')
+            ->andWhere('u.createdAt < :cutoff')
+            ->setParameter('inactive', false)
+            ->setParameter('empty', null)
+            ->setParameter('guest', true)
+            ->setParameter('anonymousIp', true)
+            ->setParameter('active', true)
+            ->setParameter('cutoff', $cutoff)
+            ->getQuery()
+            ->execute();
     }
 
     public function save(User $user, bool $flush = false): void

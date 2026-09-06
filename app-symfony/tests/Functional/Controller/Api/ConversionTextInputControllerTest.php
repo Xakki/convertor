@@ -18,6 +18,7 @@ use App\Service\Queue\RedisConnectionFactory;
 use App\Service\Quota\QuotaService;
 use App\Service\Storage\S3Storage;
 use App\Tests\Support\SeedsConversionRegistry;
+use App\Tests\Support\WorkerCapabilityFixture;
 use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\S3\Result\PutObjectOutput;
 use AsyncAws\S3\S3Client;
@@ -42,6 +43,19 @@ use Symfony\Component\Messenger\MessageBusInterface;
 final class ConversionTextInputControllerTest extends WebTestCase
 {
     use SeedsConversionRegistry;
+
+    private ?WorkerCapabilityFixture $workerCapabilityFixture = null;
+
+    protected function tearDown(): void
+    {
+        if ($this->workerCapabilityFixture !== null && static::$kernel !== null) {
+            $this->workerCapabilityFixture->cleanup();
+            $this->workerCapabilityFixture->assertNoOwnedRowsRemain();
+            $this->workerCapabilityFixture = null;
+        }
+
+        parent::tearDown();
+    }
 
 
     public function testFileAndTextTogetherReturns400(): void
@@ -150,7 +164,8 @@ final class ConversionTextInputControllerTest extends WebTestCase
 
     public function testTextOnlySubmitReachesManagerMaterializedAndDispatchesToDocumentStream(): void
     {
-        $client   = static::createClient();
+        $client = static::createClient();
+        $this->normalQueueFixture('document');
         $captured = ['message' => null];
         static::getContainer()->set(ConversionManager::class, $this->stubbedManager($captured));
 
@@ -176,7 +191,8 @@ final class ConversionTextInputControllerTest extends WebTestCase
 
     public function testFileOnlySubmitStillWorksNoRegression(): void
     {
-        $client   = static::createClient();
+        $client = static::createClient();
+        $this->normalQueueFixture('image');
         $captured = ['message' => null];
         static::getContainer()->set(ConversionManager::class, $this->stubbedManager($captured));
 
@@ -200,7 +216,8 @@ final class ConversionTextInputControllerTest extends WebTestCase
 
     public function testFileInputPassesValidatedImageOptionsToWorkerMessage(): void
     {
-        $client   = static::createClient();
+        $client = static::createClient();
+        $this->normalQueueFixture('image');
         $captured = ['message' => null];
         static::getContainer()->set(ConversionManager::class, $this->stubbedManager($captured));
 
@@ -323,6 +340,15 @@ final class ConversionTextInputControllerTest extends WebTestCase
             workerCapabilities: static::getContainer()->get(WorkerCapabilityRepository::class),
             apiModels: static::getContainer()->get(ApiModelAvailability::class),
         );
+    }
+
+    private function normalQueueFixture(string $workerType): void
+    {
+        $this->workerCapabilityFixture ??= new WorkerCapabilityFixture(
+            static::getContainer()->get(WorkerCapabilityRepository::class),
+            static::getContainer()->get(EntityManagerInterface::class),
+        );
+        $this->workerCapabilityFixture->addNormal($workerType);
     }
 
     private function persistedUserToken(): string

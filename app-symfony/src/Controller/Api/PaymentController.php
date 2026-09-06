@@ -22,6 +22,7 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
  * Prepaid top-up через Telegram Stars (CNV-28 slice 6).
  */
 #[Route('/api/v1/payment')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_user'])]
 #[IsGranted('ROLE_USER')]
 class PaymentController extends AbstractController
 {

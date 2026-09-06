@@ -27,6 +27,7 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
  * (Option B): для не-админа 403, как и у остальных admin-API.
  */
 #[Route('/api/v1/admin')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 #[IsGranted('ROLE_ADMIN')]
 class ConversionLogController extends AbstractController
 {

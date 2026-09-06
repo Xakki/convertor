@@ -20,6 +20,7 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
  * ROLE_ADMIN на JWT-firewall (Option B): для не-админа 403.
  */
 #[Route('/api/v1/admin')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 #[IsGranted('ROLE_ADMIN')]
 class QueueController extends AbstractController
 {

@@ -13,6 +13,7 @@ use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/api/v1/internal/host-telemetry')]
+#[\Nelmio\ApiDocBundle\Attribute\Areas(['private_admin'])]
 final class HostTelemetryController extends AbstractController
 {
     private const MAX_BODY_BYTES = 65536;
