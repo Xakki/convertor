@@ -1,6 +1,8 @@
 
 ### CNV-27 — Конфигурируемый worker-api для внешних API, CLI и AI-моделей
 
+**Status:** done
+
 **Criticality:** High
 
 **TAGS:**
@@ -81,7 +83,7 @@ routing:
 ```
 
 **Acceptance Criteria:**
-- CNV-27 находится в `test/`; прежний freeze снят, исторический scope
+- CNV-27 находится в `done/`; прежний freeze снят, исторический scope
   заменён на актуальный и карточка не содержит credential value.
 - Зафиксировано: отдельный `worker-api` для внешних API/CLI; g4f/aip — первый
   внешний provider; rollout первого этапа — только production-стенд.
@@ -455,3 +457,4 @@ routing:
   к gateway, зарегистрировался как `workerType=api`, получил stream `conv.api`,
   а Symfony registration вернула HTTP 200. В логах не раскрываются credentials,
   payload или upstream model IDs.
+- 2026-09-08 — Пользователь явно разрешил завершить все текущие карточки из `ready/`; это историческое разрешение оформило CNV-27 как `done`, без новых production-утверждений.

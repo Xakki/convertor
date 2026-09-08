@@ -1,5 +1,7 @@
 ### Обновить устаревшие version-contract ожидания drift-тестов
 
+**Status:** done
+
 **Criticality:** Medium
 
 **TAGS:**
@@ -61,6 +63,9 @@ selection и запрет старого формата. Не менять produ
 - 2026-09-06 — Full gate `HOST_ROOT_PROBE_DIR=/var/tmp/convertor-epic006-root-probe
   make test` passed; `make build` passed for all configured images. Config check,
   targeted/full Kanban lint (0 errors, 0 warnings), and working/staged
-  `git diff --check` passed. CNV-140 remains `progress` pending review; CNV-141
-  was not modified or moved, and no merge, push, release, or deploy was done.
-- 2026-09-06 — APPROVE accepted on `epic/EPIC-006` at `65676c2`: exact version-drift tests passed; `make TEST=1 test-drift` passed (49 tests); full `HOST_ROOT_PROBE_DIR=/var/tmp/convertor-epic006-root-probe make test` and `make build` passed. Evidence is sanitized; no credentials, tokens, raw request data, or generated artifacts are recorded. CNV-140 is authorized only for `progress → ready`; CNV-141 and the parent remain untouched, with no done, merge, push, release, or deploy action.
+  `git diff --check` passed. The contemporaneous note that CNV-140 remained in
+  `progress` pending review is historical and superseded; CNV-141 was not
+  modified or moved at that time, and no merge, push, release, or deploy was
+  done.
+- 2026-09-06 — APPROVE accepted on `epic/EPIC-006` at `65676c2`: exact version-drift tests passed; `make TEST=1 test-drift` passed (49 tests); full `HOST_ROOT_PROBE_DIR=/var/tmp/convertor-epic006-root-probe make test` and `make build` passed. Evidence is sanitized; no credentials, tokens, raw request data, or generated artifacts are recorded. The contemporaneous `progress → ready`-only authorization is historical and superseded by the later explicit completion authorization; CNV-141 and the parent were untouched then, with no merge, push, release, or deploy action.
+- 2026-09-08 — Пользователь явно разрешил завершить все текущие карточки из `ready/`; это историческое разрешение оформило CNV-140 как `done` единственным переходом `ready → done`.

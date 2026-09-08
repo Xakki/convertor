@@ -1,6 +1,6 @@
 ### Добавить durable capability fixtures для PHP conversion tests
 
-**Status:** progress
+**Status:** done
 
 **Criticality:** Blocking
 
@@ -164,12 +164,14 @@ worker registration или compose profiles.
   `APP_VER=0.1.2` drift expectations; the tracked baseline is `0.2.0`.
   The two failures are `test_release_version_is_bumped_for_worker_rollout`
   and `test_ai_cuda_build_and_compose_use_local_app_ver_tags` (47 passed, 2
-  failed). CNV-140, production env, and production/tests were not edited; CNV-141
-  remains `progress`, not `ready`.
+  failed). CNV-140, production env, and production/tests were not edited; the
+  contemporaneous `progress`, not `ready`, state for CNV-141 is historical and
+  superseded by the later completion move.
 - 2026-09-06 — Restored dedicated AI fixture semantics: `addAi()` persists the
   prior `isAi=true` payload and full AI matrix, while `addNormal()` explicitly
   limits normal fixtures to document/image/video and rejects `ai`. AI tests
   assert the stored capability is AI-shaped; focused PHP tests pass (37 tests,
   170 assertions), no-worker regression passes (1 test, 4 assertions), CS,
   PHPStan (application and migrations), config, and diff checks pass.
-- 2026-09-06 — APPROVE accepted on `epic/EPIC-006` across `c27b5bd` and `4a10cd9`: durable fixture ownership/cleanup and dedicated AI semantics were verified; focused PHP tests passed (37 tests, 170 assertions), the fixture-free no-worker regression passed (1 test, 4 assertions), and the full PHPUnit gate passed after CNV-140. Full `HOST_ROOT_PROBE_DIR=/var/tmp/convertor-epic006-root-probe make test` passed after CNV-140, with build and lint evidence recorded on the integration gate. Evidence is sanitized; no credentials, tokens, raw request data, or generated artifacts are recorded. CNV-141 is authorized only for `progress → ready`; CNV-140 remains ready, the parent remains untouched, and no done, merge, push, release, or deploy action is authorized.
+- 2026-09-06 — APPROVE accepted on `epic/EPIC-006` across `c27b5bd` and `4a10cd9`: durable fixture ownership/cleanup and dedicated AI semantics were verified; focused PHP tests passed (37 tests, 170 assertions), the fixture-free no-worker regression passed (1 test, 4 assertions), and the full PHPUnit gate passed after CNV-140. Full `HOST_ROOT_PROBE_DIR=/var/tmp/convertor-epic006-root-probe make test` passed after CNV-140, with build and lint evidence recorded on the integration gate. Evidence is sanitized; no credentials, tokens, raw request data, or generated artifacts are recorded. The contemporaneous `progress → ready`-only authorization is historical and superseded by the later explicit completion authorization; CNV-140 remained ready then, the parent remained untouched, and no merge, push, release, or deploy action was authorized.
+- 2026-09-08 — Пользователь явно разрешил завершить все текущие карточки из `ready/`; это историческое разрешение оформило CNV-141 как `done` единственным переходом `ready → done`.
