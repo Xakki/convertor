@@ -5,13 +5,15 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Service\Auth;
 
 use App\Service\Auth\AnonymousIdentityService;
-use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Request;
 
-final class AnonymousIdentityServiceTest extends TestCase
+final class AnonymousIdentityServiceTest extends AnonymousIdentityTestCase
 {
     public function testSameClientIpProducesStableOpaqueIdentity(): void
     {
+        self::assertSame([], Request::getTrustedProxies());
+        self::assertSame(0, Request::getTrustedHeaderSet());
+
         $service = new AnonymousIdentityService('identity-secret');
 
         $first  = $service->fromRequest(Request::create('/', 'GET', [], [], [], ['REMOTE_ADDR' => '192.0.2.10']));

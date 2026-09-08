@@ -1,4 +1,19 @@
 parameters:
+    # Общие параметры структурированного журнала; пользовательские данные сюда
+    # не попадают, а секреты читаются только встроенным редактором библиотеки.
+    log_symfony.redact:
+        - guest_id
+        - user_id
+        - user_email
+        - request_body
+        - user_agent
+        - headers
+    log_symfony.extra:
+        app_name: convertor
+        app_env: '%kernel.environment%'
+        log_ver: '0.3'
+        tier: web
+
     # Единый таймаут ожидания claim для gateway и пользовательского сообщения.
     env(WORKER_CLAIM_TIMEOUT_MINUTES): '60'
     app.worker_claim_timeout_minutes: '%env(int:WORKER_CLAIM_TIMEOUT_MINUTES)%'
@@ -86,6 +101,44 @@ parameters:
     app.telegram_bot_username: '%env(TELEGRAM_BOT_USERNAME)%'
 
 services:
+    Xakki\LogSymfony\LoggerConfig:
+        factory: [Xakki\LogSymfony\LoggerConfig, fromArray]
+        arguments:
+            - messageLimit: 3024
+              allowMemory: false
+              extra: '%log_symfony.extra%'
+              redact: '%log_symfony.redact%'
+              contextTypeRules:
+                  exact:
+                      identity_opaque: bool
+              traceExcludedPartials: ['Monolog/', 'xakki/log-symfony/', 'vendor/']
+              captureHandlers: false
+
+    Xakki\LogSymfony\Redactor:
+        arguments:
+            $extraNeedles: '%log_symfony.redact%'
+
+    Xakki\LogSymfony\FileTrace:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
+
+    Xakki\LogSymfony\RequestId: ~
+    Xakki\LogSymfony\ContextEnricher: ~
+
+    Xakki\LogSymfony\Processor\ContextEnrichProcessor:
+        tags: ['monolog.processor']
+    Xakki\LogSymfony\Processor\ExtraProcessor:
+        tags: ['monolog.processor']
+    Xakki\LogSymfony\Processor\RemoteIpProcessor:
+        arguments:
+            $trustForwardedFor: false
+        tags: ['monolog.processor']
+
+    Xakki\LogSymfony\Formatters\CustomFormatter:
+        arguments:
+            $dateFormat: 'Y-m-d\TH:i:s.uP'
+            $logSize: 1400
+
     App\Security\ApiJwtAuthenticator:
         class: App\Security\ApiJwtAuthenticator
         arguments:

@@ -4,7 +4,7 @@
     "type": "project",
     "license": "proprietary",
     "require": {
-        "php": ">=8.1",
+        "php": ">=8.5",
         "ext-ctype": "*",
         "ext-iconv": "*",
         "ext-json": "*",
@@ -27,6 +27,7 @@
         "symfony/http-client": "^7.0",
         "symfony/messenger": "^7.0",
         "symfony/mime": "^7.0",
+        "symfony/monolog-bundle": "^3.10",
         "symfony/property-access": "^7.0",
         "symfony/property-info": "^7.0",
         "symfony/rate-limiter": "^7.0",
@@ -38,7 +39,8 @@
         "symfony/translation": "7.*",
         "symfony/twig-bundle": "^7.0",
         "symfony/validator": "^7.0",
-        "symfony/yaml": "^7.0"
+        "symfony/yaml": "^7.0",
+        "xakki/log-symfony": "dev-main"
     },
     "require-dev": {
         "friendsofphp/php-cs-fixer": "^3.48",
@@ -101,5 +103,10 @@
             "allow-contrib": false,
             "require": "7.*"
         }
-    }
+    },
+    "repositories": [{
+        "name": "log-symfony",
+        "type": "vcs",
+        "url": "https://github.com/Xakki/log-symfony.git"
+    }]
 }

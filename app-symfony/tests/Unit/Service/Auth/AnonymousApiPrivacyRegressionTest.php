@@ -10,12 +10,11 @@ use App\Security\GuestAuthenticator;
 use App\Service\Auth\AnonymousIdentityService;
 use App\Service\Auth\GuestCookieFactory;
 use App\Service\Auth\GuestTokenService;
-use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Security\Http\Authenticator\Passport\Badge\UserBadge;
 
-final class AnonymousApiPrivacyRegressionTest extends TestCase
+final class AnonymousApiPrivacyRegressionTest extends AnonymousIdentityTestCase
 {
     private const DOCUMENTATION_PATH = __DIR__ . '/../../../Fixtures/api-privacy.md';
 
