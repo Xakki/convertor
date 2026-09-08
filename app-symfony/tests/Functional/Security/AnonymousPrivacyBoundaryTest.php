@@ -17,6 +17,7 @@ use App\Service\Auth\PersonalApiTokenService;
 use App\Tests\Support\CaptureLogger;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
+use Monolog\Logger;
 use PHPUnit\Framework\Attributes\Depends;
 use Psr\Log\LogLevel;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
@@ -219,9 +220,9 @@ final class AnonymousPrivacyBoundaryTest extends WebTestCase
         self::assertNotSame(self::SOURCE_IP, $storedValues['guest_id']);
         self::assertNotSame(self::HMAC_SECRET, $storedValues['guest_id']);
 
-        // Symfony's configured logger is the actual boundary here. This request
-        // emits no record, so the test must not fabricate a Monolog handler/context.
-        self::assertInstanceOf(\Symfony\Component\HttpKernel\Log\Logger::class, $container->get('logger'));
+        // The configured application logger is Monolog. The privacy boundary is
+        // covered by the persisted values and request assertions above.
+        self::assertInstanceOf(Logger::class, $container->get('logger'));
         $this->toRemove[] = $reloaded;
     }
 
